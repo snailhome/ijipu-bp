@@ -13,7 +13,7 @@
  *  · 吸附三档（格点 / 拍 / 小节线）、重复区间（时间尺上 shift 拖）、放大与自动翻页
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { BIN_COUNT, MIDI_HIGH, MIDI_LOW, midiToName, midiToNumber } from '../analysis/pitchNames'
+import { BIN_COUNT, MIDI_HIGH, MIDI_LOW, keyJpsName, midiToName, midiToNumber } from '../analysis/pitchNames'
 import { displayValue } from '../analysis/spectrum'
 import { beatMs, snapMs, snapStepMs } from '../jps/snap'
 import { COPY } from '../brand/copy'
@@ -60,6 +60,11 @@ const FONT = '10px ui-monospace, Consolas, monospace'
 
 /** 黑键音级（C# D# F# G# A#） */
 const BLACK = new Set([1, 3, 6, 8, 10])
+
+/** 调号写法：jps 里的 `$B` 显示成 `bB`（简谱习惯），升号照旧 `#F` */
+function keyLabel(tonic: number): string {
+  return keyJpsName(tonic).replace('$', 'b')
+}
 
 /* ── 热力图配色：暗蓝 → 紫 → 橙 → 白 ── */
 /* 冷热：低=蓝，高=红（用户 2026-11-18 指定"红最高、蓝最低"） */
@@ -363,8 +368,8 @@ export function NoteRoll(props: Props) {
       const x1 = xAt(n.startMs)
       const x2 = Math.max(x1 + 2, xAt(n.endMs))
       if (x2 < metrics.left || x1 > metrics.w) continue
-      const y = rowTop(n.midi) + 1
-      const h = ROW_H - 2
+      const y = rowTop(n.midi)
+      const h = ROW_H - 1
       const sel = n.id === props.selectedId
       g.fillStyle = n.confirmed ? 'rgba(45,214,190,0.92)' : 'rgba(120,138,156,0.42)'
       g.strokeStyle = sel ? '#ffffff' : n.confirmed ? 'rgba(8,40,36,0.85)' : 'rgba(90,104,120,0.7)'
@@ -435,12 +440,11 @@ export function NoteRoll(props: Props) {
       }
     }
 
-    /* 8) 左侧钢琴键盘（按用户给的参考图逐条对过）
-     *  · 底色纯白；黑键**右侧贴住键列右边缘**（不留白边），宽 62%，整行高，左端 2px 圆角
-     *  · 横向分隔线只出现在"两个白键交界"处：
-     *      - 有黑键的行：线画在**该行竖直中心**，从左边缘画到黑键左缘就停（参考图里就是这样）
-     *      - E|F、B|C（没有黑键）：一条通栏线
-     *  · 键列最右边一条深线，把键和格子分开 */
+    /* 8) 左侧钢琴键盘（用户 m04234 的口径）
+     *  · 从左侧看：白键一个挨一个、**高度全都一样**，横向分界线只出现在"两个白键相接"处
+     *    （E|F、B|C）—— 别的地方不该有线，否则看着像梯子
+     *  · 从右侧看：黑键和白键露出的那一格**高度也一样**，黑键右侧贴住键列右边缘、整行高
+     *  · 数字模式：在当前调式的音级上，靠左侧白格内写简谱数字（带八度点）；音名模式照旧标 C */
     const KEY_BLACK_W = Math.round(KEY_W * 0.62)
     const KEY_BLACK_X = KEY_W - KEY_BLACK_W
     g.fillStyle = '#ffffff'
@@ -450,27 +454,41 @@ export function NoteRoll(props: Props) {
       if (midi < MIDI_LOW) break
       const y = RULER_H + r * ROW_H
       const cls = ((midi % 12) + 12) % 12
+      const aboveCls = ((midi + 1) % 12 + 12) % 12
+      /* 每个半音行都是一格，格子高度全都一样（用户 m04271「高度不均」）：
+       * 左侧白区在每行上边界画一条线；两个白键直接相接处（E|F、B|C）延长到整个键列宽 */
+      if (!BLACK.has(aboveCls)) {
+        g.fillStyle = 'rgba(0,0,0,0.45)'
+        g.fillRect(0, y, KEY_W, 1)
+      } else {
+        g.fillStyle = 'rgba(0,0,0,0.22)'
+        g.fillRect(0, y, KEY_BLACK_X, 1)
+      }
       if (BLACK.has(cls)) {
-        g.fillStyle = 'rgba(0,0,0,0.55)'
-        g.fillRect(0, Math.round(y + ROW_H / 2), KEY_BLACK_X, 1)
         g.fillStyle = '#000000'
         g.beginPath()
         g.roundRect(KEY_BLACK_X, y, KEY_BLACK_W, ROW_H, [2, 0, 0, 2])
         g.fill()
-      } else if (cls === 4 || cls === 11) {
-        /* E 的下边、B 的下边：两个白键直接相接 */
-        g.fillStyle = 'rgba(0,0,0,0.55)'
-        g.fillRect(0, y, KEY_W, 1)
       }
-      if (cls === 0 || midi === MIDI_LOW) {
-        g.fillStyle = 'rgba(40,60,80,0.9)'
+      /* 键上文字：音名模式只标 C（和以前一样）；数字模式按当前调式标音级 */
+      const num = midiToNumber(midi, props.tonic)
+      const showNum = props.pitchMode === 'number' && num.accidental === ''
+      const showName = props.pitchMode === 'name' && (cls === 0 || midi === MIDI_LOW)
+      if (showNum || showName) {
+        /* 文字都写在键列左边的白区里（黑键只占右边 62%），所以一律用深色 */
+        g.fillStyle = 'rgba(30,44,60,0.9)'
         g.font = FONT
         g.textBaseline = 'middle'
-        g.fillText(midiToName(midi), 6, y + ROW_H / 2)
+        g.fillText(showNum ? num.text : midiToName(midi), 5, y + ROW_H / 2)
       }
     }
     g.fillStyle = 'rgba(8,12,18,0.9)'
     g.fillRect(KEY_W - 1, RULER_H, 1, metrics.h - RULER_H)
+    /* 8.5) 时间尺左边那格：当前调号，形如 1=bB（用户 m04234） */
+    g.fillStyle = 'rgba(170,205,240,0.92)'
+    g.font = '600 11px ui-monospace, Consolas, monospace'
+    g.textBaseline = 'middle'
+    g.fillText(`1=${keyLabel(props.tonic)}`, 5, RULER_H / 2)
     /* 9) 播放头 */
     const px = xAt(playMs)
     if (px >= metrics.left) {
