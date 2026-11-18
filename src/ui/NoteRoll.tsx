@@ -9,7 +9,7 @@
  *  · 频谱能量直接铺在格子里当热力图（独立的频谱面板撤掉，把地方全给表格）
  *  · 键盘画成真实键形（白键连续、黑键窄条压在两个白键交界上）
  *  · 点某一行 = 播这个音高，并在右上角显示它的音名 + 简谱数字
- *  · 两种点击模式：绘制（画音 / 确认）与选择（只试听），F2 / F3 切
+ *  · 两种点击模式：绘制（画音 / 确认）与选择（只试听），反引号切
  *  · 吸附三档（格点 / 拍 / 小节线）、重复区间（时间尺上 shift 拖）、放大与自动翻页
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -112,7 +112,7 @@ interface Metrics {
 
 type Drag =
   | { kind: 'scrub' }
-  | { kind: 'loop'; anchorMs: number }
+  | { kind: 'loop'; anchorMs: number; moved: boolean }
   /** 拖重复区间的左/右端；grabMs 记按下时鼠标对应的时间，拖动时整体平移用 */
   | { kind: 'loopEdge'; edge: 'l' | 'r'; startMs: number; endMs: number }
   | { kind: 'loopMove'; grabMs: number; startMs: number; endMs: number }
@@ -161,6 +161,12 @@ export function NoteRoll(props: Props) {
     return { w: size.w, h: size.h, left: KEY_W, width: Math.max(80, size.w - KEY_W), top, rows }
   }, [size, center])
 
+  /* dev-only：把行高/顶行暴露出去，`npm run probe` 才能算出某个音的像素位置 */
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      ;(window as unknown as { __bpRoll?: unknown }).__bpRoll = metrics
+    }
+  }, [metrics])
 
   const rowTop = useCallback(
     (midi: number) => RULER_H + (metrics.top - midi) * ROW_H,
@@ -418,30 +424,27 @@ export function NoteRoll(props: Props) {
       }
     }
 
-    /* 8) 左侧钢琴键盘（照用户给的参考图：每行都有横线分隔，黑键是贴右的黑块）
-     *  · 整列铺白，然后**每一行**都画一条横线——这样一行行看得清，才是"键格"
-     *  · 黑键：贴住右端、宽度约 63%（国标白键 23.5mm / 黑键 11.5mm 的比值换算到深度）
-     *  · 黑键左端圆角 3px、上下各留 1px，右端与键列右边线齐平 */
-    g.fillStyle = '#f1f5f9'
+    /* 8) 左侧钢琴键盘（照用户给的参考图）
+     *  · 底色纯白，**每一行**都有一条浅灰分隔线，一直画到黑键左边缘
+     *  · 黑键是纯黑方块：贴右边但不顶到底，右侧留一道白边（白键的前沿），左端 1px 圆角
+     *  · 键列最右边一条深线，把键和格子分开 */
+    const RIM = 5
+    g.fillStyle = '#ffffff'
     g.fillRect(0, RULER_H, KEY_W, metrics.h - RULER_H)
     for (let r = 0; r < metrics.rows; r++) {
       const midi = metrics.top - r
       if (midi < MIDI_LOW) break
       const y = RULER_H + r * ROW_H
       const cls = ((midi % 12) + 12) % 12
-      /* 每行一条分隔线（参考图里连黑键行也有一条） */
-      g.fillStyle = 'rgba(30,44,62,0.32)'
+      g.fillStyle = 'rgba(0,0,0,0.18)'
       g.fillRect(0, y + ROW_H - 1, KEY_W, 1)
       if (BLACK.has(cls)) {
-        const kw = Math.round(KEY_W * 0.63)
-        const kx = KEY_W - kw
-        g.fillStyle = '#05080c'
+        const kw = Math.round(KEY_W * 0.6)
+        const kx = KEY_W - RIM - kw
+        g.fillStyle = '#000000'
         g.beginPath()
-        g.roundRect(kx, y + 1, kw, ROW_H - 2, [3, 0, 0, 3])
+        g.roundRect(kx, y, kw, ROW_H - 1, [1, 0, 0, 1])
         g.fill()
-        /* 键面一道极细高光，给点厚度 */
-        g.fillStyle = 'rgba(255,255,255,0.14)'
-        g.fillRect(kx + 4, y + 2, kw - 6, 1)
       }
       if (cls === 0 || midi === MIDI_LOW) {
         g.fillStyle = 'rgba(40,60,80,0.9)'
@@ -450,7 +453,6 @@ export function NoteRoll(props: Props) {
         g.fillText(midiToName(midi), 6, y + ROW_H / 2)
       }
     }
-    /* 键列右边线与网格分开 */
     g.fillStyle = 'rgba(8,12,18,0.9)'
     g.fillRect(KEY_W - 1, RULER_H, 1, metrics.h - RULER_H)
     /* 9) 播放头 */
@@ -559,14 +561,10 @@ export function NoteRoll(props: Props) {
       e.currentTarget.setPointerCapture(e.pointerId)
 
       if (y < RULER_H) {
-        const ms = snapMs(msAt(x), { bpm: props.bpm, beatsPerBar: props.beatsPerBar, firstBeatMs: props.firstBeatMs }, e.shiftKey ? 'beat' : 'off')
-        if (e.shiftKey) {
-          drag.current = { kind: 'loop', anchorMs: ms }
-          props.onLoop({ startMs: ms, endMs: ms + 1 })
-        } else {
-          drag.current = { kind: 'scrub' }
-          props.onSeek(ms)
-        }
+        /* 时间尺：点一下 = 把播放头挪到这里并准备播放；按住拖 = 圈出播放区间（拖到哪算到哪） */
+        const ms = snapMs(msAt(x), { bpm: props.bpm, beatsPerBar: props.beatsPerBar, firstBeatMs: props.firstBeatMs }, 'off')
+        drag.current = { kind: 'loop', anchorMs: ms, moved: false }
+        props.onSeek(ms)
         return
       }
 
@@ -648,7 +646,10 @@ export function NoteRoll(props: Props) {
       }
       if (d.kind === 'loop') {
         const ms = snapMs(msAt(x), opt, 'beat')
-        props.onLoop({ startMs: Math.min(d.anchorMs, ms), endMs: Math.max(d.anchorMs, ms) })
+        /* 拖过一像素才算"圈区间"，否则松手就是单纯点了下时间线 */
+        if (!d.moved && Math.abs(ms - d.anchorMs) < 20) return
+        d.moved = true
+        props.onLoop({ startMs: Math.max(0, Math.min(d.anchorMs, ms)), endMs: Math.max(d.anchorMs, ms) })
         return
       }
       if (d.kind === 'loopEdge') {
@@ -697,6 +698,7 @@ export function NoteRoll(props: Props) {
   const onPointerUp = useCallback(() => {
     const d = drag.current
     drag.current = null
+
     // 绘制模式下"点一下不拖"= 确认/取消确认
     if (d?.kind === 'move' && !d.moved) props.onToggleConfirmed(d.id)
   }, [props])
@@ -742,7 +744,11 @@ export function NoteRoll(props: Props) {
         </div>
       )}
       {notes.length === 0 && (
-        <div className="pane-empty">还没有音符：先打开一段音频，或直接在格子里画</div>
+        <div className="pane-empty">
+          {spectrum
+            ? '还没有音符：切到「绘制」（反引号键）在格子里点几下，或在右侧勾上「分析后自动填入音符」'
+            : '还没有音符：先打开一段音频'}
+        </div>
       )}
       <HScroll
         durationMs={props.durationMs}
@@ -768,20 +774,22 @@ function HScroll(props: {
   const dragRef = useRef<{ x: number; pan: number } | null>(null)
   const span = spanMs(props.view, props.durationMs)
   const maxPan = Math.max(0, props.durationMs - span)
-  const visible = props.durationMs > 0 && span < props.durationMs - 1
+  /* 一直显示：没放大时 thumb 铺满整条（拖不动），这样用户知道"这里有滚动条"，
+   * 放大之后立刻就能拖。 */
+  const visible = props.durationMs > 0
   const ratio = props.durationMs > 0 ? Math.min(1, span / props.durationMs) : 1
   const left = maxPan > 0 ? Math.min(1, props.view.panMs / props.durationMs) : 0
-
+  const disabled = maxPan <= 0
 
   if (!visible) return null
   return (
     <div
-      className="hbar"
+      className={disabled ? 'hbar off' : 'hbar'}
       ref={trackRef}
-      title={COPY.hbarTip}
+      title={disabled ? COPY.hbarDisabledTip : COPY.hbarTip}
       onPointerDown={(e) => {
         const el = trackRef.current
-        if (!el) return
+        if (!el || disabled) return
         const r = el.getBoundingClientRect()
         const t = (e.clientX - r.left) / Math.max(1, r.width)
         const thumbStart = props.view.panMs / props.durationMs

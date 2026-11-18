@@ -171,9 +171,9 @@ try {
       return !!b && b.classList.contains('on')
     })()`)
 
-  check('默认是绘制模式', await segOn('绘制'))
-  check('点「选择 F3」能切过去', (await cdp.clickText('选择')) && (await segOn('选择')))
-  check('点「绘制 F2」能切回来', (await cdp.clickText('绘制')) && (await segOn('绘制')))
+  check('默认是选择模式（只试听，不会误画）', await segOn('选择'))
+  check('点「绘制」能切到绘制模式', (await cdp.clickText('绘制')) && (await segOn('绘制')))
+  check('点「选择」能切回选择模式', (await cdp.clickText('选择')) && (await segOn('选择')))
 
   const flagOn = (label) =>
     cdp.eval(`(() => {
@@ -241,6 +241,9 @@ try {
   }
 
   // 点画布中间偏下的一块空白 → 应该多出一个"已确认"的音
+  // 注意：默认是选择模式（点哪都只试听），这里先切到绘制模式再画
+  await cdp.eval('window.__bp.getState().setMode("draw")')
+  await sleep(120)
   await clickRoll(0.7, 0.72)
   const afterDraw = await cdp.eval(`(() => {
     const s = window.__bp.getState()
@@ -249,7 +252,7 @@ try {
   check('绘制模式点空白会加音且直接算确认', afterDraw.n === 3 && afterDraw.conf === 1, JSON.stringify(afterDraw.n + '/' + afterDraw.conf))
   check('加了音之后 jps 里有谱行', /^Q:/m.test(afterDraw.jps), (afterDraw.jps || '').split('\n').filter((l) => l.startsWith('Q:')).join(' | '))
 
-  // 精确点一个已知音符：按 NoteRoll 的行高/键盘宽算像素（center 默认 76）
+  // 精确点一个已知音符：行高/顶行直接从页面里的 __bpRoll 拿（自己估过一次，差一行就点歪）
   const clickNote = async (id) => {
     const box = await cdp.eval(`(() => {
       const ROW_H = 14, RULER_H = 24, KEY_W = 66
@@ -257,11 +260,12 @@ try {
       const n = s.notes.find((x) => x.id === ${JSON.stringify(id)})
       const c = document.querySelector('.pane.roll canvas')
       const r = c.getBoundingClientRect()
-      const rows = Math.max(8, Math.floor((r.height - RULER_H) / ROW_H))
-      const top = Math.min(108, Math.round(76 + Math.floor(rows / 2)))
-      const y = RULER_H + (top - n.midi) * ROW_H + ROW_H / 2
+      const m = window.__bpRoll || {}
+      const top = typeof m.top === 'number' ? m.top : 76
+      const span = s.durationMs / s.view.zoom
       const ms = (n.startMs + n.endMs) / 2
-      const x = KEY_W + (ms / s.durationMs) * (r.width - KEY_W)
+      const y = RULER_H + (top - n.midi) * ROW_H + ROW_H / 2
+      const x = KEY_W + ((ms - s.view.panMs) / span) * (r.width - KEY_W)
       return { x, y } // 相对画布左上角
     })()`)
     const origin = await cdp.eval(`(() => {
@@ -344,6 +348,49 @@ try {
     `pan ${Math.round(afterZoom.panMs)}→${Math.round(afterPan.panMs)} zoom ${afterPan.zoom}`,
   )
 
+  // ── 时间尺：按住拖 = 圈播放区间（不必按 Shift）；点一下 = 只挪播放头 ──
+  const ruler = await cdp.eval(`(() => {
+    const c = document.querySelector('.pane.roll canvas')
+    const r = c.getBoundingClientRect()
+    const s = window.__bp.getState()
+    const KEY_W = 66
+    const span = s.durationMs / s.view.zoom
+    const xOf = (ms) => KEY_W + ((ms - s.view.panMs) / span) * (r.width - KEY_W)
+    return { ox: r.x, oy: r.y, y: r.y + 8, x1: xOf(800), x2: xOf(2400) }
+  })()`)
+  await cdp.eval('window.__bp.getState().setLoop(null)')
+  await sleep(120)
+  await cdp.dragAt(ruler.ox + ruler.x1, ruler.y, ruler.ox + ruler.x2, ruler.y, 8)
+  const draggedLoop = await cdp.eval('window.__bp.getState().loop')
+  const draggedOn = await cdp.eval('window.__bp.getState().loopOn')
+  check(
+    '时间尺上按住拖 → 圈出播放区间并自动打开循环',
+    !!draggedLoop && draggedLoop.endMs - draggedLoop.startMs > 800 && draggedOn,
+    JSON.stringify(draggedLoop),
+  )
+
+  // ── 右侧栏开关 ──
+  const sideOn = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
+  await cdp.eval(`document.querySelector('.icon-btn').click()`)
+  await sleep(150)
+  const sideOff = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !el || el.classList.contains('off') })()`)
+  await cdp.eval(`document.querySelector('.icon-btn').click()`)
+  await sleep(150)
+  const sideBack = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
+  check('右侧栏默认展开、点图标能收起、再点能展开', sideOn && sideOff && sideBack)
+
+  // ── 横向滚动条：一直在，放大后 thumb 变窄 ──
+  const barWidth = await cdp.eval(`(() => {
+    const t = document.querySelector('.hbar > i')
+    const track = document.querySelector('.hbar')
+    if (!t || !track) return null
+    return { thumb: t.getBoundingClientRect().width, track: track.getBoundingClientRect().width }
+  })()`)
+  check(
+    '横向滚动条在，放大后 thumb 比轨道窄',
+    !!barWidth && barWidth.thumb < barWidth.track - 4,
+    JSON.stringify(barWidth),
+  )
   const stripHint = await cdp.eval(
     `(() => { const c = document.querySelector('.pane.strip canvas'); return c ? c.width > 0 : false })()`,
   )

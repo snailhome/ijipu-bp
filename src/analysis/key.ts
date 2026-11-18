@@ -53,7 +53,13 @@ function corr(a: Float64Array | number[], b: number[]): number {
   return num / Math.sqrt(da * db)
 }
 
-/** 返回按可能性降序的 12 个候选大调 */
+/**
+ * 返回按可能性降序的 12 个候选大调
+ *
+ * 归一化用 softmax（温度 0.09）：相关值差 0.1 就差出两三倍，
+ * 这样界面上的百分比才有区分度；如果整个频谱是平的（噪声），
+ * 12 个候选会平均分，不会出现"某个调 100%"的假象。
+ */
 export function guessKeys(spec: Spectrum): KeyCandidate[] {
   const chroma = chromaVector(spec)
   const raw: { tonic: number; r: number }[] = []
@@ -62,8 +68,9 @@ export function guessKeys(spec: Spectrum): KeyCandidate[] {
     for (let i = 0; i < 12; i++) rotated[i] = MAJOR_PROFILE[(i - tonic + 12) % 12]
     raw.push({ tonic, r: corr(chroma, rotated) })
   }
-  const min = Math.min(...raw.map((x) => x.r))
-  const weights = raw.map((x) => Math.max(0, x.r - min + 0.02))
+  const T = 0.09
+  const max = Math.max(...raw.map((x) => x.r))
+  const weights = raw.map((x) => Math.exp((x.r - max) / T))
   const sum = weights.reduce((a, b) => a + b, 0)
   return raw
     .map((x, i) => ({ tonic: x.tonic, share: sum > 0 ? weights[i] / sum : 1 / 12 }))

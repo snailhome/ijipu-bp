@@ -61,6 +61,7 @@ interface State {
   contrast: number
   /** 去谐波强度 0..1（0 = 不做） */
   suppress: number
+  autoNotes: boolean
   /** 最近一次节奏分析的结果 */
   rhythm: RhythmSummary | null
   /* 显示与量化参数 */
@@ -98,6 +99,7 @@ interface State {
   setGain: (g: number) => void
   setContrast: (c: number) => void
   setSuppress: (s: number) => void
+  setAutoNotes: (b: boolean) => void
   /** 用当前谱再跑一次节奏分析，并把 BPM/首拍/拍号写回去 */
   runRhythm: () => void
   setTonic: (t: number) => void
@@ -187,9 +189,10 @@ export const useBp = create<State>((set, get) => ({
   gain: 1,
   contrast: 1.4,
   suppress: 0,
+  autoNotes: false,
   rhythm: null,
   pitchMode: 'name',
-  mode: 'draw',
+  mode: 'select',
   snap: 'beat',
   view: { zoom: 1, panMs: 0 },
   tonic: 0,
@@ -250,6 +253,7 @@ export const useBp = create<State>((set, get) => ({
   setAutoPage: (b) => set({ autoPage: b }),
   setGain: (g) => set({ gain: Math.max(0.1, Math.min(6, g)) }),
   setSuppress: (v) => set({ suppress: Math.max(0, Math.min(1, v)) }),
+  setAutoNotes: (b) => set({ autoNotes: b }),
   runRhythm: () => {
     const s = get()
     const spec = s.analysis?.spectrum

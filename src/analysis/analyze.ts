@@ -19,6 +19,8 @@ export interface AnalyzeOptions extends SpectrumOptions {
   suppress?: number
   /** 拍号（节奏分析挑重拍时要） */
   beatsPerBar?: number
+  /** 要不要自动跟踪音符（默认要；界面里"自动填入音符"关掉时传 false，只出频谱/节奏/调性） */
+  notes?: boolean
 }
 
 export function analyzeSamples(
@@ -28,7 +30,7 @@ export function analyzeSamples(
 ): AnalyzeResult {
   const raw = computeSpectrum(samples, sampleRate, opts)
   const spectrum = opts.suppress && opts.suppress > 0 ? suppressHarmonics(raw, opts.suppress) : raw
-  const notes = trackMonophonic(spectrum, { minMs: opts.minNoteMs ?? 60 })
+  const notes = opts.notes === false ? [] : trackMonophonic(spectrum, { minMs: opts.minNoteMs ?? 60 })
   const tempo = estimateTempo(spectrum)
   const rhythm = analyzeRhythm(spectrum, opts.beatsPerBar ?? 4)
   const keyCandidates = guessKeys(spectrum)

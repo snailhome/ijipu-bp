@@ -8,7 +8,7 @@
  * 把纵向空间全让给"音高 × 时间"的表格（对照 noteDigger 的信息密度）。
  *
  * 数据流：打开音频 → worker 分析 → store 出 grid/jps → 画布与预览都读 store。
- * 播放两种模式（原音频 / 合成音）共用播放头；Tab 随时切换；空格播放；F2/F3 切点击模式。
+ * 播放两种模式（原音频 / 合成音）共用播放头；Tab 随时切换；空格播放；反引号切点击模式。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keyColor, keyDisplayName } from './analysis/pitchNames'
@@ -50,6 +50,7 @@ export default function App() {
   const gain = useBp((s) => s.gain)
   const contrast = useBp((s) => s.contrast)
   const suppress = useBp((s) => s.suppress)
+  const autoNotes = useBp((s) => s.autoNotes)
   const rhythm = useBp((s) => s.rhythm)
   const tonic = useBp((s) => s.tonic)
   const bpm = useBp((s) => s.bpm)
@@ -63,6 +64,10 @@ export default function App() {
   const set = useBp
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  /* 右侧栏（调性/参数/显示/源码）能不能收起来——宽屏看谱时把它关掉能多出一大块 */
+  const [showSide, setShowSide] = useState(true)
+  /* 调性分析那一组能不能折起来（调号选择挪进组里了） */
+  const [keyOpen, setKeyOpen] = useState(true)
   const workerRef = useRef<Worker | null>(null)
   /* 分析用过的样本留着：调'去谐波'要把同一段音频重跑一遍，不能重新选文件 */
   const samplesRef = useRef<{ samples: Float32Array; sampleRate: number } | null>(null)
@@ -78,7 +83,7 @@ export default function App() {
       if (msg.ok && msg.result) {
         set.getState().setAnalysis(msg.result)
         set.getState().setBusy(null)
-        setNotice(`分析完成：${msg.result.notes.length} 个音，BPM ${msg.result.bpm}`)
+        setNotice(`分析完成：BPM ${msg.result.bpm}，${msg.result.notes.length > 0 ? `自动填入 ${msg.result.notes.length} 个音` : `没自动填音（在表格里点着画）`}`)
       } else {
         set.getState().setError(msg.error ?? '分析失败')
         set.getState().setBusy(null)
@@ -118,6 +123,7 @@ export default function App() {
           sampleRate: loaded.sampleRate,
           suppress: st.suppress,
           beatsPerBar: st.beatsPerBar,
+          notes: st.autoNotes,
         },
         [loaded.samples.buffer as ArrayBuffer],
       )
@@ -176,7 +182,7 @@ export default function App() {
       st.setBusy(COPY.analyzing)
       const copy = new Float32Array(buf.samples)
       w.postMessage(
-        { samples: copy, sampleRate: buf.sampleRate, suppress: v, beatsPerBar: st.beatsPerBar },
+        { samples: copy, sampleRate: buf.sampleRate, suppress: v, beatsPerBar: st.beatsPerBar, notes: st.autoNotes },
         [copy.buffer as ArrayBuffer],
       )
     },
@@ -228,6 +234,9 @@ export default function App() {
     [set, startPlay],
   )
 
+  /* 自动翻页时一屏看多久（毫秒） */
+  const PAGE_MS = 20000
+
   /* ---------- 重复区间：播放到区间末尾就跳回区间开头 ---------- */
   useEffect(() => {
     if (!playing || !loopOn || !loop) return
@@ -237,10 +246,21 @@ export default function App() {
     void startPlay(loop.startMs, playMode)
   }, [currentMs, playing, loopOn, loop, playMode, set, startPlay])
 
-  /* ---------- 自动翻页：播放头快出视野就把视野推过去 ---------- */
+  /* ---------- 自动翻页：播放头快出视野就把视野推过去 ----------
+   * 整首都在视野里时（zoom=1）根本没得推，所以开关一打开就先切到一屏 20 秒，
+   * 不然用户点了跟没点一样。关掉时不动视野（用户可能自己缩放过）。 */
   useEffect(() => {
     if (!playing || !autoPage || !durationMs) return
     const span = spanMs(view, durationMs)
+    if (span >= durationMs - 1) {
+      const pageMs = Math.min(durationMs, PAGE_MS)
+      const zoom = durationMs / Math.max(1, pageMs)
+      set.getState().setView({
+        zoom,
+        panMs: Math.max(0, Math.min(durationMs - pageMs, currentMs - pageMs * 0.2)),
+      })
+      return
+    }
     const right = view.panMs + span * 0.82
     if (currentMs > right || currentMs < view.panMs) {
       set.getState().setView({ zoom: view.zoom, panMs: Math.max(0, currentMs - span * 0.25) })
@@ -265,12 +285,10 @@ export default function App() {
       } else if (e.code === 'Tab') {
         e.preventDefault()
         switchMode(st.playMode === 'audio' ? 'synth' : 'audio')
-      } else if (e.code === 'F2') {
+      } else if (e.code === 'Backquote') {
+        /* 反引号：绘制 / 选择 互换（跟 noteDigger 的铅笔/箭头一个意思） */
         e.preventDefault()
-        st.setMode('draw')
-      } else if (e.code === 'F3') {
-        e.preventDefault()
-        st.setMode('select')
+        st.setMode(st.mode === 'draw' ? 'select' : 'draw')
       } else if (e.code === 'KeyL') {
         st.setLoopOn(!st.loopOn)
       } else if (e.code === 'Delete' || e.code === 'Backspace') {
@@ -347,13 +365,13 @@ export default function App() {
             className={mode === 'draw' ? 'on' : ''}
             onClick={() => useBp.getState().setMode('draw')}
           >
-            {COPY.modeDraw} F2
+            {COPY.modeDraw} `
           </button>
           <button
             className={mode === 'select' ? 'on' : ''}
             onClick={() => useBp.getState().setMode('select')}
           >
-            {COPY.modeSelect} F3
+            {COPY.modeSelect} `
           </button>
         </div>
 
@@ -386,16 +404,6 @@ export default function App() {
 
         <div className="spacer" />
 
-        <label className="field">
-          {COPY.keyLabel}
-          <select value={tonic} onChange={(e) => useBp.getState().setTonic(Number(e.target.value))}>
-            {KEY_CHOICES.map((k) => (
-              <option key={k} value={k}>
-                {keyDisplayName(k)} 大调
-              </option>
-            ))}
-          </select>
-        </label>
         <div className="seg" title="表格里写字用音名还是简谱数字（换调号数字跟着变）">
           <button className={pitchMode === 'name' ? 'on' : ''} onClick={() => useBp.getState().setPitchMode('name')}>
             {COPY.pitchName}
@@ -425,6 +433,18 @@ export default function App() {
         </button>
         <button onClick={() => void exportJps()} disabled={confirmedCount === 0} title="只导出你确认过的音">
           {COPY.exportJps}
+        </button>
+        <button
+          className={showSide ? 'icon-btn on' : 'icon-btn'}
+          onClick={() => setShowSide((v) => !v)}
+          title={showSide ? '收起右侧栏' : '展开右侧栏'}
+          aria-label={showSide ? '收起右侧栏' : '展开右侧栏'}
+        >
+          <svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true">
+            <rect x="0.5" y="0.5" width="15" height="13" rx="2" fill="none" stroke="currentColor" />
+            <line x1="10" y1="1" x2="10" y2="13" stroke="currentColor" />
+            <rect x="10.5" y="1" width="4.5" height="12" fill="currentColor" opacity={showSide ? 0.55 : 0.15} />
+          </svg>
         </button>
       </div>
 
@@ -471,29 +491,59 @@ export default function App() {
           />
         </div>
 
-        <div className="side">
+        <div className={showSide ? "side" : "side off"}>
+          <label className="check" title="关着：分析只出频谱/节奏/调性，音符全靠自己在表格里点">
+            <input
+              type="checkbox"
+              checked={autoNotes}
+              onChange={(e) => useBp.getState().setAutoNotes(e.target.checked)}
+            />
+            分析后自动填入音符
+          </label>
+
           <div>
-            <h3>{COPY.keyPanelTitle}</h3>
-            <div className="keys">
-              {candidates.map((c) => (
-                <div
-                  key={c.tonic}
-                  className={`key-row${c.tonic === tonic ? ' on' : ''}`}
-                  onClick={() => useBp.getState().setTonic(c.tonic)}
-                  title="点一下就把调号定成它"
-                >
-                  <span className="bar">
-                    <i style={{ width: `${Math.max(6, Math.round(c.share * 100))}%`, background: keyColor(c.tonic) }}>
-                      <b>{keyDisplayName(c.tonic)}</b>
-                    </i>
-                  </span>
-                  <span className="key-share">{(c.share * 100).toFixed(0)}%</span>
+            <button className="group-head" onClick={() => setKeyOpen((v) => !v)} aria-expanded={keyOpen}>
+              <span className="chev">{keyOpen ? '▾' : '▸'}</span>
+              <span>{COPY.keyPanelTitle}</span>
+            </button>
+            {keyOpen && (
+              <div className="group-body">
+                <label className="field" style={{ marginBottom: 8 }}>
+                  {COPY.keyLabel}
+                  <select value={tonic} onChange={(e) => useBp.getState().setTonic(Number(e.target.value))}>
+                    {KEY_CHOICES.map((k) => (
+                      <option key={k} value={k}>
+                        {keyDisplayName(k)} 大调
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="keys">
+                  {candidates.map((c) => (
+                    <div
+                      key={c.tonic}
+                      className={`key-row${c.tonic === tonic ? ' on' : ''}`}
+                      onClick={() => useBp.getState().setTonic(c.tonic)}
+                      title="点一下就把调号定成它"
+                    >
+                      <span className="key-name">{keyDisplayName(c.tonic)}</span>
+                      <span className="bar">
+                        <i
+                          style={{
+                            width: `${Math.max(2, c.share * 100)}%`,
+                            background: keyColor(c.tonic),
+                          }}
+                        />
+                      </span>
+                      <span className="key-share">{(c.share * 100).toFixed(1)}%</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <div className="hint" style={{ marginTop: 6 }}>
-              {COPY.keyPanelHint}
-            </div>
+                <div className="hint" style={{ marginTop: 6 }}>
+                  {COPY.keyPanelHint}
+                </div>
+              </div>
+            )}
           </div>
 
           <div>
@@ -641,7 +691,7 @@ export default function App() {
         <span className="spacer" />
         {error && <span className="err">{error}</span>}
         {notice && <span className="hint">{notice}</span>}
-        <span className="hint">空格播放 · Tab 原音/合成 · F2 绘制 · F3 选择 · L 循环 · Shift+滚轮平移 · Shift+Alt+滚轮缩放</span>
+        <span className="hint">空格播放 · Tab 原音/合成 · ` 绘制/选择 · L 循环 · Shift+滚轮平移 · Shift+Alt+滚轮缩放</span>
       </div>
     </div>
   )

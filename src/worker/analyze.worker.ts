@@ -14,6 +14,7 @@ interface Job {
   sampleRate: number
   suppress?: number
   beatsPerBar?: number
+  notes?: boolean
 }
 
 interface WorkerScope {
@@ -25,8 +26,8 @@ const scope = self as unknown as WorkerScope
 
 scope.onmessage = (e) => {
   try {
-    const { samples, sampleRate, suppress, beatsPerBar } = e.data
-    const result = analyzeSamples(samples, sampleRate, { suppress, beatsPerBar })
+    const { samples, sampleRate, suppress, beatsPerBar, notes } = e.data
+    const result = analyzeSamples(samples, sampleRate, { suppress, beatsPerBar, notes })
     const transfer: Transferable[] = [result.spectrum.data.buffer as ArrayBuffer]
     if (result.spectrum.frameRms?.buffer) transfer.push(result.spectrum.frameRms.buffer as ArrayBuffer)
     scope.postMessage({ ok: true, result }, transfer)

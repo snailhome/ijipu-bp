@@ -30,8 +30,8 @@ export const COPY = {
   /* 表格交互（对照 noteDigger 的那排按钮） */
   modeDraw: '绘制',
   modeSelect: '选择',
-  modeDrawTip: '绘制：点空格子画音、点已有的音=确认/取消确认、拖右边缘改时值（热键 F2）',
-  modeSelectTip: '选择：点哪里都只试听，不改谱（热键 F3）',
+  modeDrawTip: '绘制：点空格子画音、点已有的音=确认/取消确认、拖右边缘改时值（热键 `）',
+  modeSelectTip: '选择：点哪里都只试听，不改谱（热键 `）',
   snapLabel: '吸附',
   snapOff: '关',
   snapGrid: '格点',
@@ -55,4 +55,5 @@ export const COPY = {
   harmonicLabel: '去谐波',
   harmonicHint: '把泛音从谱里减掉（0 = 不动，1 = 全减）；松手后会用同一段音频重跑一遍',
   hbarTip: '拖这条横向滚动条（或 Shift+滚轮）来回换时间位置',
+  hbarDisabledTip: '整首都在屏幕里，没得滚 —— 用 Shift+Alt+滚轮 放大后再拖',
 } as const
