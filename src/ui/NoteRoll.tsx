@@ -426,11 +426,14 @@ export function NoteRoll(props: Props) {
       }
     }
 
-    /* 8) 左侧钢琴键盘（照用户给的参考图）
-     *  · 底色纯白，**每一行**都有一条浅灰分隔线，一直画到黑键左边缘
-     *  · 黑键是纯黑方块：贴右边但不顶到底，右侧留一道白边（白键的前沿），左端 1px 圆角
+    /* 8) 左侧钢琴键盘（按用户给的参考图逐条对过）
+     *  · 底色纯白；黑键**右侧贴住键列右边缘**（不留白边），宽 62%，整行高，左端 2px 圆角
+     *  · 横向分隔线只出现在"两个白键交界"处：
+     *      - 有黑键的行：线画在**该行竖直中心**，从左边缘画到黑键左缘就停（参考图里就是这样）
+     *      - E|F、B|C（没有黑键）：一条通栏线
      *  · 键列最右边一条深线，把键和格子分开 */
-    const RIM = 5
+    const KEY_BLACK_W = Math.round(KEY_W * 0.62)
+    const KEY_BLACK_X = KEY_W - KEY_BLACK_W
     g.fillStyle = '#ffffff'
     g.fillRect(0, RULER_H, KEY_W, metrics.h - RULER_H)
     for (let r = 0; r < metrics.rows; r++) {
@@ -438,15 +441,17 @@ export function NoteRoll(props: Props) {
       if (midi < MIDI_LOW) break
       const y = RULER_H + r * ROW_H
       const cls = ((midi % 12) + 12) % 12
-      g.fillStyle = 'rgba(0,0,0,0.18)'
-      g.fillRect(0, y + ROW_H - 1, KEY_W, 1)
       if (BLACK.has(cls)) {
-        const kw = Math.round(KEY_W * 0.6)
-        const kx = KEY_W - RIM - kw
+        g.fillStyle = 'rgba(0,0,0,0.55)'
+        g.fillRect(0, Math.round(y + ROW_H / 2), KEY_BLACK_X, 1)
         g.fillStyle = '#000000'
         g.beginPath()
-        g.roundRect(kx, y, kw, ROW_H - 1, [1, 0, 0, 1])
+        g.roundRect(KEY_BLACK_X, y, KEY_BLACK_W, ROW_H, [2, 0, 0, 2])
         g.fill()
+      } else if (cls === 4 || cls === 11) {
+        /* E 的下边、B 的下边：两个白键直接相接 */
+        g.fillStyle = 'rgba(0,0,0,0.55)'
+        g.fillRect(0, y, KEY_W, 1)
       }
       if (cls === 0 || midi === MIDI_LOW) {
         g.fillStyle = 'rgba(40,60,80,0.9)'
@@ -588,11 +593,8 @@ export function NoteRoll(props: Props) {
         if (r) drag.current = { kind: 'loopEdge', edge: lh, startMs: r.startMs, endMs: r.endMs }
         return
       }
-      if (lh === 'body' && !hit) {
-        const r = props.loop
-        if (r) drag.current = { kind: 'loopMove', grabMs: rawMs, startMs: r.startMs, endMs: r.endMs }
-        return
-      }
+      /* 区间带内部不再"拖整段"（用户 m03712 第 4 条：区间里点格子也要试听 + 定位当前时点）。
+       * 想整体挪区间：拖两端握柄，或在时间尺上重新划一段。 */
       if (hit) {
         props.onSelect(hit.id)
         props.onAudition(hit.midi)

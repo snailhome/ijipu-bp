@@ -547,6 +547,33 @@ try {
   const line2 = await cdp.eval(playheadAt)
   check('当前时点变，红线跟着走', line1.hitTop && line1.hitBottom && line2.hitTop && line2.hitBottom && line2.px > line1.px + 20,
     `x ${line1.px}→${line2.px}（${line1.ms}ms→${line2.ms}ms，红=${line1.hitTop}/${line1.hitBottom}→${line2.hitTop}/${line2.hitBottom}）`)
+
+  /* ── 真播一遍：按空格要能开始、时点与红线一起走、再按要能停 ──
+   * 合成音模式的时点用 performance.now() 推，headless 里也能走（音频模式要靠音频时钟，没设备不行）。 */
+  await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    s.setPlayMode('synth')
+    s.setLoop(null)
+    s.setLoopOn(false)
+    s.setCurrentMs(0)
+    window.__bp.setState({ playing: false })
+  })()`)
+  await sleep(250)
+  await cdp.pressKey('Space', ' ', 32)
+  await sleep(700)
+  const run1 = await cdp.eval(playheadAt).then(async (a) => ({ a, st: await cdp.eval(`(() => { const s = window.__bp.getState(); return { playing: s.playing, ms: Math.round(s.currentMs) } })()`) }))
+  await sleep(700)
+  const run2 = await cdp.eval(playheadAt).then(async (a) => ({ a, st: await cdp.eval(`(() => { const s = window.__bp.getState(); return { playing: s.playing, ms: Math.round(s.currentMs) } })()`) }))
+  check('按空格能开始播放（时点往前走）', run2.st.playing && run2.st.ms > run1.st.ms + 200,
+    `${run1.st.ms}ms → ${run2.st.ms}ms，playing=${run2.st.playing}`)
+  check('播放时红线跟着走', run2.a.px > run1.a.px + 5, `x ${run1.a.px}→${run2.a.px}`)
+  await cdp.pressKey('Space', ' ', 32)
+  await sleep(300)
+  const stopA = await cdp.eval(`(() => { const s = window.__bp.getState(); return { playing: s.playing, ms: Math.round(s.currentMs) } })()`)
+  await sleep(600)
+  const stopB = await cdp.eval(`(() => { const s = window.__bp.getState(); return { playing: s.playing, ms: Math.round(s.currentMs) } })()`)
+  check('再按空格能停下来（时点不再动）', !stopB.playing && Math.abs(stopB.ms - stopA.ms) < 80,
+    `playing=${stopB.playing}，${stopA.ms}ms → ${stopB.ms}ms`)
   await cdp.eval(`window.__bp.getState().setCurrentMs(0)`)
   await sleep(150)
 

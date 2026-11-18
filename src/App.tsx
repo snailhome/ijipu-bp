@@ -17,7 +17,7 @@ import { play, setAudioBuffer, stop, audition, type PlayMode } from './audio/pla
 import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
-import { useBp } from './model/store'
+import { PAGE_MS, useBp } from './model/store'
 import { spanMs } from './ui/timeAxis'
 import type { AnalyzeResult, LoopRange, SnapMode } from './model/types'
 import { NoteRoll } from './ui/NoteRoll'
@@ -188,15 +188,21 @@ export default function App() {
     },
     [set],
   )
-  /* ---------- 播放 ---------- */
+  /* ---------- 播放 ----------
+   * 注意"先置 playing 再 await"：`play()` 里有 await（AudioContext.resume / 合成器 ready）。
+   * 如果等 await 完才 setPlaying(true)，用户在这几十毫秒里连按两次空格，第二次看到的
+   * 还是 playing=false，会再启动一路播放 —— 两路 tick 同时存在，stop() 又只管得到最新的
+   * raf 变量，表现就是"播了就停不下来 / 越按越乱"。 */
   const startPlay = useCallback(async (fromMs: number, m: PlayMode) => {
     const st = set.getState()
     if (!st.analysis) return
-    await play(fromMs, m, st.notes, st.durationMs, {
+    set.getState().setPlaying(true)
+    const ok = await play(fromMs, m, st.notes, st.durationMs, {
       onTick: (ms) => set.getState().setCurrentMs(ms),
       onEnd: () => set.getState().setPlaying(false),
     })
-    set.getState().setPlaying(true)
+    /* play() 返回 false = 这一路在 await 期间被 stop()/另一次 play() 顶掉了，别再动状态 */
+    if (!ok) return
   }, [set])
 
   const togglePlay = useCallback(() => {
@@ -240,8 +246,6 @@ export default function App() {
     [set, startPlay],
   )
 
-  /* 自动翻页时一屏看多久（毫秒） */
-  const PAGE_MS = 20000
 
   /* ---------- 重复区间：播放到区间末尾就跳回区间开头 ---------- */
   useEffect(() => {

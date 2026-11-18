@@ -35,6 +35,9 @@ export interface View {
   panMs: number
 }
 
+/** 自动翻页 / 默认视野的一屏时长（毫秒）。用户 m03712：默认只显示 20 秒，不是整曲。 */
+export const PAGE_MS = 20000
+
 interface State {
   /* 文件 */
   fileName: string | null
@@ -191,7 +194,7 @@ export const useBp = create<State>((set, get) => ({
   suppress: 0,
   autoNotes: false,
   rhythm: null,
-  pitchMode: 'name',
+  pitchMode: 'number',
   mode: 'select',
   snap: 'beat',
   view: { zoom: 1, panMs: 0 },

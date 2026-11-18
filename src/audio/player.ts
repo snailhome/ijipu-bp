@@ -25,6 +25,13 @@ let endMs = 0
 let mode: PlayMode = 'audio'
 let onTick: ((ms: number) => void) | null = null
 let onEnd: (() => void) | null = null
+/**
+ * 每次 play/stop 都递增。异步 play() 里 `await ctx.resume()` / `await synth.ready()`
+ * 之后要拿自己的号比对：号变了说明期间又被 stop/play 过一次，这一路就作废。
+ * 没有这个号，连续快速按空格会留下两条 tick 循环、且旧的循环不受 stop 管（raf 变量被覆盖），
+ * 表现就是"播了就停不下来"。
+ */
+let runId = 0
 
 function audioCtx(): AudioContext {
   if (!ctx) ctx = new AudioContext()
@@ -56,6 +63,7 @@ export function seek(ms: number): void {
 }
 
 export function stop(): void {
+  runId++ // 让所有在途的 play()/tick 作废
   if (source) {
     try {
       source.stop()
@@ -89,20 +97,23 @@ export async function play(
   notes: RawNote[],
   durationMs: number,
   hooks: { onTick: (ms: number) => void; onEnd?: () => void },
-): Promise<void> {
+): Promise<boolean> {
   stop()
+  const my = ++runId
   mode = playMode
   onTick = hooks.onTick
   onEnd = hooks.onEnd ?? null
   const ctxNow = audioCtx()
   await ctxNow.resume()
+  /* await 期间又被 stop() 或被另一次 play() 顶掉了：这一路直接作废 */
+  if (my !== runId) return false
   startMs = Math.max(0, fromMs)
   endMs = durationMs
 
   if (playMode === 'audio') {
     if (!buffer) {
       onTick(startMs)
-      return
+      return true
     }
     source = ctxNow.createBufferSource()
     source.buffer = buffer
@@ -111,6 +122,7 @@ export async function play(
     source.start(t0, startMs / 1000)
     startAt = t0 - startMs / 1000
     source.onended = () => {
+      if (my !== runId) return
       if (raf) cancelAnimationFrame(raf)
       raf = 0
       onEnd?.()
@@ -118,6 +130,7 @@ export async function play(
   } else {
     synth = createBackend('synth')
     await synth.ready?.()
+    if (my !== runId) return false
     startAt = performance.now() / 1000
     for (const n of notes) {
       if (n.endMs <= startMs) continue
@@ -128,17 +141,18 @@ export async function play(
   }
 
   const tick = () => {
-    if (!onTick) return
+    if (my !== runId || !onTick) return
     const now = mode === 'audio' ? audioCtx().currentTime : performance.now() / 1000
     const pos = startMs + (now - startAt) * 1000
     if (pos >= endMs) {
       onTick(endMs)
       raf = 0
-      onEnd?.()
+      if (my === runId) onEnd?.()
       return
     }
     onTick(pos)
     raf = requestAnimationFrame(tick)
   }
   raf = requestAnimationFrame(tick)
+  return true
 }
