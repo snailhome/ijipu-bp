@@ -1,0 +1,33 @@
+{
+  "name": "ijipu-bp",
+  "private": true,
+  "version": "0.1.0",
+  "description": "爱扒谱（iJipu BP）—— 音频扒谱，产出 iJipu 的 .jps 脚本乐谱。",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "smoke": "vite build --config vite.smoke.config.ts && node dist-smoke/smoke.cjs",
+    "sync:engine": "node scripts/sync-engine.mjs",
+    "check:engine": "node scripts/sync-engine.mjs --check",
+    "tauri": "tauri",
+    "tauri:dev": "npm run sync:engine && tauri dev",
+    "tauri:build": "npm run sync:engine && tauri build"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.0"
+  }
+}

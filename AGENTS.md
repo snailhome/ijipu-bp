@@ -1,0 +1,66 @@
+# AGENTS.md（ijipu-bp / 爱扒谱）
+
+> 本仓库是**独立工具**：音频扒谱 → 产出 `.jps`。谱面编辑、出片、卡片模板都不在这里。
+
+## 一、边界
+
+1. **只做"从声音到 jps"这一段**：解码、频谱、定调、定拍、量化、生成文本、导出。
+   不做谱面编辑（那是 iJipu 应用）、不做视频/出片（那是 ijipu-cp）。
+2. 产出必须是**引擎认的** jps：每次生成都要过 `parseJps` + `layoutScore` 两道闸门
+   （`scripts/smoke.ts` 已守）。找不到引擎能表达的写法时，**宁可就近取整并告警**，
+   也不要造语法。
+3. 失败要说人话：错误信息进状态栏，中文、带原因（例如"读不到文件 X：拒绝访问"）。
+
+## 二、引擎是 vendor 不是依赖（硬规则）
+
+- `vendor/engine/` 从 `../ijipu/packages/ijipu-engine/src/engine` **逐字节同步**，
+  **禁止手改**。要用新导出、修引擎 bug，回 `../ijipu` 改，再：
+
+  ```powershell
+  npm run sync:engine     # 覆盖 vendor/engine 并写 ENGINE-SNAPSHOT.json
+  npm run check:engine    # 只比对；哈希不一致即红
+  ```
+
+- 新增引擎导出时，同步更新 `src/preview/jpsSvg.ts` 等处的 import 与本文的"依赖面"说明。
+- 引擎代码是纯 TS、零 React/DOM；**不要在 vendor 里加 UI 或 Node API**。
+
+## 三、开工与收工
+
+开工先跑一遍基线：
+
+```powershell
+npm run typecheck
+npm run smoke
+```
+
+改完再跑一遍，加 `npm run build`；动了 vendor 还要 `npm run check:engine`。
+
+**负向判据**（只跑通不算过）：
+
+- `smoke` 输出必须是 `17/17 通过`（数字随用例增加而变，但**不许有 ✗**）；
+- `check:engine` 必须是"哈希一致"，出现差异说明 vendor 被改过；
+- `jps` 用例里 `parseJps` 的错误数必须是 0（不是"能渲染就行"）。
+
+## 四、代码约定
+
+- TS strict；2 空格、无分号、单引号；`import type` 分开写；文件头一段中文说明"这个文件为什么存在"。
+- 界面文案集中在 `src/brand/copy.ts`；色值走 `src/styles.css` 的 CSS 变量。
+- 函数单职责，尽量 ≤50 行；纯计算放 `src/analysis`、`src/jps`（不许碰 DOM），
+  这样 Node 冒烟才盖得到。
+- 只在本文件之外读 `window.__TAURI__` 的**唯一入口**是 `src/brand/env.ts`。
+- 播放头由 `AudioContext.currentTime` 推算，**不要用 rAF 累加时间**（会漂）。
+- 版本号三处一致：`package.json`、`src-tauri/tauri.conf.json`、`src/brand/version.ts`。
+
+## 五、提交
+
+- 小步、中文提交信息；**不 push、不打 tag**（除非用户明说）。
+- 提交前：`npm run typecheck` + `npm run smoke`；动过 vendor 加 `npm run check:engine`。
+
+## 六、Windows 完整性提醒
+
+如果 portable exe 出现"只能写自己的 `out`、写别处报 `拒绝访问 (os error 5)`"，
+先查完整性级别再怀疑杀软：
+
+```powershell
+icacls ".\src-tauri\target\release\ijipu-bp.exe" | findstr /i "Mandatory"   # 应为 Medium
+```

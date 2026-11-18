@@ -1,0 +1,51 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "爱扒谱",
+  "version": "0.1.0",
+  "identifier": "com.ijipu.bp",
+  "build": {
+    "frontendDist": "../dist",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5174"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "爱扒谱 · iJipu BP",
+        "width": 1360,
+        "height": 880,
+        "minWidth": 900,
+        "minHeight": 600,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "蜗牛🐌",
+    "copyright": "© 蜗牛🐌 · iJipu BP（爱扒谱）",
+    "shortDescription": "音频扒谱，产出 .jps 脚本乐谱",
+    "longDescription": "把一段音频拆成频谱、定调、定拍，量化成简谱时值，导出 iJipu（爱记谱）的 .jps 脚本乐谱。",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["jps"],
+        "name": "iJipu 简谱脚本",
+        "description": "用文本写的简谱",
+        "role": "Editor"
+      }
+    ]
+  }
+}

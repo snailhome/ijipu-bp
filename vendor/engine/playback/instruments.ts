@@ -1,0 +1,192 @@
+/**
+ * engine/playback/instruments.ts — 合成乐器预设与路由（adj283）
+ *
+ * 多声部试听：每个播放事件携带乐器/声部名（PlayEvent.instrument，adj257），
+ * 合成后端按名称自动路由到不同「波形 + 泛音 + 包络」预设；UI 也可全局指定一种乐器
+ * （auto = 按声部名匹配，匹配失败回退默认钢琴）。
+ * 纯数据 + 字符串匹配，无 DOM 依赖，可单测。
+ */
+
+/** 合成乐器 id */
+export type InstrumentId = 'piano' | 'organ' | 'strings' | 'flute' | 'brass' | 'musicbox'
+
+/** 合成预设：泛音组合 + 包络（时间单位秒） */
+export interface InstrumentPreset {
+  /** 泛音组合：[倍频, 相对音量, 波形]（基频 1 + 泛音） */
+  partials: Array<[number, number, OscillatorType]>
+  /** 起音时间（s） */
+  attack: number
+  /** 持续音色：起音后保持到的相对音量（无则起音后指数衰减——敲击类音色） */
+  sustainLevel?: number
+  /** sustainLevel 的衰减时间常数（s，越大保持越久） */
+  decayTime?: number
+}
+
+export const INSTRUMENT_PRESETS: Record<InstrumentId, InstrumentPreset> = {
+  // 钢琴：三角波基频 + 2 正弦泛音，快起音、起音后指数衰减（琴弦感）
+  piano: { partials: [[1, 1, 'triangle'], [2, 0.5, 'sine'], [3, 0.25, 'sine']], attack: 0.012 },
+  // 风琴：锯齿基频 + 正弦叠加，起音后持续（管风琴音栓感）
+  organ: { partials: [[1, 1, 'sawtooth'], [1, 0.7, 'sine'], [2, 0.3, 'sine']], attack: 0.02, sustainLevel: 0.85, decayTime: 0.05 },
+  // 弦乐：锯齿基频 + 泛音，慢起音、持续（弓弦感）
+  strings: { partials: [[1, 1, 'sawtooth'], [2, 0.35, 'sine'], [3, 0.15, 'sine']], attack: 0.08, sustainLevel: 0.7, decayTime: 0.08 },
+  // 长笛：正弦为主 + 轻泛音，平滑起音、持续（气息感）
+  flute: { partials: [[1, 1, 'sine'], [2, 0.2, 'sine'], [4, 0.06, 'sine']], attack: 0.05, sustainLevel: 0.8, decayTime: 0.06 },
+  // 铜管：方波基频 + 锯齿/正弦泛音，快起音、持续（号角感）
+  brass: { partials: [[1, 1, 'square'], [2, 0.4, 'sawtooth'], [3, 0.2, 'sine']], attack: 0.03, sustainLevel: 0.6, decayTime: 0.06 },
+  // 八音盒：正弦 + 高泛音，极快起音、指数衰减（清脆）
+  musicbox: { partials: [[1, 1, 'sine'], [4, 0.25, 'sine'], [8, 0.08, 'sine']], attack: 0.005 },
+}
+
+/** 合成乐器选择项（UI 下拉）：auto = 按声部名自动路由。采样色库独立于 sampling（见 libraries.ts） */
+export const INSTRUMENT_OPTIONS: { id: InstrumentId | 'auto'; label: string }[] = [
+  { id: 'auto', label: '自动（按声部名）' },
+  { id: 'piano', label: '钢琴' },
+  { id: 'organ', label: '风琴' },
+  { id: 'strings', label: '弦乐' },
+  { id: 'flute', label: '长笛' },
+  { id: 'brass', label: '铜管' },
+  { id: 'musicbox', label: '八音盒' },
+]
+
+/** 名称关键词表：声部名/乐器名包含任一关键词即路由到该预设（中文优先，含常见英文） */
+const INSTRUMENT_KEYWORDS: Record<InstrumentId, string[]> = {
+  piano: ['钢琴', 'piano', 'pf'],
+  organ: ['风琴', '手风琴', 'organ', 'harmonium', 'accordion'],
+  strings: ['弦乐', '提琴', '二胡', 'strings', 'violin', 'viola', 'cello', '胡'],
+  flute: ['长笛', '短笛', '笛', 'flute', 'piccolo', '箫'],
+  brass: ['铜管', '小号', '圆号', '长号', '大号', '萨克斯', 'trumpet', 'brass', 'horn', 'trombone', 'sax'],
+  musicbox: ['八音盒', '钟琴', '钢片琴', 'musicbox', 'music box', 'glockenspiel', '铃'],
+}
+
+/** adj301：试听音色库名（与 INSTRUMENT_OPTIONS 合成乐器一致）——乐器指定（Y 默认 / @ 切换）用 */
+export const INSTRUMENT_LIB_NAMES: Record<InstrumentId, string> = {
+  piano: '钢琴',
+  organ: '风琴',
+  strings: '弦乐',
+  flute: '长笛',
+  brass: '铜管',
+  musicbox: '八音盒',
+}
+
+/** 声部名/乐器名 → 乐器 id（匹配失败回退默认钢琴） */
+export function matchInstrument(name: string | undefined): InstrumentId {
+  if (!name) return 'piano'
+  const n = name.toLowerCase()
+  for (const [id, kws] of Object.entries(INSTRUMENT_KEYWORDS) as [InstrumentId, string[]][]) {
+    if (kws.some((kw) => n.includes(kw))) return id
+  }
+  return 'piano'
+}
+
+/**
+ * adj301：乐器指定（@乐器名 / 描述头 Y）→ 乐器 id。
+ * 严格按试听音色库名匹配（钢琴/风琴/弦乐/长笛/铜管/八音盒），不匹配回退默认第一个（钢琴）。
+ * 与 matchInstrument（模糊关键词，声部名路由）不同——这是用户显式指定的乐器，需名称一致。
+ */
+export function resolveInstrument(name: string | undefined): InstrumentId {
+  if (!name) return 'piano'
+  const n = name.trim()
+  for (const [id, lib] of Object.entries(INSTRUMENT_LIB_NAMES) as [InstrumentId, string][]) {
+    if (n === lib || n.toLowerCase() === id) return id
+  }
+  return 'piano'
+}
+
+/** 乐器引用解析结果（adj336） */
+export interface ParsedVoiceRef {
+  /** 路由用引用：`库id:乐器名` 或 `乐器名`（已剥显示名与 @ 前缀） */
+  ref: string
+  /** 纯净乐器名（无库 id、无引号） */
+  instrument: string
+  /** 显示名：`"显示名"` 内容，缺省为纯净乐器名 */
+  display: string
+}
+
+/**
+ * 解析乐器引用：`[库id:]乐器名["显示名"]`。
+ *  `@` 前缀可由调用方剥离；`库id` 可省略。显示名可省略，缺省=纯净乐器名。
+ *  示例：`generaluser_gs:小提琴"领奏"` → { ref:'generaluser_gs:小提琴', instrument:'小提琴', display:'领奏' }；
+ *        `长笛` → { ref:'长笛', instrument:'长笛', display:'长笛' }。
+ */
+export function parseInstrumentRef(raw: string): ParsedVoiceRef {
+  let body = raw.trim().replace(/^@/, '').replace(/@$/, '') // 剥首尾 @（@...@ 包裹）
+  let display: string | null = null
+  // 剥离首个成对引号（显示名）
+  const qi = body.indexOf('"')
+  if (qi >= 0) {
+    const qe = body.indexOf('"', qi + 1)
+    if (qe > qi) {
+      display = body.slice(qi + 1, qe)
+      body = (body.slice(0, qi) + body.slice(qe + 1)).trim()
+    }
+  }
+  // 库id:乐器名
+  let instrument = body
+  const ci = body.indexOf(':')
+  if (ci >= 0) instrument = body.slice(ci + 1).trim()
+  return { ref: body, instrument, display: display ?? instrument }
+}
+
+/**
+ * adj908：段层伴奏 / 第二声部的**内置兜底音色**（用户规格：可用音色 第 1 = 大钢琴、第 2 = 手风琴）。
+ * 需要跨模块共用（`sequence.ts` 发声、`layout/index.ts` 标注），故从 `sequence.ts` 搬到这里。
+ */
+export const ACCOMP_FALLBACK_INSTRUMENT = '手风琴'
+
+/**
+ * adj908：**某声部没在描述头 `Y:` 里写音色**时该用哪个音色 ref —— 引擎里**唯一**一处口径。
+ *
+ * ## 为什么必须抽成一个纯函数
+ *
+ * 这段逻辑有**两个消费端**，以前各写了一份：
+ *  · `playback/sequence.ts`（实际发声 + 色块配色）；
+ *  · `layout/index.ts`（`showInstrument` 时 `@@` 标注的"默认乐器名"）。
+ * 各写一份的后果是：口径一变就出现「**标注的音色 ≠ 实际演奏的音色**」（本项目已复发过同类问题）。
+ *
+ * ## 口径（adj908，用户 2026-10 确认方向「各声部音色要不同」）
+ *
+ * 用户原话：「未设置音色的情况下，声部之间没有用不同的音色区分开，色块也没有区分」。
+ * 根因是旧口径在 `Y:` 行数不够时给所有声部返回**同一个**默认音色，而色块颜色是
+ * **按音色名去重**分配的（`playhead.ts` 的 `instrumentColorMap`）⇒ 两个声部同色。
+ *
+ *  ① `Y:` 显式写了 → 用它（**谱面为准**，不被启用列表改写）；
+ *  ② 没写（或行数不够）：
+ *     · `voice === 1` → `defaultInstrumentRef`（= 启用音色列表第 1 个）；
+ *     · `voice >= 2` → 启用列表第 `(voice-1) % refs.length` 项 ⇒ 与第 1 声部**不同音色**；
+ *  ③ `enabledInstrumentRefs` **没传**（CLI / 导出等旧调用方）→ 完全保持旧口径
+ *     （回落 `defaultInstrumentRef`），不改变既有行为；
+ *  ④ 传了**空列表** → 没有可区分的音色 ⇒ 回落 `accompInstrumentRef()`（`Y[1]` 否则「手风琴」）；
+ *  ⑤ **边界**：列表**只有 1 项**时无法区分声部，第 2 声部只能与第 1 声部同音色（保持现状，不特殊处理）。
+ */
+export function voiceDefaultInstrumentRef(opts: {
+  /** 声部号（1 起，= 曲行的 `Q1:`/`Q2:` 编号） */
+  voice: number
+  /** 描述头 `Y:` 行（按书写顺序，第 n 行对应第 n 声部） */
+  yInstruments?: readonly string[]
+  /** 第 1 声部的兜底音色（调用方的「启用音色列表第 1 项」） */
+  defaultInstrumentRef?: string
+  /**
+   * 「启用音色列表」**整份**（按可用顺序）。`undefined` = 调用方没给 ⇒ 保持旧口径；
+   * `[]` = 给了但为空 ⇒ 回落 `accompInstrumentRef()`。
+   */
+  enabledInstrumentRefs?: readonly string[]
+}): string {
+  const y = opts.yInstruments?.[opts.voice - 1]
+  if (y !== undefined) return parseInstrumentRef(y).ref
+  const fallback = opts.defaultInstrumentRef?.trim() || ''
+  if (opts.voice <= 1) return fallback
+  const refs = opts.enabledInstrumentRefs
+  if (refs === undefined) return fallback
+  if (refs.length === 0) return accompInstrumentRef(opts.yInstruments)
+  return parseInstrumentRef(refs[(opts.voice - 1) % refs.length]).ref
+}
+
+/**
+ * adj908：段层伴奏 / 第二声部的音色 ref —— 优先脚本第 2 条 `Y:`，否则内置「手风琴」。
+ * （用户规格：「可用音色 第 1 = 大钢琴、第 2 = 手风琴」；第 1 项留给主声部。）
+ */
+export function accompInstrumentRef(yInstruments?: readonly string[]): string {
+  const y1 = yInstruments?.[1]
+  if (y1 !== undefined && y1.trim() !== '') return parseInstrumentRef(y1).ref
+  return ACCOMP_FALLBACK_INSTRUMENT
+}

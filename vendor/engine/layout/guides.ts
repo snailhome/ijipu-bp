@@ -1,0 +1,488 @@
+/**
+ * engine/layout/guides.ts — 排版辅助虚线数据（纯函数）
+ * 供预览页叠加可拖拽虚线（边距/行距）使用。
+ */
+import type { ScoreLayout } from '../types'
+// adj629f：段层虚线要按「压缩后」的层高取中心
+import { SEGMENT_LAYER_YSCALE } from './spacing'
+// adj905q：本体（墨迹）边界要用「数字槽宽」作上限（`AGENTS.md` 五·9 的墨迹口径）
+import { digitSlotW } from './spaceLayout'
+
+/** 音符数字基线到行顶的偏移（noteSize×1.1，随字号；默认 18） */
+const baselineOffset = (noteSize: number) => noteSize * 1.1
+
+/** 每页的行顶 y 列表（从音符基线 y 推导，去重排序） */
+export function computeRowTops(layout: ScoreLayout, noteSize = 18): number[][] {
+  const off = baselineOffset(noteSize)
+  return layout.pages.map((page) => {
+    const tops = new Set<number>()
+    for (const n of page.notes) {
+      tops.add(Math.round((n.y - off) * 10) / 10)
+    }
+    return [...tops].sort((a, b) => a - b)
+  })
+}
+
+/** 一行歌词的结构位置（adj72 词部行虚线用） */
+export interface LyricRowGuide {
+  /** 歌词基线 y */
+  y: number
+  /** 歌词行区域中心 y（基线 - 0.3×geci，字区中心，adj72） */
+  center: number
+  /**
+   * adj629g：该歌词行的**行序号**（该曲行里第几条 `C…:`，0 起；缺省 = 未知）。
+   * 预览虚线据此决定拖的是 `height_quci`（第 1 行 = 歌词区↔曲部）还是 `height_cici`
+   * （第 2 行及以后 = 歌词行之间）——不能按"在该行里的序号"判（替谱层会让序号重置）。
+   */
+  line?: number
+}
+
+/** 行的结构位置：曲部行（含多声部）/ 歌词行（adj10/72 虚线用） */
+export interface RowGuide {
+  /** 曲部行（声部行）顶 y */
+  yTop: number
+  /** 曲行底 y（数字下方，容纳减时线） */
+  yBottom: number
+  /** 曲部行数字中心 y（基线 - 0.4×noteSize，adj72 虚线基准） */
+  yCenter: number
+  /** 多声部块内声部序号（0 = 行首/单声部；块内第 2+ 声部 = 1,2…，adj72） */
+  voiceIdx: number
+  /** 每行歌词（多行歌词多条；无歌词为空数组） */
+  lyricRows: LyricRowGuide[]
+  /** 第一行歌词基线 y（无歌词为 null） */
+  lyricTop: number | null
+  /** 最后一行歌词底部 y（无歌词为 null） */
+  lyricBottom: number | null
+  /**
+   * adj432：该行是否属于**临时叠加段**（`{bz … }` / `{dsb … }`）的段内容层——
+   * 段层是叠加层（不占主旋律拍位、画在主旋律上方/上下），它的虚线**不能**拖行距，
+   * 应拖 `segmentRowGap.{bz,dsb}`（段层与主旋律的间距）。`bz` 只有上层；`dsb` 有上下两层。
+   * adj629：加 `tp`（替谱段，层画在**所属歌词行上方**，拖 `segmentRowGap.tp`）。
+   */
+  segType?: 'bz' | 'dsb' | 'tp'
+  /** adj432：段层层次（upper = 段内容层 / lower = dsb 包络内被下移的主旋律） */
+  segLayer?: 'upper' | 'lower'
+}
+
+/** 计算每页每行的结构位置（供曲词间距/词曲间距虚线） */
+export function computeRowGuides(
+  layout: ScoreLayout,
+  cfg: { quci: number; geci: number },
+  noteSize = 18,
+): RowGuide[][] {
+  const off = baselineOffset(noteSize)
+  return layout.pages.map((page) => {
+    // 多声部块（adj72：用于判定声部序号 voiceIdx）
+    const blocks = page.voiceBlocks.map((vb) => [vb.yTop, vb.yBottom] as const)
+    // adj432：行同时记录**是否属于临时叠加段**——段层虚线拖 `segmentRowGap`，不是行距
+    type RowAcc = { yTop: number; lyricYs: number[]; segType?: 'bz' | 'dsb' | 'tp'; segLayer?: 'upper' | 'lower' }
+    const rowMap = new Map<number, RowAcc>()
+    for (const n of page.notes) {
+      const yTop = Math.round((n.y - off) * 10) / 10
+      const cur = rowMap.get(yTop)
+      /**
+       * 段层标记来源：① 段内容层（`n.segment` 已置 type/layer）；
+       * ② `{dsb}` 的**包络外主旋律**（视觉下排）—— adj722 起它**不再**被标 `playVoice = 'second'`
+       * （它现在是主声部），改用 **`parentY` 有值**识别（`shiftEnvelopeDown` 只写在它身上）。
+       */
+      const isDsbOutsideRow = n.segment === undefined && n.parentY !== undefined
+      const segType = n.segment?.type ?? (isDsbOutsideRow ? 'dsb' : undefined)
+      const segLayer = n.segment?.layer ?? (isDsbOutsideRow ? 'lower' : undefined)
+      if (!cur) {
+        rowMap.set(yTop, {
+          yTop,
+          lyricYs: [],
+          ...(segType ? { segType } : {}),
+          ...(segLayer ? { segLayer } : {}),
+        })
+      } else if (segType && !cur.segType) {
+        cur.segType = segType
+        cur.segLayer = segLayer
+      }
+    }
+    const tops = [...rowMap.keys()]
+    /** adj629g：行 y → 该行歌词的**歌词行序号**（同 y 取最小；用于虚线选 quci / cici） */
+    const lyricLineOfY = new Map<number, number>()
+    for (const l of page.lyrics) {
+      const y = Math.round(l.y * 10) / 10
+      const cur = lyricLineOfY.get(y)
+      if (l.line !== undefined && (cur === undefined || l.line < cur)) lyricLineOfY.set(y, l.line)
+    }
+    for (const l of page.lyrics) {
+      let best = -1
+      let bestD = Infinity
+      for (const yTop of tops) {
+        const d = Math.abs(l.y - (yTop + off + cfg.quci))
+        if (d < bestD) {
+          bestD = d
+          best = yTop
+        }
+      }
+      if (best >= 0) rowMap.get(best)!.lyricYs.push(l.y)
+    }
+    // 声部序号：yTop 落在哪个多声部块内、按 yTop 升序第几个（块外 = 0）
+    // adj479：判定下限放宽 1.5×字号——声部间距允许负值后，靠后的声部行可能被压到**块顶之上**
+    // （`voiceBlocks.yTop` 是首声部行顶），原区间判定会落空并把该行误判成 0（= 单声部行），
+    // 于是拖那条虚线改的就是行距而不是声部间距。放宽量取 1.5×字号：默认行距下靠后声部
+    // 不会越出，只有把行距也调到很小、又用负声部间距压缩时才会用到这条兜底。
+    const voiceIdxOf = (yTop: number): number => {
+      for (const [by, bb] of blocks) {
+        if (yTop >= by - noteSize * 1.5 && yTop < bb - 0.5) {
+          const inBlock = tops.filter((t) => t >= by - noteSize * 1.5 && t < bb - 0.5).sort((a, b) => a - b)
+          return Math.max(0, inBlock.indexOf(yTop))
+        }
+      }
+      return 0
+    }
+    return [...rowMap.values()].map((r) => {
+      r.lyricYs.sort((a, b) => a - b)
+      // adj72：每行歌词一条（同一行歌词字 y 相同，去重）
+      const rowYs = [...new Set(r.lyricYs.map((y) => Math.round(y * 10) / 10))].sort((a, b) => a - b)
+      const base = r.yTop + off // 音符基线
+      /**
+       * adj629f（用户要求）：**段层虚线画在"压缩后"的层高中间**——
+       * 临时叠加层整层纵向压扁到 `SEGMENT_LAYER_YSCALE`（以层基线为不动点），
+       * 视觉中心随之从 `基线 − 0.4×字号` 变为 `基线 − 0.4×字号×压缩比`；
+       * 仍用未压缩值会把虚线画在数字上方（拖起来也对不上那层）。
+       * adj666j：`{dsb}`（临时多声部）不压扁 ⇒ 压缩比取 1，虚线仍画在数字中心。
+       */
+      const yScale = r.segType ? (r.segType === 'dsb' ? 1 : SEGMENT_LAYER_YSCALE) : 1
+      const lyricTop = rowYs.length > 0 ? rowYs[0] : null
+      return {
+        yTop: r.yTop,
+        // adj69：曲部内容下沿（减时线区）随音符字号（0.6×noteSize）
+        yBottom: r.yTop + off + noteSize * 0.6 * yScale,
+        // adj72：数字中心（基线 - 0.4×noteSize，数字字高 0.8em 的中心）；adj629f：段层再乘压缩比
+        yCenter: Math.round((base - noteSize * 0.4 * yScale) * 10) / 10,
+        voiceIdx: voiceIdxOf(r.yTop),
+        lyricRows: rowYs.map((ly) => ({
+          y: ly,
+          center: Math.round((ly - cfg.geci * 0.3) * 10) / 10,
+          ...(lyricLineOfY.has(ly) ? { line: lyricLineOfY.get(ly)! } : {}),
+        })),
+        lyricTop,
+        lyricBottom: rowYs.length > 0 ? rowYs[rowYs.length - 1] + cfg.geci : null,
+        // adj432：段层标记（供预览层换色 + 拖动 `segmentRowGap.{bz,dsb}`）
+        ...(r.segType ? { segType: r.segType } : {}),
+        ...(r.segLayer ? { segLayer: r.segLayer } : {}),
+      }
+    })
+  })
+}
+
+/** 歌词文字上升部与字号的比值（微软雅黑 ascent≈0.86em，取 0.85 保守，保证 quci 虚线不穿歌词文字） */
+export const LYRIC_ASCENT_RATIO = 0.85
+
+/** adj1090：一个**曲行**的纵向范围（曲部 + 词部） */
+export interface RowSpan {
+  /** 行顶（这一组最上面那条声部/段层的 yTop） */
+  top: number
+  /** 行底（曲部下沿与**最后一行歌词**下沿的较大者） */
+  bottom: number
+  /** 这一组覆盖了哪些 guide 行（各自的 yTop；排查与断言用） */
+  tops: number[]
+}
+
+/**
+ * adj1090（用户 2026-10-23 口径）：把一页的 guide 行按**曲行**归组，给出"曲部 + 词部"的纵向范围。
+ *
+ * 为什么不能直接用 `dynamic/flowView` 里那套"视觉行"：那里按"行间空隙 ≤ 0.8×字号"合并，
+ * 而**多声部**的行距把歌词区一起算了进去（实测 Q1/Q2 的行顶差 87、字号 13 ⇒ 空隙 65），
+ * 于是两个声部被拆成两条视觉行 —— 试听换行时只看得到其中一个声部，
+ * 而用户要求「同一组的多声部及歌词显示在同一视界」。
+ *
+ * 这里改用**结构信息**归组，不靠间距猜：
+ *  · `page.voiceBlocks` 标出多声部块（= 同一曲行的所有声部行）⇒ 块内的行合成一组；
+ *  · 临时叠加段（`{bz}` / `{dsb}` / `{tp}`）的行按纵向距离并入最近的普通组（它们同属一个曲行）；
+ *  · 其余行各自成组（单声部曲行）。
+ *
+ * 行底取「曲部下沿」与「该组最后一行歌词下沿（基线 + geci）」的较大者 ⇒ **多行歌词都在里面**。
+ */
+export function rowSpansOfPage(
+  layout: ScoreLayout,
+  pageIndex: number,
+  cfg: { quci: number; geci: number; noteSize?: number },
+): RowSpan[] {
+  const guides = computeRowGuides(layout, { quci: cfg.quci, geci: cfg.geci }, cfg.noteSize ?? 18)[pageIndex] ?? []
+  const page = layout.pages[pageIndex]
+  if (!page || guides.length === 0) return []
+  const blocks = page.voiceBlocks.map((b) => [b.yTop, b.yBottom] as const)
+  type Grp = { rows: RowGuide[] }
+  const groups: Grp[] = []
+  const byBlock = new Map<number, Grp>()
+  /** 段层行先攒着：等普通组都建好，再按纵向距离挂过去 */
+  const pending: RowGuide[] = []
+  for (const g of [...guides].sort((a, b) => a.yTop - b.yTop)) {
+    const bi = blocks.findIndex(([t, b]) => g.yTop >= t - 0.5 && g.yTop <= b - 0.5)
+    if (bi >= 0) {
+      let grp = byBlock.get(bi)
+      if (!grp) {
+        grp = { rows: [] }
+        byBlock.set(bi, grp)
+        groups.push(grp)
+      }
+      grp.rows.push(g)
+    } else if (g.segType !== undefined) {
+      pending.push(g)
+    } else {
+      groups.push({ rows: [g] })
+    }
+  }
+  const boundsOf = (grp: Grp): { top: number; bottom: number } => ({
+    top: Math.min(...grp.rows.map((r) => r.yTop)),
+    bottom: Math.max(...grp.rows.map((r) => Math.max(r.yBottom, r.lyricBottom ?? r.yBottom))),
+  })
+  for (const g of pending) {
+    let best: Grp | null = null
+    let bestD = Number.POSITIVE_INFINITY
+    for (const grp of groups) {
+      if (grp.rows.every((r) => r.segType !== undefined)) continue
+      const { top, bottom } = boundsOf(grp)
+      const d = g.yTop < top ? top - g.yTop : g.yTop > bottom ? g.yTop - bottom : 0
+      if (d < bestD) {
+        bestD = d
+        best = grp
+      }
+    }
+    if (best) best.rows.push(g)
+    else groups.push({ rows: [g] })
+  }
+  return groups
+    .map((grp) => ({ ...boundsOf(grp), tops: grp.rows.map((r) => r.yTop) }))
+    .sort((a, b) => a.top - b.top)
+}
+
+/**
+ * quci 虚线显示位置：钳制在「曲部内容下沿」与「歌词文字上沿」之间（adj53）。
+ * - 向上最多到曲部内容下沿（不进入曲部内容区）；
+ * - 不穿过歌词文字（歌词文字从基线向上延伸约 0.85×字号，旧中点公式在 quci 较小时会穿歌词）。
+ * 无歌词返回 null。
+ */
+export function quciGuideY(g: RowGuide, geci: number): number | null {
+  if (g.lyricTop === null) return null
+  const mid = (g.yBottom + g.lyricTop) / 2
+  const lyricEdge = g.lyricTop - geci * LYRIC_ASCENT_RATIO
+  const hi = Math.max(lyricEdge, g.yBottom) // 区间为空（歌词侵入曲部）时贴曲部下沿
+  return clamp(mid, g.yBottom, hi)
+}
+
+/** 可拖拽的排版项：key 对应 PageConfig 字段，dir 为拖拽方向 */
+export interface GuideDragSpec {
+  key: 'margin_top' | 'margin_bottom' | 'margin_left' | 'margin_right' | 'height_ciqu'
+  /** 拖拽方向：v 垂直（改上下/行距）、h 水平（改左右边距） */
+  dir: 'v' | 'h'
+  /** 反向（右线向左拖 = 右边距增大） */
+  invert?: boolean
+}
+
+export const GUIDE_ITEMS: GuideDragSpec[] = [
+  { key: 'margin_top', dir: 'v' },
+  { key: 'margin_bottom', dir: 'v', invert: true }, // 线在 page.height - margin_bottom：下拉=线跟随（同 margin_right）
+  { key: 'margin_left', dir: 'h' },
+  { key: 'margin_right', dir: 'h', invert: true },
+  { key: 'height_ciqu', dir: 'v' },
+]
+
+/** 拖拽增量（显示像素 → 页面 pt），scale = 显示宽度 / 页面宽 */
+export function dragDelta(
+  spec: { key: string; dir: 'v' | 'h'; invert?: boolean },
+  startX: number,
+  startY: number,
+  curX: number,
+  curY: number,
+  scale: number,
+): number {
+  const raw = spec.dir === 'v' ? curY - startY : curX - startX
+  let delta = raw / scale
+  if (spec.invert) delta = -delta
+  return delta
+}
+
+/** 数值范围钳制 */
+export function clamp(v: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, v))
+}
+
+/** 描述头区域下沿（adj30：= 上边距 + 描述头内容区高 + 曲部上间距；与 layout.metrics.titleAreaH 一致） */
+export function metaAreaH(cfg: {
+  margin_top: number
+  body_margin_top: number
+  descAreaH: number
+}): number {
+  return cfg.margin_top + cfg.descAreaH + cfg.body_margin_top
+}
+
+/**
+ * 描述头元素位置钳制见 metaAnchors.ts（adj16 锚点语义：top-center / bottom-right / bottom-left）。
+ */
+
+/** 各字段的调整范围 */
+export const GUIDE_LIMITS: Record<GuideDragSpec['key'], [number, number]> = {
+  margin_top: [20, 400],
+  margin_bottom: [20, 400],
+  margin_left: [20, 400],
+  margin_right: [20, 400],
+  height_ciqu: [0, 300],
+}
+
+export type GuideKeyEx =
+  | 'descAreaH'
+  | 'body_margin_top'
+  | 'height_quci'
+  | 'height_cici'
+  | 'height_shengbu'
+  | 'height_ciqu_lyric'
+  | 'segmentRowGap_bz'  // adj428：bz 段上下层间距
+  | 'segmentRowGap_dsb' // adj428：dsb 段上下层间距
+  | 'segmentRowGap_tp'  // adj629e：替谱层距「上方内容」的间距
+  | 'barCountInterval'  // adj625：小节序号间隔（每隔几个小节显示一个序号）
+
+export const GUIDE_LIMITS_EX: Record<GuideKeyEx, [number, number]> = {
+  descAreaH: [40, 400],
+  body_margin_top: [4, 400], // 与描述头下端线最小间距 4px（adj30）
+  height_quci: [0, 120],
+  height_cici: [0, 120],
+  // adj479（用户报）：声部行间距**允许负值**（压缩声部之间过大的空白）——
+  // 此前下限写死 0，虚线往上拖会被钳回 0，用户报「无法往负数的方向调」。
+  // 下限 −30 的依据：该间距是「声部行高之外的额外间距」，行高里已经含了行尾间距
+  // （无歌词 = `height_ciqu` 20 / 有歌词 = `height_ciqu_lyric` 默认 −5，adj629w）与上一行歌词的下伸 ≈2，
+  // 故 −30 ≈ 默认配置下「上下两行的内容刚好不压字」的极限（实测：有歌词时歌词行与下一声部
+  // 数字仍有 ≈7px 净距；无歌词时两行数字刚好相切）。设置面板的输入框不限范围，
+  // 需要更极端的压缩可在设置里直接填（例如 −50，此时两行会重叠）。
+  height_shengbu: [-30, 300],
+  height_ciqu_lyric: [-80, 120], // 曲部与上一行词部间距（adj79；adj105 允许负值，用户需进一步压缩行距）
+  segmentRowGap_bz: [10, 80],  // adj428：bz 段上下层间距（与 SEGMENT_ROW_GAP_DEFAULT 范围一致）
+  segmentRowGap_dsb: [10, 80], // adj428：dsb 段上下层间距
+  segmentRowGap_tp: [0, 80],   // adj629e：替谱层距「上方内容」的间距（0 = 紧贴上方内容）
+  // adj625：小节序号间隔——1 = 每小节都标；上限 99（排版端同样钳到 1~99，
+  // 超过曲长就等于"不显示"，没有实际意义，但设个上限避免误拖出天文数字）。
+  barCountInterval: [1, 99],
+}
+
+/**
+ * adj905q（用户提议，规格见 `docs/PREVIEW-DEBUG-BOUNDARIES.md`）：
+ * **预览可视调试的边界虚线几何**（纯函数，只算不画）。
+ *
+ * ## 为什么需要它
+ *
+ * 本轮排查「段层上下对齐」时我**连续五次判断错**，全部源于"**靠推断边界在哪**"。
+ * `AGENTS.md` 六之二·3 的铁律写着"同一个 bug 修到第三次，**换量法**"——
+ * 这个函数就是那个量法：把布局内部的**三套边界**直接摊开，一眼看出谁画在哪。
+ *
+ * ## 三类边界
+ *
+ * - `cell` —— **时值格**（用户原则里的权威几何）：左缘 `segments[0].x`、右缘 `末段.x + perBeat×beats`；
+ * - `ink`  —— **音符本体（墨迹）盒**：左缘 `n.x`、右缘（本实现取末段右缘，无拍段时 `x + width`）；
+ * - `segment` —— **段层**（`{bz}`/`{dsb}`/`{tp}`）音符的格边界（`n.x` / `rightX`）。
+ *
+ * ## 画法（用户口径）
+ *
+ * **左边界只画上半部**（到音符中线 `yMid = n.y`）、**右边界只画下半部**、
+ * **相邻音符交替颜色**（`colorIndex` 取音符序号奇偶）。
+ * `yTop/yBottom` 给渲染端定竖向范围；断线样式与配色由渲染端决定。
+ *
+ * ⚠ 本函数**不改任何布局量**，也不参与布局计算 —— 只供预览层叠加显示。
+ */
+export interface DebugBoundNote {
+  x: number
+  y: number
+  width: number
+  rightX?: number
+  barIndex: number
+  /** 有值 = 段层音符（`{bz}`/`{dsb}`/`{tp}`） */
+  segment?: { type: string; layer: string }
+  segments?: { x: number; perBeat: number; beats: number; el?: string }[]
+}
+
+export interface DebugBound {
+  x: number
+  /** 左边界画上半部、右边界画下半部（用户口径） */
+  side: 'L' | 'R'
+  /**
+   * adj905q 修正（用户指出"边界线不够丰富，我原想有**本体边界、音符时值边界、拍子边界**三种"）：
+   * 原来是 `cell / ink / segment` —— 把"音符时值"和"拍子"混成了一个 `cell`，**少了一类**。现分三类：
+   *
+   * - `ink`     —— **本体（墨迹）边界**：数字字形实际占的盒子（`n.x` → `x + min(占宽, digitSlotW)`；
+   *                带附点/增时线才延伸到块右端）；
+   * - `note`    —— **音符时值边界**：本音符**整个时值跨度**（含它自己的增时线/附点）；
+   * - `beat`    —— **拍子边界**：音符**内部每一拍**的左缘（`segments[].x`）；
+   * - `aug`     —— **增时线边界**（用户追加要求：「**增时线也要标出边界**」）：
+   *                每条 `-` 的左缘与右缘；
+   * - `segment` —— **段层**（`{bz}`/`{dsb}`/`{tp}`）音符边界（调试段层对齐时看这条）。
+   */
+  kind: 'ink' | 'note' | 'beat' | 'aug' | 'segment'
+  yTop: number
+  yMid: number
+  yBottom: number
+  /** 相邻音符交替颜色用（音符在本 track 里的序号奇偶） */
+  colorIndex: number
+  /**
+   * adj905t：**是否段层音符**（`{bz}`/`{dsb}`/`{tp}`）。
+   * 供消费方按层分组统计 —— 否则"主旋律的拍子线"与"段层的拍子线"会被混在一起，
+   * 读数出现"成对的列"（实测例 1 打印出 `56` 与 `62.5` 相邻，正是两层的同一拍各画了一条）。
+   */
+  isSeg: boolean
+}
+
+export function computeDebugBounds(
+  notes: readonly DebugBoundNote[],
+  noteSize = 18,
+): DebugBound[] {
+  const out: DebugBound[] = []
+  notes.forEach((n, i) => {
+    const sg = n.segments ?? []
+    const lastSg = sg[sg.length - 1]
+    /**
+     * adj905q 修正（用户看图后报）：**长度以音符本体上下各 4px 为限**，
+     * 且 **`yMid` 落在本体竖向中间**（左右虚线的分界处）。
+     * 本体竖向范围近似 `[y − noteSize, y]`（`y` 是数字基线）。
+     */
+    const yTop = n.y - noteSize - 4
+    const yBottom = n.y + 4
+    const yMid = (yTop + yBottom) / 2
+    const push = (x: number, side: 'L' | 'R', kind: DebugBound['kind']): void => {
+      out.push({ x, side, kind, yTop, yMid, yBottom, colorIndex: i % 2, isSeg: n.segment !== undefined })
+    }
+    // ① **本体（墨迹）边界**：无附点/增时线时只到数字槽宽（见 `AGENTS.md` 五·9 的墨迹口径）
+    const hasExt = sg.some((s) => s.el === 'aug' || s.el === 'dot')
+    const inkR = hasExt ? (n.rightX ?? n.x + n.width) : n.x + Math.min(n.width, digitSlotW(noteSize))
+    push(n.x, 'L', 'ink')
+    push(inkR, 'R', 'ink')
+    // ② **音符时值边界**：整个时值跨度（首段左缘 → 末段右缘；无拍段时退回 `x/rightX`）
+    const noteL = sg.length > 0 ? sg[0].x : n.x
+    const noteR = lastSg ? lastSg.x + lastSg.perBeat * lastSg.beats : (n.rightX ?? n.x + n.width)
+    push(noteL, 'L', 'note')
+    push(noteR, 'R', 'note')
+    // ③ **拍子边界**：音符内部**每一拍**的左缘
+    for (const s of sg) push(s.x, 'L', 'beat')
+    /**
+     * ④ **增时线边界**（用户追加：「增时线也要标出边界」）：
+     * - `el === 'aug'` 的路径直接可得；
+     * - `el` 缺失的 per-beat 路径：一个音符内**除首段以外**的段就是它的增时线/附点位置
+     *   （该音符时值 > 1 拍时才有多段；首段是数字本体）。
+     */
+    sg.forEach((s, si) => {
+      const isAug = s.el === 'aug' || (s.el === undefined && si > 0)
+      if (!isAug) return
+      push(s.x, 'L', 'aug')
+      push(s.x + s.perBeat * s.beats, 'R', 'aug')
+    })
+    // ④ **段层边界**（仅段层音符）
+    /**
+     * adj905u（用户报"调试线读数可疑"，我定量核实后确认是**我做工具的缺陷**）：
+     * 原来这里用 `n.x` / `rightX`，而 `n.x` 是**层落位锚点（数字位）**；
+     * 而主旋律那两组用的是 `segments[].x`（**格**）—— 两者相差实测 **6.4px**
+     * ⇒ 图上"绿线 vs 紫线"的偏移里，有 6.4 是**口径差（固定）**、不是真错位，读数会偏。
+     *
+     * 现改为**与 `note` 同一口径（格）**：左缘 `segments[0].x`、右缘末段右端。
+     * ⇒ 「主旋律的格 vs 段层的格」才是**同口径可比**的。
+     * ⚠ 层落位锚点（`n.x`）**刻意不再单画一条** —— 它就是要与主旋律**数字位**相等
+     * （`adj435`/`AL1`/`O4` 守着的），混在同一张图上比会再次制造假错位。
+     */
+    if (n.segment) {
+      push(noteL, 'L', 'segment')
+      push(noteR, 'R', 'segment')
+    }
+  })
+  return out
+}

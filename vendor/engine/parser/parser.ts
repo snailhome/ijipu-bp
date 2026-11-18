@@ -1,0 +1,553 @@
+/**
+ * engine/parser/parser.ts — .jps 源码行级解析器
+ *
+ * 将 .jps 文本解析为 ParseResult（描述头 + 行 AST + 曲词分组 + 错误列表）。
+ * 语法依据手册：V/B/Z/D/P/J 描述头、Q/C 主体行（Q 后可带声部编号与名称）、
+ * "[fenye]" 分页行、"#" 注释行。
+ */
+import type {
+  Header,
+  HeaderLine,
+  LyricChar,
+  LyricLine,
+  LyricVariant,
+  MusicGroup,
+  MusicLine,
+  MusicToken,
+  ParseError,
+  ParseResult,
+  SlurToken,
+  SourceLine,
+} from '../types'
+// adj629：`{tp … }` 替谱段——段头识别 / 段结束扫描 / 段内 token 位置右移都复用临时段那套
+import { tokenizeMusicLine, matchSegmentHead, findSegmentEnd, shiftTokenPos } from './tokenizer'
+import { tokenDuration } from '../duration'
+import { errAt } from './errors'
+// adj454：设置行（`# jps-config:`）的语法校验（顶格 / JSON / 键值类型）
+import { inspectJpsConfigLine, JPS_CONFIG_PREFIX } from '../settings'
+// adj594（用户要求）：小节时值校验（按拍号 + `|"p:2/4"` 临时拍号，不符给 warning）
+import { checkMeasureBeats } from '../measures'
+import { interludeDiagnostics } from '../interlude'
+// adj973：连音线配对（唯一一份纯函数；布局改为消费它的结果，见 `parser/slurPairs.ts` 文件头）
+import { pairSlurs } from './slurPairs'
+
+const HEADER_KEYS = new Set(['V', 'B', 'Z', 'D', 'P', 'J', 'Y', 'S'])
+
+/**
+ * 拆解 J 描述头值（节拍）为「数字 + 文字」：
+ *  - 纯数字 "80" → { num: "80" }（渲染 ♩=80）
+ *  - 纯文字 "欢快地" → { text: "欢快地" }
+ *  - "90 欢快地"（数字后跟空格再接文字）→ { num: "90", text: "欢快地" }
+ *  - 其余（如 "120-140"、"96(稍快)" 无空格分隔）整体视为文字，保持原样
+ */
+export function splitTempo(value: string): { num?: string; text?: string } {
+  const v = value.trim()
+  if (v === '') return {}
+  if (/^\d+$/.test(v)) return { num: v }
+  const m = /^(\d+)\s+(.+)$/.exec(v)
+  if (m) {
+    const text = m[2].trim()
+    return { num: m[1], text: text === '' ? undefined : text }
+  }
+  return { text: v }
+}
+
+/**
+ * 组合 J 的「数字 + 文字」为展示标签：
+ *  - 只有数字 → "♩= 96"；只有文字 → "欢快地"；两者 → "♩= 80 欢快地"；都无 → ""
+ *  - = 号后带空格（adj42：与调式行 = 对齐格式一致）
+ */
+export function tempoLabel(num: string | undefined, text: string | undefined): string {
+  const pieces: string[] = []
+  if (num) pieces.push(`♩= ${num}`)
+  if (text) pieces.push(text)
+  return pieces.join(' ')
+}
+
+/** 解析一个 C 行（歌词）：每个汉字/音节对应一个音符；@ 占位（占一个字空间）；~ 连字；
+ *  中文标点不占音符位，紧跟前面的字渲染（adj35） */
+function parseLyricContent(
+  content: string,
+  line: number,
+): { chars: LyricChar[]; variants: LyricVariant[]; errors: ParseError[] } {
+  const chars: LyricChar[] = []
+  const variants: LyricVariant[] = []
+  const errors: ParseError[] = []
+  let i = 0
+  const n = content.length
+  let pending: LyricChar | null = null // 正在累积的音节
+  let punctBuf = '' // 待挂载的中文标点（adj35）
+  let noteBuf: string | null = null // 待挂载的引号注释（adj58："..." 不占歌词位，挂到注释后第一个字）
+
+  const flush = () => {
+    if (pending) {
+      if (pending.text.length > 0) chars.push(pending)
+      pending = null
+    }
+  }
+
+  /** 把累积标点挂到最后一个已提交的字后面（标点不占音符位，adj35） */
+  const mountPunct = () => {
+    if (punctBuf !== '') {
+      const last = chars[chars.length - 1]
+      if (last && !last.skip) last.trailing = (last.trailing ?? '') + punctBuf
+      punctBuf = ''
+    }
+  }
+
+  const isPunct = (c: string) => '，。、；：？！…—·〈〉《》“”‘’（）【】!,.?;:()[]-—~'.includes(c)
+  /** 汉字：每个字独立占一个音符位（无空格歌词也对齐）；拉丁/数字连续累积为音节 */
+  const isCJK = (c: string) => /\p{Script=Han}/u.test(c)
+
+  while (i < n) {
+    const c = content[i]
+    if (c === ' ' || c === '\t') {
+      flush()
+      mountPunct()
+      i++
+      continue
+    }
+    if (c === '"') {
+      // 引号注释（adj58）：双引号包围的文本为注释，不占歌词对齐位；
+      // 挂到注释后面第一个歌词字上，渲染在该字前面；_ 代替空格（adj59）
+      flush()
+      mountPunct()
+      let k = i + 1
+      let note = ''
+      while (k < n && content[k] !== '"') {
+        note += content[k] === '_' ? ' ' : content[k]
+        k++
+      }
+      if (k >= n) errors.push(errAt('歌词引号注释未闭合', line, i, 'warning', '歌词注释也要成对闭合，如 `C: 一 二"副歌_部分" 三`（注释内空格用 `_`）'))
+      noteBuf = note
+      i = k + 1
+      continue
+    }
+    if (c === '@') {
+      flush()
+      mountPunct()
+      chars.push({ text: '', skip: true, punctuation: false, pos: i, raw: '@' })
+      i++
+      continue
+    }
+    /**
+     * adj629（用户要求）：歌词行里的**替谱段** `{tp … }`——"这一遍与主旋律不同"的那几个音。
+     *
+     *  - **第 k 段歌词 = 第 k 遍**：`C:` = 第 1 遍、`C2:` = 第 2 遍……（遍次由 `parser` 注入时按行序给出）；
+     *  - **锚点** = 段前已提交的歌词字数（= 槽位号）：段紧跟在"被替换区间第一个字"的前面，
+     *    如 `… 晚 钟， {tp 4/ 3// …} 借 一 丝 …` ⇒ 从「借」那个音起替；
+     *  - 段内按**曲谱语法**解析（复用音乐行 tokenizer），可以写音符/时值/连音/倚音/装饰，不必写小节线；
+     *  - 段本身**不占歌词位**（`chars` 里没有它），所以本行歌词的字位对齐不受影响。
+     */
+    if (c === '{' && matchSegmentHead(content, i) === 'tp') {
+      flush()
+      mountPunct()
+      const slot = chars.reduce((a, ch) => a + (ch.punctuation ? 0 : 1), 0)
+      let k = i + 3 // 跳过 `{tp`（段头后必须是空白或 `}`，见 matchSegmentHead）
+      while (k < n && (content[k] === ' ' || content[k] === '\t')) k++
+      const segEnd = findSegmentEnd(content, k)
+      if (segEnd === -1) {
+        errors.push(
+          errAt('替谱段 "{tp … }" 未找到结束 "}"', line, i, 'error', '替谱段要成对闭合，如 `C2: … 借 {tp 4/ 3// 1/ .1 -} 一 丝 …`（段内写这一遍的音符）'),
+        )
+        i = n
+        continue
+      }
+      // 段内递归解析：`inSegment:'tp'`（第 3 参数）⇒ 段内再写段头会报"不支持嵌套"
+      const innerRes = tokenizeMusicLine(content.slice(k, segEnd), { line, col: k }, { inSegment: 'tp' })
+      errors.push(...innerRes.errors)
+      variants.push({ slot, tokens: shiftTokenPos(innerRes.tokens, k), pos: i })
+      i = segEnd + 1
+      continue
+    }
+    if (c === '~') {
+      // 连字：与下一个非空白字符合并到当前音节
+      let k = i + 1
+      while (k < n && (content[k] === ' ' || content[k] === '\t')) k++
+      if (k < n) {
+        if (pending) {
+          pending.text += content[k]
+          pending.raw += content[k]
+        } else {
+          mountPunct()
+          chars.push({ text: content[k], skip: false, punctuation: false, pos: i, raw: '~' + content[k] })
+        }
+        i = k + 1
+      } else {
+        errors.push(errAt('连字符号 "~" 后缺少文字', line, i, 'warning', '`~` 用于把两个字连到同一个音符上，后面必须跟字，如 `C: 啊~呀 唱`'))
+        i++
+      }
+      continue
+    }
+    if (isPunct(c)) {
+      // 中文标点：结束当前音节，累积挂到前一个字后（adj35）
+      flush()
+      punctBuf += c
+      i++
+      continue
+    }
+    // 汉字：每字独立音节（各自占一个音符槽位，避免无空格歌词挤占错位）
+    if (isCJK(c)) {
+      flush()
+      mountPunct()
+      pending = { text: c, skip: false, punctuation: false, pos: i, raw: c }
+      if (noteBuf !== null) {
+        pending.note = noteBuf
+        noteBuf = null
+      }
+      i++
+      continue
+    }
+    // 普通字符（拉丁字母/数字等）：累积为音节
+    if (!pending) {
+      mountPunct() // 新音节前先挂载标点
+      pending = { text: '', skip: false, punctuation: false, pos: i, raw: '' }
+      if (noteBuf !== null) {
+        pending.note = noteBuf
+        noteBuf = null
+      }
+    }
+    pending.text += c
+    pending.raw += c
+    i++
+  }
+  flush()
+  mountPunct()
+  return { chars, variants, errors }
+}
+
+/** 解析整份 .jps 源码 */
+export function parseJps(source: string): ParseResult {
+  const lines: SourceLine[] = []
+  const errors: ParseError[] = []
+  const groups: MusicGroup[] = []
+
+  const header: Header = { titles: [], authors: [], instruments: [], notes: [] }
+  let lastMusicIndex = -1 // 最近一个 Q 行在 lines 中的索引
+
+  const srcLines = source.replace(/\r\n/g, '\n').split('\n')
+
+  for (let idx = 0; idx < srcLines.length; idx++) {
+    const raw = srcLines[idx]
+    const lineNo = idx + 1
+    const pos = { line: lineNo, col: 0 }
+    const trimmed = raw.trim()
+
+    // 空行
+    if (trimmed === '') {
+      lines.push({ kind: 'empty', pos, raw })
+      continue
+    }
+
+    // 分页行
+    if (trimmed === '[fenye]') {
+      lines.push({ kind: 'pagebreak', pos, raw })
+      continue
+    }
+
+    // 注释行（# 在行首）
+    if (trimmed.startsWith('#')) {
+      /**
+       * adj454：`# jps-config:` 设置行是**有语法要求**的（顶格 + JSON 对象 + 键值类型），
+       * 但此前完全没有校验——JSON 坏了、值类型不对、键拼错了都**静默**按"设置丢失"处理，
+       * 用户只看到"我的设置没生效/退回了本机设置"。这里把设置行的校验结果并进 `errors`，
+       * 直接复用既有问题条（ProblemsBar）与状态栏橙点展示，带行号可点击定位。
+       * 分级用 warning 而非 error：谱面仍能正常渲染（回退本机/默认设置），不应因此阻断导出。
+       */
+      if (trimmed.startsWith(JPS_CONFIG_PREFIX)) {
+        if (!raw.startsWith(JPS_CONFIG_PREFIX)) {
+          errors.push(
+            errAt(
+              '设置行必须**顶格**写（行首不能有空格/制表符）——当前缩进导致整行设置被忽略',
+              lineNo,
+              raw.length - raw.trimStart().length,
+              'warning',
+              '把 `# jps-config:{...}` 移到行首（也可以在「设置 → 谱面」里改完点「保存设置」，应用会自动写回顶格的设置行）',
+            ),
+          )
+        }
+        for (const iss of inspectJpsConfigLine(trimmed, lineNo)) {
+          errors.push(errAt(iss.message, iss.line, iss.col, iss.severity, iss.hint))
+        }
+      }
+      lines.push({ kind: 'comment', pos, raw })
+      continue
+    }
+
+    // 描述头行：V/B/Z/D/P/J
+    const headerMatch = /^([A-Z])\s*:\s*(.*)$/.exec(trimmed)
+    if (headerMatch && HEADER_KEYS.has(headerMatch[1])) {
+      const key = headerMatch[1]
+      const value = headerMatch[2]
+      const hl: HeaderLine = { kind: 'header', key, value, pos, raw }
+      lines.push(hl)
+      switch (key) {
+        case 'V':
+          header.version = value
+          break
+        case 'B':
+          header.titles.push(value)
+          break
+        case 'Z':
+          header.authors.push(value)
+          break
+        case 'D':
+          header.key = value
+          break
+        case 'P':
+          header.meter = value
+          break
+        case 'J': {
+          header.tempo = value // 原始值（最后一条，兼容旧消费方）
+          const t = splitTempo(value)
+          if (t.num !== undefined) header.tempoNum = t.num // 多条数字取最后一条
+          if (t.text !== undefined) {
+            header.tempoText = header.tempoText ? `${header.tempoText} ${t.text}` : t.text
+          }
+          break
+        }
+        case 'Y':
+          // adj302：一个 Y 行只保留一种乐器（取第一个词；多乐器写多行，每行一种）
+          header.instruments.push(value.trim().split(/\s+/)[0] ?? '')
+          break
+        case 'S':
+          // adj154：支持字面 \n 换行——拆成多行说明（每行一个 text，渲染时纵向堆叠）
+          header.notes.push(...value.split('\\n'))
+          break
+      }
+      continue
+    }
+
+    // 曲行：Q[声部号]["声部名"]:
+    const musicMatch = /^Q(\d*)(?:"([^"]*)")?\s*:\s*(.*)$/.exec(trimmed)
+    if (musicMatch) {
+      const voice = musicMatch[1] === '' ? 1 : Number(musicMatch[1])
+      const voiceName = musicMatch[2] || undefined
+      const { tokens, errors: tokErrors } = tokenizeMusicLine(musicMatch[3] ?? '', pos)
+      errors.push(...tokErrors)
+      // adj338：旧写法单 @乐器名（legacy）→ 告警提示改用 @...@（带行+列定位）
+      // 注意：列 = 行前缀（`Q1: ` 等）+ token 在曲行内容内的偏移，使跳转定位到 @ 所在完整列
+      const prefixLen = trimmed.length - (musicMatch[3] ?? '').length
+      for (const t of tokens) {
+        if (t.kind === 'instrument' && t.legacy && t.name) {
+          errors.push(errAt(`旧乐器写法 @${t.name}，建议改用 @${t.name}@`, pos.line, prefixLen + t.pos, 'warning', `乐器用 \`@…@\` 包裹（可带显示名与音色库前缀）：\`@${t.name}@\`、\`@${t.name}"显示名"@\`、\`generaluser_gs:${t.name}@\`；\`@@\` 表示切回默认乐器`))
+        }
+      }
+      const ml: MusicLine = {
+        kind: 'music',
+        voice,
+        voiceName,
+        tokens,
+        pos,
+        raw,
+      }
+      // adj489：倚音**占用主音符的时值**，必要时向邻居借（不再死板要求 Σ ≤ principal）：
+      // - 短倚音（带减时线）组时值 = `1 / 2^(减时线条数 + 1)`，组内均分；主音符不够时**从前/后音符借**。
+      // - 长倚音（无减时线）组时值 = 主音符总时值 / 2，组内均分；主音符不够时同样向前/后借。
+      // 旧版的「`graceSum > total`」告警已删除：旧规则下短倚音是「Σ 各自时值」会偏紧，多倚音常误报。
+      lines.push(ml)
+      groups.push({ music: ml, lyrics: [], startIndex: lines.length - 1 })
+      lastMusicIndex = lines.length - 1
+      continue
+    }
+
+    // 词行：C[声部号]:
+    const lyricMatch = /^C(\d*)\s*:\s*(.*)$/.exec(trimmed)
+    if (lyricMatch) {
+      const voice = lyricMatch[1] === '' ? 1 : Number(lyricMatch[1])
+      const { chars, variants, errors: lyrErrors } = parseLyricContent(lyricMatch[2] ?? '', lineNo)
+      errors.push(...lyrErrors)
+      const ll: LyricLine = { kind: 'lyric', voice, chars, pos, raw }
+      if (variants.length > 0) ll.variants = variants
+      lines.push(ll)
+      // 依附于最近一个同声部 Q 行
+      if (lastMusicIndex >= 0) {
+        const target = [...groups].reverse().find((g) => g.music.voice === voice)
+        if (target) target.lyrics.push(ll)
+        else {
+          const g = groups[groups.length - 1]
+          if (g) g.lyrics.push(ll)
+        }
+      } else {
+        errors.push(errAt('歌词行缺少对应的曲行（C 行必须跟在 Q 行之后）', lineNo, 0, 'error', '`C:` 歌词行要紧跟在对应的 `Q:` 曲行之后；多声部写同号，如 `Q1: 1 2 3 |` 配 `C1: 一 二 三`'))
+      }
+      continue
+    }
+
+    // 其他：未识别行
+    lines.push({ kind: 'unknown', pos, raw })
+    errors.push(errAt(`无法识别的行 "${trimmed.slice(0, 20)}${trimmed.length > 20 ? '…' : ''}"`, lineNo, 0, 'warning', '行首必须是：描述头（`V:` 版本 / `B:` 标题 / `Z:` 作者 / `D:` 调式 / `P:` 拍号 / `J:` 节拍 / `Y:` 乐器 / `S:` 说明）、曲行 `Q:`、词行 `C:`、`#` 注释行、`[fenye]` 分页标记或 `# jps-config:{...}` 设置行（详见「语法速查」）'))
+  }
+
+  // ---- adj629（用户要求）：把歌词行里的替谱段 `{tp … }` 注入所属曲行的 token 流 ----
+  errors.push(...injectLyricVariants(groups))
+
+  // ---- 平均连音组 (y...) 时值均分（多连音线）：组内音符时值 = 组总时值 / 组内音符数 ----
+  applyTupletDurations(groups, parseMeterBeats(header.meter))
+
+  /**
+   * adj594（用户要求）：**小节时值校验**——按拍号（含 `|"p:2/4"` 临时拍号）检查每个小节是否等长，
+   * 不符的给 `warning`（谱面照常渲染/播放，只在问题条里提醒）。
+   * 放在 `applyTupletDurations()` **之后**：连音组的 `tupletDur` 覆盖值已写好，
+   * 校验用的就是最终时值（与排版/播放同一口径，不会因为连音组误报）。
+   */
+  const preliminary: ParseResult = { header, lines, groups, errors }
+  errors.push(...checkMeasureBeats(preliminary))
+  // adj1118：间奏写法（注记老写法）的两条迁移提示——只提醒"注记 vs 显式 `{jz N}`"的差异
+  errors.push(...interludeDiagnostics(preliminary))
+
+  /**
+   * adj973（**用户 2026-10-18 实报**）：**连音线配对**从布局搬到这里（唯一一份纯函数），
+   * 并在这一步把"**没画出来的连音线**"变成告警（嵌套超过两层 / 谱末未闭合的 `(` / 多余的 `)`）。
+   *
+   * 为什么要放解析期：告警必须进 `errors` —— 应用问题面板、Obsidian 插件、命令行 `lint`
+   * **三处都只读它**，于是这半边零改动就能看见；布局那边改为**消费** `slurPairs`（不再自己配）。
+   */
+  const pairing = pairSlurs(preliminary)
+  errors.push(...pairing.problems)
+
+  return { header, lines, groups, errors, slurPairs: pairing.pairs, continuationTies: pairing.continuationTies }
+}
+
+/** 解析拍号名义拍数（"4/4" → 4；"6/8 (2/4)" → 6；无法解析返回 null） */
+function parseMeterBeats(meter: string | undefined): number | null {
+  if (!meter) return null
+  const m = /^(\d+)\s*\//.exec(meter.trim())
+  return m ? Number(m[1]) : null
+}
+
+/**
+ * adj629（用户要求）：把各歌词行里的 `{tp … }`（替谱段）**注入所属曲行的 token 流**。
+ *
+ * 为什么要注入：排版/播放已经有完整的"临时段"机制——`computeSegments` 算拍位包络、
+ * `placeSegmentOverlays` 负责叠加层的坐标/括号/行宽预算、播放端按包络发事件、
+ * 段内音符有独立 id 命名空间供光标联动。只要替谱段以 `kind:'segment'` 出现在曲行 token 流里，
+ * 这一整套**全部免费生效**，不必为"写在歌词行上的段"另写一套排版。
+ *
+ * 锚点：第 `slot` 个**计时 token**（音符/休止/节奏——与排版端歌词槽位计数同一口径）**之前**。
+ * `pass` = 该歌词行在所属曲行里的行序（1 起）⇒ 播放端"第 k 遍用替谱替代主旋律"。
+ */
+function injectLyricVariants(groups: MusicGroup[]): ParseError[] {
+  const errors: ParseError[] = []
+  /**
+   * adj629：全谱是否有**反复结构**——决定"第 k 遍"到底会不会发生。
+   * 反复线（`|:` `:|` `:|:` 等，线型里都带 `:`）或大反复修饰（`&dc` / `&ds`）都算。
+   * 没有的话，`C2:`/`C3:` 上的替谱永远不会被演奏——给告警（不阻断），否则用户会以为它生效了。
+   */
+  const hasRepeat = groups.some((g) =>
+    g.music.tokens.some(
+      (t) =>
+        t.kind === 'barline' &&
+        (t.type.includes(':') || (t.marks ?? []).some((m) => m === 'dc' || m === 'ds')),
+    ),
+  )
+  for (const g of groups) {
+    const tokens = g.music.tokens
+    // 计时 token 下标表：其下标即歌词槽位号（与 layout 的 slotIndex 同步推进口径一致）
+    const durIdx: number[] = []
+    tokens.forEach((t, i) => {
+      if (t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm') durIdx.push(i)
+    })
+    const ins: { at: number; seq: number; open: MusicToken; close: MusicToken }[] = []
+    g.lyrics.forEach((ly, li) => {
+      const pass = li + 1
+      let variantIdx = 0 // adj629d：同一行里第几个 `{tp … }`（源码坐标，供 id/光标联动用）
+      for (const v of ly.variants ?? []) {
+        // 段落在末音之后（槽位超出本曲行音符数）时挂到行尾
+        const at = v.slot < durIdx.length ? durIdx[v.slot] : tokens.length
+        ins.push({
+          at,
+          seq: ins.length,
+          open: {
+            kind: 'segment',
+            type: 'tp',
+            dir: 'open',
+            pos: v.pos,
+            raw: '{tp',
+            children: v.tokens,
+            pass,
+            tpLine: li,
+            tpVariant: variantIdx,
+          },
+          close: { kind: 'segment', type: 'tp', dir: 'close', pos: v.pos, raw: '}' },
+        })
+        variantIdx++
+        if (pass >= 2 && !hasRepeat) {
+          errors.push(
+            errAt(
+              `第 ${pass} 段歌词里的替谱段不会生效：本谱没有任何反复记号`,
+              ly.pos.line,
+              v.pos,
+              'warning',
+              '`{tp … }` 按"第 k 段歌词 = 第 k 遍"生效，所以要先有反复结构（`|: … :|`、`:|:`、`&dc`/`&ds`）；否则那一段替谱永远轮不到',
+            ),
+          )
+        }
+      }
+    })
+    if (ins.length === 0) continue
+    // 从后往前插：同一下标时**先写的那条排在前面**（seq 降序插入）
+    ins.sort((a, b) => b.at - a.at || b.seq - a.seq)
+    for (const it of ins) tokens.splice(it.at, 0, it.open, it.close)
+  }
+  return errors
+}
+
+/**
+ * 平均连音组 "(y ... )"：组内音符时值均分「组总时值」。
+ * 组总时值 = 小节名义拍数 - 组外音符实际时值（不足时回退组内原始时值和）；
+ * 组内音符按均分时值（tupletDur 覆盖，布局与播放共用）。
+ * adj395：同时给同组音符打**组号**（tupletGroup），供减时线按组相连
+ * （等时值连音组内的减时线是一条横线，不因跨拍边界断开）。
+ */
+function applyTupletDurations(groups: MusicGroup[], meterBeats: number | null): void {
+  type NoteLike = Extract<MusicToken, { kind: 'note' } | { kind: 'rest' } | { kind: 'rhythm' }>
+  const isNoteLike = (t: MusicToken): t is NoteLike =>
+    t.kind === 'note' || t.kind === 'rest' || t.kind === 'rhythm'
+  /** 跨小节递增的组号（同一个小节内不同组也不会撞号） */
+  let tupletGroupSeq = 0
+  for (const g of groups) {
+    const tokens = g.music.tokens
+    // 按小节切分（| 等小节线分隔；行尾未闭合的收尾小节）
+    let start = 0
+    for (let i = 0; i <= tokens.length; i++) {
+      const atBar = i === tokens.length || tokens[i].kind === 'barline'
+      if (!atBar) continue
+      const measure = tokens.slice(start, i)
+      // FIFO 配对（与布局一致），收集每组音符
+      const open: { slur: SlurToken; members: NoteLike[] }[] = []
+      for (const t of measure) {
+        if (isNoteLike(t)) {
+          for (const o of open) o.members.push(t)
+        } else if (t.kind === 'slur' && t.dir === 'open') {
+          open.push({ slur: t, members: [] })
+        } else if (t.kind === 'slur' && t.dir === 'close') {
+          const o = open.shift()
+          if (o && o.slur.tuplet && o.members.length >= 2) {
+            const n = o.members.length
+            const rawSum = o.members.reduce((a, m) => a + tokenDuration(m), 0)
+            const outer = measure.reduce(
+              (a, m) => a + (isNoteLike(m) && !o.members.includes(m) ? tokenDuration(m) : 0),
+              0,
+            )
+            const groupTotal =
+              meterBeats !== null && meterBeats > 0 && meterBeats - outer > 0
+                ? meterBeats - outer
+                : rawSum
+            const per = groupTotal / n
+            // adj217：末音符 tupletDur 用剩余值（groupTotal - per×(n-1)），消除浮点累加误差
+            // ——1/3×3 累加得 0.9999…，布局按拍切分时误落到下一拍（minDur≈8.88e-16）
+            // adj395：组号（减时线按组相连）
+            const gid = tupletGroupSeq++
+            for (let mi = 0; mi < n; mi++) {
+              const m = o.members[mi]
+              m.tupletDur = mi === n - 1 ? groupTotal - per * (n - 1) : per
+              m.tupletGroup = gid
+            }
+          }
+        }
+      }
+      start = i + 1
+    }
+  }
+}

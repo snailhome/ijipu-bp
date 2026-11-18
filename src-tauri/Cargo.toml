@@ -1,0 +1,24 @@
+[package]
+name = "ijipu-bp"
+version = "0.1.0"
+description = "爱扒谱（iJipu BP）—— 音频扒谱，产出 iJipu 的 .jps 脚本乐谱"
+authors = ["iJipu Dev"]
+edition = "2021"
+
+[lib]
+name = "ijipu_bp_lib"
+# 与 iJipu 同一口径：桌面端只用 rlib（main.rs 静态链接），
+# 不要 cdylib（x86_64-pc-windows-gnu 下导出符号会超 PE 序号上限）。
+crate-type = ["staticlib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 选文件 / 存文件：只在 Rust 侧调用（前端不装 npm 包，也不需要 ACL 权限）。
+# 为什么不用网页的 <input type=file>：浏览器拿不到磁盘路径，下次还得重选；
+# 桌面壳要的是"打开过的文件能记住路径"。
+tauri-plugin-dialog = "2"

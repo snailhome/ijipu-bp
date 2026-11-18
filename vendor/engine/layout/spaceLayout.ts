@@ -1,0 +1,488 @@
+/**
+ * engine/layout/spaceLayout.ts — 空间优先型布局（adj283）
+ *
+ * 空间优先与时值优先的本质区别：宽度分配单位从「小节→拍」改为「元素」。
+ *  - 带时值元素：音符块、每条增时线；各自占宽 = 本体宽 + (时值/总时值)×可分配宽。
+ *  - 附点：依附于「其前面最近那个带时值元素」（音符块或增时线），不单独占全局剩余宽；
+ *    与该元素合并成 1.5 倍时值占宽段，段内三段留空式分散对齐（把增时线也视作音符，
+ *    即模型 V2：附点依附逻辑对音符/增时线统一）。
+ *  - 非时值元素：小节线块、&zkh/&ykh 曲部括号；宽度 = 本体宽 + 间距（默认 1/2 音符宽）。
+ *
+ * 本文件为 P1：先沉淀「本体宽度模型 + 时值拆分」这两个最基础、最不易变的部分，
+ * 供后续 P2（每元素时值宽度分配/放置）、P3（断行）、P4（layoutScore 分流）、
+ * P5（多声部）复用。均为纯函数，零 React/DOM 依赖。
+ */
+import { DOT_R_DOT, BRACKET_PAD, GRACE_SIZE_RATIO, GRACE_SLOT_RATIO, GRACE_SLOT_RATIO_MULTI, GRACE_MARK_GAP, GRACE_MARK_HUG_GAP, DIGIT_INK_ASC_RATIO, digitInkH, noteScaleOf, ACCIDENTAL_FONT_RATIO, accidentalGap, accidentalInkOf, type AccidentalInkMetrics } from './spacing'
+import { tokenDuration } from '../duration'
+// adj633：倚音上的波音编码（与 `types.ts` 同源，避免布局端另写一份判断）
+import { GRACE_MORDENT_CODES } from '../types'
+// adj479：滑音图形的宽高比来自矢量修饰符表（由 scripts/gen-modifier-glyphs.mjs 生成的数据文件）——
+// 只共享**图形度量**，不依赖 render 的绘制逻辑
+import { MODIFIER_GLYPHS, glyphInkAspect } from '../render/modifierGlyphs'
+
+// ============================================================
+// 时值拆分
+// ============================================================
+
+/** 一个音符拆成空间优先「带时值元素」后的时值分量 */
+export interface NoteDurSplit {
+  /** 音符块基础时值（不含增时线/附点）：1 / 2^diminishCount */
+  noteDur: number
+  /** 每条增时线时值（与音符块基础时值相同） */
+  augDur: number
+  /** 增时线条数 */
+  augCount: number
+  /** 附点总增量时值（双附点为 0.75×noteDur×(1+augCount)，见 tokenDuration） */
+  dotDur: number
+}
+
+/**
+ * 拆分一个音符的时值为空间优先所需的各分量，保证合计 = tokenDuration(t)。
+ * 依据：tokenDuration 把增时线并入 (1+augment)/2^dc，附点再按 ×1.5/×1.75 递增。
+ * 故 noteDur×(1+augCount) = 基础含增时线时值，dotDur = tokenDuration − 基础含增时线时值。
+ *
+ * adj395：平均连音组（(y...) 的 tupletDur 覆盖）——组内音符的总时值 = tupletDur
+ * （= 组总时值 ÷ 组内音符数），不是原始减时线时值。此前本函数只按 diminishCount 算
+ * noteDur，导致空间优先布局把 `(y3/ 2/ 1/)` 当成 3×0.5 = 1.5 拍占宽（应 1 拍），
+ * 音符越出小节、拍位漂到下一拍（减时线被断开）。现按 tupletDur 等比缩放各分量
+ * （保持「减时线条数 / 增时线条数 / 附点」的书写形态不变，仅换算实际时值）。
+ */
+export function splitNoteDur(t: {
+  diminishCount: number
+  augmentCount: number
+  dots: number
+  tupletDur?: number
+}): NoteDurSplit {
+  const base = 1 / Math.pow(2, t.diminishCount)
+  const augCount = t.augmentCount
+  if (t.tupletDur !== undefined) {
+    // 原始构型总时值（同 tokenDuration，不含覆盖值）→ 缩放到 tupletDur
+    let rawDot = base
+    let raw = base * (1 + augCount)
+    for (let i = 0; i < t.dots; i++) {
+      rawDot /= 2
+      raw += rawDot
+    }
+    const k = t.tupletDur / raw
+    const noteDur = base * k
+    // 附点段吸收浮点余量，保证 noteDur×(1+augCount) + dotDur 精确等于 tupletDur
+    const dotDur = t.dots > 0 ? Math.max(0, t.tupletDur - noteDur * (1 + augCount)) : 0
+    return { noteDur, augDur: noteDur, augCount, dotDur }
+  }
+  const noteDur = base
+  const augDur = noteDur
+  const total = tokenDuration(t)
+  const dotDur = Math.max(0, Math.round((total - noteDur * (1 + augCount)) * 1e6) / 1e6)
+  return { noteDur, augDur, augCount, dotDur }
+}
+
+// ============================================================
+// 本体宽度（各元素不发生水平重叠的最小宽度）
+// ============================================================
+
+/** 音符数字槽宽（0.62×noteSize，与既有时值优先一致） */
+export const digitSlotW = (noteSize: number) => noteSize * 0.62
+
+/** 附点本体的圆点直径宽（2×DOT_R_DOT×s） */
+export const dotBodyW = (noteSize: number) => 2 * DOT_R_DOT * noteScaleOf(noteSize)
+
+/** 增时线符本体宽（建议 = 一个数字槽，后续可按显示效果调） */
+export const augBodyW = (noteSize: number) => noteSize * 0.62
+
+/** 上/下滑音符块本体宽（暂按数字槽 + 依附修饰额外宽，滑音语法敲定后再细分） */
+export const slideBodyW = (noteSize: number) => noteSize * 0.62
+
+/** &zkh/&ykh 曲部括号本体宽（非时值元素，沿用既有占位） */
+export const bracketBodyW = () => BRACKET_PAD
+
+/**
+ * 音符块本体宽 = 数字槽宽 + 依附的带水平占宽修饰元素（前/后倚音、滑音等）额外宽。
+ * @param graceExtra 依附修饰额外宽（前倚音向左、后倚音/滑音向右扩展；0 = 纯数字）
+ */
+export function noteBodyW(noteSize: number, graceExtra = 0): number {
+  return digitSlotW(noteSize) + graceExtra
+}
+
+/** 不带时值元素的默认间距 = 1/2 音符宽（仅用于它与其它元素之间；行首尾贴边的小节线除外） */
+export const nonDurGap = (noteSize: number) => noteSize * 0.5
+
+// ============================================================
+// adj644：多声部大括号的几何（渲染画弧/双线、布局算"括号要让开音符多远"共用一份）
+// ============================================================
+
+/** 括号左粗线 → 右细线的间距（px） */
+export const BRACE_LINE_DX = 3
+/** 弧半径 = min(字号/2, 块高 × 此比率) */
+export const BRACE_ARC_R_RATIO = 0.15
+/** 弧最右点 = 锚点 x + R × 此比率（1/6 圆弧：sin 60°） */
+export const BRACE_ARC_DX_RATIO = 0.866
+/** 括号笔画半宽（右细线/弧线宽 1.125 的一半） */
+export const BRACE_STROKE_HALF = 1.125 / 2
+
+/**
+ * 多声部大括号的**墨迹右缘**相对锚点 `x` 的偏移。
+ *
+ * 为什么要单独给：adj644 用户反馈"大括号与首个音符之间间距较大"，修法是**只挪括号、不挪音符**
+ * ——布局要算"括号该画在哪才能让墨迹右缘离内容左端固定净距"。弧的最右点和右细线哪个更右
+ * 取决于块高（矮块 R 小），渲染端画弧/双线用的是同一组常量 ⇒ 一份几何两处消费
+ * （同 adj458/adj479/adj632b 的纪律，避免"渲染改了、布局占位没同步"）。
+ */
+export function braceInkRightOffset(yTop: number, yBottom: number, noteSize: number): number {
+  const R = Math.min(noteSize / 2, (yBottom - yTop) * BRACE_ARC_R_RATIO)
+  return Math.max(BRACE_LINE_DX, R * BRACE_ARC_DX_RATIO) + BRACE_STROKE_HALF
+}
+
+/**
+ * 音符变音角标（`#`/`$`/`=` → 字形 `#`/`b`/`♮`）的**占宽**（左扩展，画在数字左侧上方）。
+ *
+ * adj645（用户要求"升降符的占宽按**墨宽**而非字宽来计算"）：
+ * 占宽 = 角标**墨迹宽** + 与数字的净距（都在**角标字号**上量），角标字号 = 音符字号 × 12/18
+ * （与 render 画角标的 `font-size` 同一把尺子）。
+ *
+ * 此前用的是 keyline 处 `♯` 的**字宽** 7.62（13px 基准）× 字号/13 —— 两处不对：
+ *  ① 那是**字宽**（advance）不是墨迹；② 该值对应 13px 字号，而角标实际画在 `12×s ≈ 0.667×字号`
+ *  上（13px 音符 ≈ 8.67px）⇒ 每个角标白留 ≈2.4px（密集多声部里就是一条看得见的缝）。
+ * 按墨迹算后（13px 音符）：`#` 7.62 → **5.40**、`b` → 4.66、`♮` → 3.28，且 `♮` 不再压到自己的数字上。
+ *
+ * adj646：净距并到**与描述头调号同一条规则**（`accidentalGap(所在字号)` = 0.2px @13px 基准，见 spacing.ts）
+ * —— 此前音符这边用 `0.05 × 角标字号`（13px 下 0.43px），是描述头 0.2px 的 2.4 倍。
+ */
+export const accidentalGlyphOf = (acc: '#' | '$' | '=' | null | undefined): '#' | 'b' | '♮' | null =>
+  acc === '#' ? '#' : acc === '$' ? 'b' : acc === '=' ? '♮' : null
+
+/** 角标字号（= 音符字号 × 12/18；render 画角标用它，布局量占宽也用它） */
+export const accidentalFontSize = (noteSize: number) => noteSize * ACCIDENTAL_FONT_RATIO
+
+/**
+ * 角标**占宽**（= 墨迹宽 + 与数字的净距）——数字相对所在时值段起点要右移这么多，
+ * 也是它在本体宽里占的那一份。`acc` 缺省按升号算（旧调用点兼容）。
+ */
+export const accidentalBodyW = (noteSize: number, acc: '#' | '$' | '=' = '#', ink?: AccidentalInkMetrics) => {
+  const g = accidentalGlyphOf(acc) ?? '#'
+  return accidentalInkOf(g, ink).inkW * accidentalFontSize(noteSize) + accidentalGap(noteSize)
+}
+
+/**
+ * 角标文字的**绘制锚点**相对数字左缘的偏移（负值 = 向左；render 用）。
+ * 定位基准是**墨迹右缘**：`墨迹右缘 = 数字左缘 − 净距` ⇒ `pen = 数字左缘 − 净距 − 墨迹宽 − 左偏`。
+ */
+export const accidentalPenDx = (noteSize: number, acc: '#' | '$' | '=' = '#', ink?: AccidentalInkMetrics) => {
+  const g = accidentalGlyphOf(acc) ?? '#'
+  const { inkW, lsb } = accidentalInkOf(g, ink)
+  return -(accidentalGap(noteSize) + (inkW + lsb) * accidentalFontSize(noteSize))
+}
+
+/** 角标**墨迹左缘**相对数字左缘的偏移（负值）——由渲染锚点公式推出，供断言核对"占宽 = 墨迹" */
+export const accidentalInkLeftDx = (noteSize: number, acc: '#' | '$' | '=' = '#', ink?: AccidentalInkMetrics) => {
+  const g = accidentalGlyphOf(acc) ?? '#'
+  return accidentalPenDx(noteSize, acc, ink) + accidentalInkOf(g, ink).lsb * accidentalFontSize(noteSize)
+}
+
+/** 角标**墨迹右缘**相对数字左缘的偏移（负值 = 离数字 `净距`；各字形同一个值，`acc` 仅为调用点统一） */
+export const accidentalInkRightDx = (noteSize: number, _acc: '#' | '$' | '=' = '#') => -accidentalGap(noteSize)
+
+/**
+ * adj647（用户要求"墨迹来源也统一"）：解析出本音符角标的**实际几何**（px，相对数字左缘）——
+ * `penDx` = 文字锚点、`leadW` = 占宽（左伸量）。布局把它存进 `PlacedToken.accidentalGeo`，
+ * 渲染端直接消费 ⇒ "占宽"与"锚点"永远同一份度量（不会因为两处各传一套实测而变成两套账）。
+ */
+export const accidentalGeometry = (
+  noteSize: number,
+  acc: '#' | '$' | '=' = '#',
+  ink?: AccidentalInkMetrics,
+): { penDx: number; leadW: number } => ({
+  penDx: accidentalPenDx(noteSize, acc, ink),
+  leadW: accidentalBodyW(noteSize, acc, ink),
+})
+
+/**
+ * &hx（滑音/呼吸记号，右侧）无时值元素本体宽。
+ * adj375：&hx 已独立为标记 token（不再依附音符），但本体宽沿用既有画法——
+ * V 形中心到两翼半宽：7s + 2.8s = 9.8×s（保证记号不压到相邻元素）。
+ */
+export const hxBodyW = (noteSize: number) => 9.8 * noteScaleOf(noteSize)
+
+/**
+ * 独立标记符（&zkh/&ykh 括号 / &hx 呼吸记号）本体宽——非时值元素，先扣除再分摊时值宽。
+ * adj376：三种标记**统一用基本占宽**（= 括号的 BRACKET_PAD）；`&hx` 的"时值占用"是**演奏概念**
+ * （占前一个音符的时值作换气静音，见 playback/sequence.ts），**与排版宽度无关**，
+ * 因此不再为它预留 V 形的额外宽度。
+ */
+export const markBodyW = (_code: 'zkh' | 'ykh' | 'hx', _noteSize: number) => bracketBodyW()
+
+/**
+ * adj479：滑音（`&shy` 上滑音 / `&xhy` 下滑音）图形的**墨迹几何**——渲染与布局的唯一来源。
+ *
+ * 为什么抽到这里：滑音原先是**音符修饰符**，只由 render 摆放、布局端**完全不占宽**。
+ * 单声部空间优先有充裕留白（`W` 按比例分摊）时看不出问题；但**多声部块的每拍宽 = 各声部
+ * 本体宽的最大值（无留白）**，图形右伸的墨迹就压到后一个数字上（用户报「&shy/&xhy 与音符重叠」）。
+ * 现在渲染端按本函数摆放、布局端按 `slideExtraW` 占宽——一份几何两处消费，
+ * 避免本项目踩过的「线宽改了一处、占位表没同步」（adj104/adj391 的教训）。
+ *
+ * adj636b（用户要求）：**记号画在数字左侧**（原来画在右侧是错的）——"上/下滑音"是**滑进本音**的
+ * 记号，写在音的左边才读得通（与演奏口径"从下/上一个音滑进本音"一致）。
+ * 只改横向侧、**高度与大小不变**：墨迹**右缘**贴数字左缘，再让开**该音左侧已有的东西**——
+ * 变音角标占位、以及前倚音组占用的横向范围（`clearLeft = max(accW, 前倚音左伸量)`），否则会压在 `#` 或倚音上。
+ *
+ * 几何：先按旧矢量算出**包围盒**（弧线两点 + 箭头尖 + 两翼），再按**高度**贴合、右缘贴在让开后的位置。
+ * 返回值为**相对量**：`dx` 相对数字左缘（x，**负值 = 向左**）、`dy` 相对音符基线（y，向上为负）。
+ */
+export function slideGlyphInk(
+  sym: 'shy' | 'xhy',
+  noteSize: number,
+  clearLeft = 0,
+): { dx: number; dy: number; w: number; h: number } {
+  const s = noteScaleOf(noteSize)
+  const digitW = digitSlotW(noteSize)
+  const sz = noteSize * 0.25 // 滑音大小 = 音符的 1/4
+  const right = sym === 'shy'
+  // 旧矢量的弧线两点（x 相对数字左缘、y 相对基线）——只用来求**包围盒**（高度/宽高比），
+  // 实际横向落位由下面的 `dx` 决定（adj636b：一律贴数字左缘）
+  let x1: number
+  let y1: number
+  let x2: number
+  let y2: number
+  if (right) {
+    // adj231：上滑音右上角更高（终点 sz×1.4 向上）
+    x1 = digitW / 2 + 4 * s
+    y1 = -noteSize * 0.4
+    x2 = x1 + sz
+    y2 = y1 - sz * 1.4
+  } else {
+    // adj231：下滑音更靠近主音符（弧线缩短 0.8×）+ 整体上移
+    x1 = digitW
+    y1 = -noteSize * 0.95
+    x2 = x1 + sz * 0.8
+    y2 = -noteSize * 0.55
+  }
+  // 箭头（adj119：方向 = 弧线末端切线延伸方向）——只为求包围盒
+  const mx = (x1 + x2) / 2
+  const tx = x2 - mx
+  const ty = y2 - y1
+  const tLen = Math.hypot(tx, ty) || 1
+  const ux = tx / tLen
+  const uy = ty / tLen
+  const al = 3 * s // 箭头长度（弧线末端到尖）
+  const aw = 2 * s // 开度
+  const ay = y2 + uy * al
+  const oy = ux * aw
+  // 二次贝塞尔的 y 落在控制点凸包内（P1 的 y 同 y1），故 y1/y2 已覆盖曲线纵向范围
+  const ys = [y1, y2, ay, y2 + oy, y2 - oy]
+  const top = Math.min(...ys)
+  const h = Math.max(...ys) - top
+  const w = h * glyphInkAspect(MODIFIER_GLYPHS[sym])
+  // adj636b：墨迹**右缘**贴数字左缘、再让开左侧已有的角标/倚音 ⇒ 左缘在数字左侧 `clearLeft + w` 处
+  return { dx: -(clearLeft + w), dy: top, w, h }
+}
+
+/**
+ * adj479/adj636b：滑音图形的**左侧额外占宽**（= 数字槽之外的墨迹宽）。
+ * 布局端把它计入音符本体宽并**左移量**（见 layout 的 `leftExt`），让前一个元素与它互不重叠；
+ * 多声部块内同样计入每拍本体宽（否则紧排时图形压到相邻数字）。
+ */
+export const slideExtraW = (sym: 'shy' | 'xhy', noteSize: number) => slideGlyphInk(sym, noteSize).w
+
+// ============================================================
+// 倚音（adj396：时值规则 + 尾部位置判定；layout / render / playback 共用；
+//           adj489：用户细化时值规则——短倚音按减时线数**组时值** + 均分；
+//           adj623：**前倚音占用本音符的时值**——从拍点起奏、主音符顺延，不再借上一个音符；
+//           adj624：短倚音时值再加"**主音符 < 1/2 拍时取本体的一半**"这条上限，前后倚音同一把尺子）
+// ============================================================
+
+/**
+ * 单个倚音音符的**实际时值**（拍，adj396 用户规范，adj489 保留作单倚音形态下的兼容名）：
+ * 括号内写 n 条减时线 → 实际时值 = 1/2^(n+1) 拍（**比书写时值再减一半**）。
+ * 例：`2[3]` → 倚音 1/2 拍；`2[3/]` → 1/4 拍（= 实音符的 `3//`）；`2[3//]` → 1/8 拍。
+ *
+ * 多倚音情形请改用 `graceGroupBeats(token, principalOrig)` —— 组时值 + 组内均分；
+ * `graceNoteBeats` 仅在「组里只有一个倚音」时与组时值等价。
+ */
+export function graceNoteBeats(diminishCount: number): number {
+  return 1 / Math.pow(2, diminishCount + 1)
+}
+
+/**
+ * 倚音组的**总时值**（拍，adj489；adj505/adj507/adj624 按用户规范修订）：
+ * - 短倚音（带减时线）：**主音符因子 × 倚音因子**（adj507），并加一条 adj624 上限
+ *   ——"主音符 < 1/2 拍时，倚音时值 = 主音符的 1/2"（⇒ 倚音永远装得进本音符，不会吃掉整个音符）：
+ *   · **主音符因子**：本体（**不含增时线和附点**，adj624 用户口径）**= 1 拍 → `1`、< 1 拍 → `1/2`**；
+ *   · **倚音因子**：1 条减时线 → `1/4`；2 条 → `1/8`；**≥3 条 → `1/16`（封顶）**；
+ *   · **上限**：`min(主音符因子 × 倚音因子, 本体 ÷ 2)`。
+ *   例：`3[2/]`（本体 1 拍）→ **1/4 拍**；`3/[2/]`（本体 1/2 拍）→ **1/8 拍**；
+ *       `3//[2/]`（本体 1/4 拍）→ **1/8 拍**（= 本体的一半，上限开始生效）；
+ *       `3///[2/]`（本体 1/8 拍）→ **1/16 拍**；`3////[2/]` → **1/32 拍**；
+ *       `3 -[2/]` / `3.[2/]`（增时线·附点**不计入本体**）→ 仍按本体 1 拍 → **1/4 拍**；
+ *       倚音因子照旧相乘：`3[2//]` = 1/8、`3/[2//]` = 1/16。组内所有倚音**均分**组时值。
+ * - 长倚音（无减时线）：占**主音符本体**（数字 + 附点，**不含增时线**）的
+ *   **带附点 → 2/3、不带附点 → 1/2**；组内均分（多个长倚音**共享**这一整份）。
+ *   adj505（用户规范）：① 只有带 `.` 才用 2/3；② **增时线不计入**——有增时线也只按"数字 + 附点"算。
+ *   例：`3[2]`（1 拍）→ 1/2 拍；`3.[2]`（1.5 拍）→ 2/3 × 1.5 = **1 拍**（主音余 1/2 拍）；
+ *       `3 -[2]`（2 拍）→ 1/2 × **本体 1 拍** = **1/2 拍**（增时线那 1 拍不计）；
+ *       `3. -[2]` → 2/3 × 本体 1.5 = **1 拍**；`3[32]` 共享上述整份、组内均分。
+ *
+ * 前、后倚音**同一把尺子**（adj624 用户口径）：只按本音符算，与"前/后"无关；
+ * 后倚音写在增时线/附点之后时，**位置**在那段之后、**时值**仍按本体（1 拍）算。
+ */
+export function graceGroupBeats(t: GraceShape, principalOrig: number): number {
+  if (!t.gracenotes || t.gracenotes.notes.length === 0) return 0
+  const beamCount = t.gracenotes.notes.reduce((m, n) => Math.max(m, n.diminishCount), 0)
+  // adj507（用户规范）：**短倚音组时值 = 主音符因子 × 倚音因子**——倚音长短要跟着主音符走
+  // （同样写 `[2/]`，主音符是 1 拍还是 1/2 拍，听感完全不同）：
+  //   · 主音符因子：本体**不含增时线和附点**（adj624 更正），= 1 拍 → `1`、< 1 拍 → `1/2`
+  //   · 倚音因子：1 条 `1/4`、2 条 `1/8`、≥3 条 `1/16`（到 1/16 封顶，不再更短）
+  // ⇒ `3[2/]` = 1/4 拍（主音符 1 拍）；`3/[2/]` = 1/8 拍（主音符 1/2 拍）；
+  //    `3[2//]` = 1/8 拍；`3/[2//]` = 1/16 拍；`3[2///]` = 1/16 拍（封顶）。
+  if (beamCount > 0) {
+    // 本体（**不含增时线和附点**，adj624 用户口径）：`3 -` / `3.` 都按 1 拍算
+    const bareBeats = t.tupletDur !== undefined ? principalOrig : tokenDuration({ ...t, augmentCount: 0, dots: 0 })
+    const principalFactor = bareBeats >= 1 ? 1 : 1 / 2
+    const graceFactor = 1 / Math.pow(2, Math.min(beamCount, 3) + 1)
+    // adj624（用户规范）：**主音符（本体）< 1/2 拍时，倚音时值 = 主音符的 1/2**——
+    // 即"倚音最多占本音符的一半"这条上限：`3///`（本体 1/8 拍）的倚音是 1/16 拍，
+    // 而不是 adj507 的 1/8 拍（那会把整个音符吃光、主音符不发声）。
+    // 本体 ≥ 1/2 拍时上限不生效（`3[2/]` = 1/4 < 1/2、`3/[2/]` = 1/8 < 1/4），行为与 adj507 一致。
+    return Math.min(principalFactor * graceFactor, bareBeats / 2)
+  }
+  // adj505：长倚音——按"主音符**本体**"（数字 + 附点，**不含增时线**）算；带附点 2/3、不带 1/2。
+  // 本体时值直接借引擎自己的 `tokenDuration`（把 `augmentCount` 抹零），不把附点算法抄第二遍：
+  // 注意引擎口径是「附点作用在含增时线的整体上」（`3. -` = 3 拍而非 2.5 拍），所以抹零才是"不含增时线"。
+  const bodyBeats = t.tupletDur !== undefined ? principalOrig : tokenDuration({ ...t, augmentCount: 0 })
+  return bodyBeats * (t.dots > 0 ? 2 / 3 : 1 / 2)
+}
+
+/** 倚音组内**单个**倚音的实际时值（拍）= 组时值 / 数量（adj489） */
+export function gracePerNoteBeats(groupBeats: number, count: number): number {
+  return count > 0 ? groupBeats / count : 0
+}
+
+/** 倚音音符的形状（只取时值判定所需字段，避免与 token 类型耦合） */
+interface GraceShape {
+  diminishCount: number
+  augmentCount: number
+  dots: number
+  tupletDur?: number
+  gracenotes?: { after: boolean; notes: { diminishCount: number }[] }
+}
+
+/**
+ * 后倚音是否排在音符「时值尾部」（adj396 用户规范）：
+ * `3-[h5/]` / `3 -[h5/]` / `3.[h5/]` —— 主音符带**增时线或附点**时，
+ * 后倚音画在这些时值元素**之后**（`3 -[h5/]` → 倚音画在 `-` 右侧）；
+ * 无增时线也无附点的后倚音仍紧贴数字右上角（既有行为不变）。
+ */
+export function graceAtTail(t: GraceShape | undefined): boolean {
+  if (!t || !t.gracenotes || t.gracenotes.notes.length === 0) return false
+  return t.gracenotes.after && (t.augmentCount > 0 || t.dots > 0)
+}
+
+// ============================================================
+// 倚音组槽位几何（adj632/adj632b：`&tu`/`&die`/`&da` 上方、`&shy`/`&xhy` 右侧）
+// ============================================================
+
+/**
+ * adj633（用户要求）：**波音（mordent）的墨迹宽度**——主音符与倚音**共用这一把尺子**。
+ *
+ * 用户口径：「倚音上的波音，大小参考波音与主音符的比率」⇒ 同一个比率，乘**记号所属音符**的
+ * 缩放因子 `scale`：单波音（2.5 齿）`9 × scale`、复波音（3.5 齿）`13.5 × scale`
+ * （主音符 `scale = noteSize/18`、倚音 `scale = 倚音字号/18` ⇒ 倚音上的波音自然缩为一半）。
+ * 两个数值就是主音符波音沿用至今的横向占位（`2 × 5×0.9 = 9`、`2 × 9×0.75 = 13.5`，见 render 的波音分支）；
+ * 抽到这里是为了**两处（主音符 / 倚音）不各写一份**（同 adj458/adj479/adj632b 的「一份几何两处消费」）。
+ */
+export function mordentInkW(kind: string, scale: number): number {
+  return (kind.endsWith('+') ? 13.5 : 9) * scale
+}
+
+/**
+ * adj632b/adj636c：倚音上的滑音（`&shy` 上滑音 / `&xhy` 下滑音）的**墨迹几何**——渲染与布局共用。
+ *
+ * 三条用户口径（adj632b 定尺寸、adj636c 定侧）：
+ *  · **大小与倚音一样大** ⇒ 墨迹高 = 倚音**数字墨迹**高（`digitInkH`）；
+ *  · **与倚音水平** ⇒ 墨迹纵向范围与数字墨迹**完全对齐**（同顶同底，而非主音符那套"偏数字上半截"）；
+ *  · **紧跟倚音** ⇒ adj636c（用户要求"和主音符一样，滑音调整到左侧"）：墨迹**右缘**贴数字**槽**左缘
+ *    + 一点净距——与主音符的滑音记号同侧，语义一致（都是"滑进本音"）。
+ *
+ * 返回相对量：`dx` 相对倚音**数字左缘**（**负值 = 向左**）、`dy` 相对倚音**基线**（向上为负）；`w`/`h` 为墨迹宽高。
+ * 注：改到左侧后**不再需要逐数字的墨迹宽**（左缘对齐用的是数字**槽**左缘，各数字的左边距差异极小），
+ * 故参数里不再带数字字符（adj632b 右侧时代按"墨迹宽"算，是为了贴住数字**墨迹**右缘）。
+ */
+export function graceSlideInk(sym: 'shy' | 'xhy', gSize: number): { dx: number; dy: number; w: number; h: number } {
+  const h = digitInkH(gSize)
+  const w = h * glyphInkAspect(MODIFIER_GLYPHS[sym])
+  return {
+    // 右缘 = 数字墨迹左缘 − 净距 ⇒ 左缘在数字左缘左侧 `净距 + w` 处
+    dx: -(GRACE_MARK_HUG_GAP * (gSize / 18) + w),
+    dy: -DIGIT_INK_ASC_RATIO * gSize,
+    w,
+    h,
+  }
+}
+
+/** 单个倚音的**最左墨迹**（从该倚音数字左缘向左算起的量；无左侧修饰时 = 0） */
+function graceLeftExtent(
+  note: { pitch?: number; symbols?: readonly string[] },
+  gSize: number,
+): number {
+  let l = 0
+  for (const sym of note.symbols ?? []) {
+    if (sym === 'shy' || sym === 'xhy') {
+      const ink = graceSlideInk(sym, gSize)
+      l = Math.max(l, -ink.dx)
+    }
+  }
+  return l
+}
+
+/** 单个倚音的**最右墨迹**（从该倚音数字左缘算起；无右侧/上方修饰时 = 数字槽右缘 `gW`） */
+function graceRightExtent(
+  note: { pitch?: number; symbols?: readonly string[] },
+  gSize: number,
+  gW: number,
+): number {
+  let r = gW
+  for (const sym of note.symbols ?? []) {
+    if ((GRACE_MORDENT_CODES as readonly string[]).includes(sym)) {
+      // adj633：波音画在该倚音**正上方**、以数字槽中心居中 ⇒ 右半幅会伸出槽右缘；
+      // 宽于槽时必须计入（否则多倚音时图形会压到后一个倚音的正上方记号区）。
+      r = Math.max(r, gW / 2 + mordentInkW(sym, gSize / 18) / 2)
+    }
+  }
+  return r
+}
+
+/**
+ * adj632/adj636c：倚音组内**每个倚音的槽位几何**——渲染（摆放）与布局（占宽）的**唯一来源**。
+ *
+ * 为什么抽到这里：倚音上的修饰符会把墨迹伸出数字槽（右侧曾是滑音、上方是波音、左侧是滑音），
+ * 而倚音组的右缘是**贴住主音符左缘**的（前倚音）——不出占宽就会压到主音符数字上；
+ * 组内相邻倚音之间也会互相压。与 adj479 同一条教训：一份几何两处消费，绝不各算一套。
+ *
+ * 返回（长度与 `notes` 一致的数组）：
+ *  · `offs[i]`：第 i 个倚音**数字左缘**相对「组首墨迹左缘」的偏移（首音左侧有滑音时为该墨迹宽）；
+ *  · `leftExt0`：**首音**左侧伸出的墨迹宽（组左缘 → 首音数字左缘）——后倚音的组左缘要额外让出它，
+ *    否则滑音墨迹会压到主音符（前倚音不需要，组左缘本来就按 `width` 定位）；
+ *  · `width`：组**最左墨迹** → 组内**最右墨迹**的宽；
+ *  · `gSize`/`gW`/`gapW`：倚音字号 / 数字槽宽 / 无修饰时的相邻槽位间距（渲染端还要用）。
+ *
+ * 间距规则：无右侧/上方修饰时**原样沿用** adj103 的紧凑间距 `GRACE_SLOT_RATIO_MULTI`（多倚音时比槽宽还窄，
+ * 观感紧凑且是既有行为）；只有该倚音**确有**右侧/上方修饰，才把下一个槽位推到「最右墨迹 + GRACE_MARK_GAP」之外。
+ */
+export function graceSlotLayout(
+  notes: readonly { pitch?: number; symbols?: readonly string[] }[],
+  noteSize: number,
+): { offs: number[]; leftExt0: number; width: number; gSize: number; gW: number; gapW: number } {
+  const gSize = noteSize * GRACE_SIZE_RATIO
+  const gW = gSize * GRACE_SLOT_RATIO
+  const gapW = notes.length >= 2 ? gSize * GRACE_SLOT_RATIO_MULTI : gW
+  const gs = gSize / 18 // 倚音缩放因子（同渲染端）
+  const offs: number[] = []
+  const leftExt0 = notes.length > 0 ? graceLeftExtent(notes[0], gSize) : 0
+  let off = leftExt0
+  for (let i = 0; i < notes.length; i++) {
+    offs.push(off)
+    const r = graceRightExtent(notes[i], gSize, gW)
+    off += r > gW ? Math.max(gapW, r + GRACE_MARK_GAP * gs) : gapW
+  }
+  const last = notes.length - 1
+  const width = last < 0 ? 0 : offs[last] + graceRightExtent(notes[last], gSize, gW)
+  return { offs, leftExt0, width, gSize, gW, gapW }
+}

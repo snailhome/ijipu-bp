@@ -1,0 +1,2224 @@
+/**
+ * engine/render/index.ts — SVG 渲染
+ *
+ * M1a 阶段：单页 SVG 生成。
+ *  - 页面骨架：A4/A5 白纸 + 边距；
+ *  - 元数据：标题居中、副标题、作者居右、调号/拍号/节拍（左上）；
+ *  - 音符：数字（衬线粗体）+ 高低音点/变音/附点/增时线/减时线/休止符/节奏符；
+ *  - 小节线：| || |: :| :|:（含隐藏线 |/ |* 不绘制）；
+ *  - 光标联动契约：音符 <text data-notepos="page_voice_group_index">。
+ *    adj374：一个音符的**多个视觉元素**（数字主体 + 各条增时线）共用同一 data-notepos——
+ *    消费方需要「整音高亮/命中」时用 querySelectorAll，需要「取代表元素（滚动/定位）」时用 querySelector（首个=数字）。
+ *
+ * TODO(M1b)：多页分页输出
+ * TODO(M1c)：歌词 <text data-cipos>
+ * TODO(M7)：跳房子/连音线/装饰符号/多声部
+ */
+import type { PageConfig, PlacedBarline, PlacedBarNumber, PlacedDynamic, PlacedLyric, PlacedSegmentBracket, PlacedSlur, PlacedToken, ScoreLayout, ScorePage, VoiceBlock } from '../types'
+// adj633：倚音上的波音编码（与解析/布局/演奏同源一份清单）
+import { GRACE_MORDENT_CODES } from '../types'
+import { tokenDuration } from '../duration'
+import { metaAnchorOf, metaAnchorPt, metaAuthorRowY, metaCornerOffsets } from '../layout/metaAnchors'
+// adj1304：作者（Z:）两端对齐的纯几何（只动最后一个空格之前的 label；整行仍右对齐）
+import { alignAuthorLines } from '../layout/authorAlign'
+import {
+  DOT_R,
+  DOT_R_DOT,
+  DIGIT_HEIGHT_RATIO,
+  LAYER_GAP,
+  INNER_GAP,
+  BEAM_H,
+  BARLINE_DOT_R,
+  BARLINE_DOT_OFF,
+  barlineGeometry,
+  NOTE_COMMENT_FONT_RATIO,
+  NOTE_COMMENT_RAISE,
+  DESC_RATIO,
+  VOLTA_BAR_GAP,
+  VOLTA_RAISE,
+  DYN_HALF_H,
+  SLUR_W,
+  VOLTA_COMMENT_FONT_RATIO,
+  TUPLET_NUM_RATIO,
+  TUPLET_NUM_W_RATIO,
+  TUPLET_LABEL_PAD,
+  GRACE_BEAM_GAP,
+  // adj980（用户口径）：第一条减时线 = 主音符墨迹高的 2/3 处
+  GRACE_BEAM_TOP_RATIO,
+  GRACE_LINE_W,
+  // adj632b：倚音记号的尺寸尺子与数字墨迹度量（渲染与布局同源）
+  markFontSize,
+  DIGIT_INK_ASC_RATIO,
+  // adj625：方框小节序号的几何（与布局端同源）
+  BAR_NUMBER_BOTTOM_GAP,
+  BAR_NUMBER_STROKE,
+  barNumberFontSize,
+  barNumberBoxH,
+  barNumberBoxW,
+  // adj970：小节线**下方**文本记号（&fine/&dc/&ds）的字号与基线 —— 布局端算"序号方框要不要让"同源
+  barDownMarkFontSize,
+  barDownMarkBaselineY,
+  noteScaleOf,
+  DIGIT_BOTTOM,
+  // adj630b：谱尾说明（S:）的行基线（与预览端拖拽基准共用）
+  notesRowBaseline,
+  lowDotY,
+  octaveDotY,
+  octaveTopY,
+  // adj929：连音线弧顶=常量（垂度=2×弧顶高）——布局算"两层最小间距"/净空时与渲染用同一把尺子
+  SLUR_SAG,
+  // adj672：歌词注释的字号/宽度/净距（布局避让与渲染锚点共用同一把尺子）
+  lyricCommentFontSize,
+  lyricCommentWidth,
+  LYRIC_COMMENT_GAP,
+  // adj723h：小节线修饰符记号（`&ty` 大跳跃 / `&hs` 花 S）的字号与"距小节线上端间距"
+  TY_FONT_SIZE,
+  TY_WIDTH_SCALE,
+  TY_HEIGHT_SCALE,
+  tyBaselineY,
+  HS_FONT_SIZE,
+} from '../layout/spacing'
+import { tempoLabel } from '../parser/parser'
+import { parseInstrumentRef } from '../playback/instruments'
+import { graceAtTail, graceSlideInk, graceSlotLayout, mordentInkW, slideGlyphInk, BRACE_ARC_DX_RATIO, BRACE_ARC_R_RATIO, BRACE_LINE_DX, accidentalPenDx, accidentalFontSize } from '../layout/spaceLayout'
+// adj636b：变音角标占位（滑音记号改画在数字左侧后，要与角标并排——渲染与布局同一把尺子）
+import { accidentalBodyW } from '../layout/spaceLayout'
+// adj646：角标 ↔ 相邻字符净距（描述头调号与音符变音**共用一条规则**）
+import { accidentalGap } from '../layout/spacing'
+// adj458：波音/滑音改用**用户提供的矢量修饰符**（生成文件，见 scripts/gen-modifier-glyphs.mjs）
+import { MODIFIER_GLYPHS, glyphMarkup, type ModifierGlyphKey } from './modifierGlyphs'
+/**
+ * adj965：`xmlEsc` / `r1n` / `r2n` 抽到 `render/svgUtil.ts`（水印/背景层 `render/overlay.ts` 也要用，
+ * 而"同一个格式化口径只允许一处定义"是项目铁律）。本文件不再自带这两份定义。
+ */
+import { r1n, r2n, xmlEsc } from './svgUtil'
+// adj965（方案「OVL」）：水印层与背景层（纯函数；资源由宿主解析好传进来）
+import { overlayLayers, type RenderAssets } from './overlay'
+// 让应用/插件能从引擎入口拿到这两个类型（`engine/index.ts` 再转出一次）
+export type { RenderAssets, OverlayAsset } from './overlay'
+
+// ============================================================
+// 工具
+// ============================================================
+
+/**
+ * adj652（用户要求："允许将预览页面里的链接文本自动转换为链接，点击即可打开链接"）：
+ * **谱面文本里的 URL 自动变成链接**。
+ *
+ * 场景：`S:` 谱尾说明常写「本乐谱使用「爱记谱 https://ijipu.pages.dev」编制」——
+ * 那串 URL 此前只是普通文字，点不动（预览、导出、打印都一样）。
+ *
+ * 分工：**引擎只产出标记**（`<a class="jp-link" data-href="…" target="_blank">`），
+ * **点击行为交给宿主**（应用预览层 / Obsidian 插件各自调系统浏览器打开）——
+ * 引擎零 DOM，不碰 `window.open`。`data-href` 是**补全协议后的绝对地址**
+ * （`www.x.com` → `https://www.x.com`），宿主直接用它，不必再猜。
+ */
+const URL_RE = /(?:https?:\/\/|ftp:\/\/|mailto:)[^\s<>"'“”‘’（）()【】[\]「」《》]+|www\.[^\s<>"'“”‘’（）()【】[\]「」《》]+/gi
+/** URL 尾巴上粘的句读/右括号/引号不算 URL 的一部分（`见 https://x.com。` 的「。」） */
+const URL_TRAIL_RE = /[.,;:!?，。、；：！？…·）)】\]」》”’"']+$/
+
+/** 找出文本里所有 URL（含补全协议后的 `href`）；纯函数，供换行与冒烟共用 */
+export function findUrls(text: string): { start: number; end: number; url: string; href: string }[] {
+  const out: { start: number; end: number; url: string; href: string }[] = []
+  URL_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = URL_RE.exec(text)) !== null) {
+    let url = m[0]
+    const trail = URL_TRAIL_RE.exec(url)
+    if (trail) url = url.slice(0, -trail[0].length)
+    if (url === '') continue
+    const href = /^(?:https?|ftp|mailto):/i.test(url) ? url : `https://${url}`
+    out.push({ start: m.index, end: m.index + url.length, url, href })
+    // 被截掉的尾巴不参与下一轮匹配（否则 `x.com。。` 会再吃进一个空匹配）
+    URL_RE.lastIndex = m.index + url.length
+  }
+  return out
+}
+
+/** 把纯文本转成「URL 处带 `<a class="jp-link">`」的 SVG 文本片段（其余部分照旧 XML 转义） */
+export function linkifyText(raw: string): string {
+  const urls = findUrls(raw)
+  if (urls.length === 0) return xmlEsc(raw)
+  let out = ''
+  let pos = 0
+  for (const u of urls) {
+    out += xmlEsc(raw.slice(pos, u.start))
+    out +=
+      `<a class="jp-link" href="${xmlEsc(u.href)}" data-href="${xmlEsc(u.href)}"` +
+      ` target="_blank" rel="noopener noreferrer">${xmlEsc(u.url)}</a>`
+    pos = u.end
+  }
+  return out + xmlEsc(raw.slice(pos))
+}
+
+/** 由 LayoutId 生成稳定 notepos 标识 */
+function noteposId(p: { page: number; voice: number; group: number; index: number }): string {
+  return `${p.page}_${p.voice}_${p.group}_${p.index}`
+}
+
+// ============================================================
+// 字体常量
+// ============================================================
+
+const FONT_CN = "'Microsoft YaHei', 'SimHei', sans-serif"
+
+/** 花体/手写体字体（adj：力度标记、反复记号 Fine/D.C./D.S. 用它渲染；
+ *  只用系统/通用手写体（Windows 内置 Segoe Script，其他平台回退 cursive），保证跨平台可见；
+ *  不用 Bravura 等需安装的音乐符号字体，避免缺字方块） */
+const FONT_SCRIPT = "'Segoe Script', 'Brush Script MT', 'Script MT', 'Lucida Handwriting', 'Segoe Print', cursive"
+
+/** 力度/速度修饰符编码（& 开头，写在音符后）：音符上方以斜体显示编码
+ *  （adj：pp/p/mp/mf/f/ff/fff/sf/fp/sfp/rit，与 &.jps 语法一致） */
+const DYN_MARKS = new Set(['pp', 'p', 'mp', 'mf', 'f', 'ff', 'fff', 'sf', 'fp', 'sfp', 'rit'])
+
+/** adj334：音符上方单字修饰符（吐音/打音/叠音）——在音符正上方居中显示一个粗体字形。
+ *  吐音 &tu → 粗体 T；吐音 &ku → 粗体 K；打音 &da → 粗体 扌；叠音 &die → 粗体 又。
+ *  除 die（横向缩 0.75，adj335）外，其余走无缩放居中粗体分支。 */
+const ABOVE_GLYPH: Record<string, string> = {
+  tu: 'T',
+  ku: 'K',
+  da: '扌',
+  die: '又',
+}
+
+/** adj338：音符上方**修饰层**专属层间留白（px）——比共享 LAYER_GAP(2) 更小，
+ *  让多修饰符堆叠更紧凑；仅用于音符上方符号循环（`symY = aboveTop - SYM_LAYER_GAP*s`），
+ *  不影响减时线/连音线等（仍用 LAYER_GAP）。 */
+const SYM_LAYER_GAP = 1
+
+/**
+ * 13px 元数据字形宽（px）——用于调式/节拍 = 号对齐（adj42）。
+ * 其余 ASCII 按 7.62、CJK 按 13 兜底估算。
+ *
+ * adj629v：表格里除 `♩` 外都是 YaHei 的 GDI 实测值，与浏览器实测一致
+ * （Blink `measureText`：`1` 7.62 / ` ` 3.85 / `=` 9.64）；**`♩` 是例外**——
+ * YaHei 没有 U+2669，浏览器回退到 CJK 字体、占宽 **一个全角 = 13px**
+ * （GDI 当年量到的 7.0 在浏览器渲染路径上不成立）。不改这个数，节拍行的
+ * `=` 会**比调式行右偏 6px**（估算宽 7.0 vs 实际 13.0 的差）。
+ */
+const META_GLYPH_W: Record<string, number> = {
+  ' ': 3.85,
+  '=': 9.64,
+  '♩': 13.0,
+  '0': 7.62, '1': 7.62, '2': 7.62, '3': 7.62, '4': 7.62,
+  '5': 7.62, '6': 7.62, '7': 7.62, '8': 7.62, '9': 7.62,
+  'A': 9.15, 'B': 8.16, 'C': 8.7, 'D': 9.9, 'E': 7.15,
+  'F': 6.91, 'G': 9.67, '#': 8.3, '$': 7.62,
+  // 升降号占宽：**实测是全角**——♯/♭ 在简谱字体栈里会回退到 CJK 字体，13px 字号下占宽 ≈ 13px、
+  // 墨迹几乎顶满字身框（adj638 Chrome `getBBox` 实测：9.8px 角标墨迹宽 9.79px）。
+  // 角标让位已改成"移过整个角标占宽 + 净距"（见 `drawKeyName`），不再依赖本表的"半角"假设。
+  '♯': 13.0, '♭': 13.0,
+}
+
+/** 估算 13px 元数据文本宽（px） */
+function metaTextW(s: string): number {
+  let w = 0
+  for (const ch of s) {
+    w += META_GLYPH_W[ch] ?? (ch.charCodeAt(0) > 127 ? 13 : 7.62)
+  }
+  return w
+}
+
+/**
+ * adj638：调号角标（♯/♭）与右侧字母之间的**净距**。
+ *
+ * 用户口径演进：先"0.2 个升降符宽度" → "0.1 个墨迹宽" → 最后直接定死「**就 0.2px**」。
+ *
+ * 角标与字母现在是**内联**排版（同一个 `<text>` 里的两个 `<tspan>`）——它们之间的距离由**字体自己的
+ * 推进量**决定，我们只在这之上加这 0.2px。这样无论 ♯/♭ 是西文窄字形还是**全角 CJK 字形**
+ * （占宽 1em、墨迹仅 0.62em、右侧留白 1.75px），都不会再出现"多出一整个右侧留白"的过宽（E-2026-328）。
+ *
+ * adj646：这条净距抽成**与音符变音共用**的 `accidentalGap(所在字号)`（spacing.ts）——
+ * 两处都是"角标紧贴邻字"，此前音符那边是 `0.05×角标字号`（13px 下 0.43px，是这里的 2.4 倍）。
+ */
+
+/** 按可用宽将一行说明拆成多子行（字符级估算宽、随字号缩放；adj153 内容不超边距） */
+function wrapNotesLine(line: string, availW: number, size: number): string[] {
+  const scale = size / 13
+  const widthOf = (s: string): number => {
+    let w = 0
+    for (const ch of s) w += (META_GLYPH_W[ch] ?? (ch.charCodeAt(0) > 127 ? 13 : 7.62)) * scale
+    return w
+  }
+  /**
+   * adj652：**绝不把 URL 拆到两行**——拆开就是两个半截链接（点哪个都不对）。
+   * 所以把每个 URL 当成**整块 token**：这一行放不下就整体挪到下一行；
+   * 只有"它自己比一整行还宽"时才退回逐字符拆（与旧行为一致，不会为了它把前面的行空着）。
+   */
+  const urlEndAt = new Map(findUrls(line).map((u) => [u.start, u.end]))
+  const subs: string[] = []
+  let cur = ''
+  let curW = 0
+  let i = 0
+  while (i < line.length) {
+    const end = urlEndAt.get(i)
+    const chunk = end === undefined ? String.fromCodePoint(line.codePointAt(i)!) : line.slice(i, end)
+    const w = widthOf(chunk)
+    if (cur && curW + w > availW) {
+      subs.push(cur)
+      cur = ''
+      curW = 0
+    }
+    if (chunk.length === 1 || curW + w <= availW) {
+      cur += chunk
+      curW += w
+      i += chunk.length
+      continue
+    }
+    for (const ch of chunk) {
+      const cw = widthOf(ch)
+      if (cur && curW + cw > availW) {
+        subs.push(cur)
+        cur = ''
+        curW = 0
+      }
+      cur += ch
+      curW += cw
+    }
+    i += chunk.length
+  }
+  if (cur) subs.push(cur)
+  return subs.length ? subs : ['']
+}
+
+/**
+ * 音符字体栈（`shuzi_font` 为空时的兜底）。
+ * adj647：**导出**给宿主实测用——宿主量字形时必须与渲染用**同一串 font-family**，
+ * 否则量到的是另一套字体（量测与绘制两套账）。
+ */
+export function noteFontFamily(style: string): string {
+  return style || "'Microsoft YaHei', 'SimHei', 'Segoe UI', sans-serif"
+}
+
+/** 音符字体：直接使用页面设置中的字体名（adj105：原 a/b/c 字形改为字体名） */
+function noteFont(style: string): string {
+  return noteFontFamily(style)
+}
+
+// ============================================================
+// 页面骨架与元数据（描述头）
+// ============================================================
+
+/**
+ * 描述头默认布局（adj16 锚点语义；adj629u 调整为**贴角**）：
+ *  - 主标题：上边中点（top-center），字顶贴区域上沿；副标题/乐器紧接其下
+ *  - 作者：右下角（bottom-right，从底部往上：末行贴区域下沿）
+ *  - 调式+拍号：左下角（bottom-left），节拍在其下（末行贴区域下沿）
+ *  - metaPos 可覆盖任意元素位置（key: title/subtitle_i/author_i/keyline/tempo）
+ *    值为相对各自锚点的偏移（adj16）：区域宽/高变化时元素跟随锚点。
+ */
+export type RenderFontMeta = {
+  /** `1 = ` 实测宽（决定调号字母/角标左缘，adj199） */
+  w1eq?: number
+  /**
+   * adj638：♯/♭ 的**占宽**（px）与**墨迹右缘**（px）——宿主实测传入，只用来算"右侧留白补偿量"。
+   *
+   * 角标与字母是**内联**排版（字体推进量决定位置），但字形的**右侧留白**（占宽 − 墨迹右缘）会把
+   * 视觉间距撑开：♯ 在简谱字体栈里是全角字形，9.75px 字号下占宽 9.75、墨迹右缘只有 8.00 ⇒ 留白 1.75px。
+   * 宿主给了这两个实测值就把它**补偿掉**（净距严格 = 0.2px）；没给则保留字体自然留白（≥0.2px、绝不压字）。
+   */
+  wAcc?: number
+  accInkRight?: number
+  /** `1 ` 实测宽（adj629v：调式行 = 号左缘基准） */
+  w1sp?: number
+  /** `♩` 实测宽（adj629v：节拍行 = 号左缘基准） */
+  wTempo?: number
+}
+/**
+ * adj965（方案「OVL」）：`renderScoreToSvg` / `renderPage` 的选项 = 宿主实测的字体度量 **+ 宿主解析好的图片资源**。
+ *
+ * 两者是同一类东西：**引擎零 DOM（闸门 `adj770`）** ⇒ 字体宽度要用 canvas 量、图片要读字节并量宽高，
+ * 都只能由宿主做完传进来（既有先例就是 `RenderFontMeta`，见 `src/preview/fontMeta.ts`）。
+ * `assets` 缺省 ⇒ 不画水印/背景层，产物与改动前**逐字节相同**。
+ */
+export type RenderOpts = RenderFontMeta & { assets?: RenderAssets }
+
+/**
+ * adj1068（用户 2026-10-22）：调号显示口径——`1 = ` + 字母 + 左上角 ♯/♭ 角标。
+ *
+ * 描述头调式行（`drawKeyName`）和动态视频片头卡必须共用这份解析，否则会出现
+ * `1=C#`（字母后、普通 #）和预览的 `1 = ♯C`（角标）两种样子。
+ */
+export interface KeySignature {
+  /** 调名前的固定文字（与描述头预览同口径） */
+  prefix: string
+  /** 调号字母（非法输入时原样返回） */
+  letter: string
+  /** 升降号字形（'' / '♯' / '♭'） */
+  accidental: '' | '♯' | '♭'
+}
+
+export function keySignatureOf(keyRaw: string): KeySignature {
+  const m = /^([#$b]?)([A-G])([#$b]?)$/.exec((keyRaw ?? '').trim())
+  const letter = m ? m[2] : (keyRaw ?? '').trim()
+  const acc = m ? m[1] || m[3] : ''
+  const accidental = acc ? (acc === '#' ? '♯' : '♭') : ''
+  return { prefix: '1 = ', letter, accidental }
+}
+
+/**
+ * adj627c（用户要求）：把**调名**画成与描述头 `1 = Ab` 完全同一套效果——
+ * 字母 + **左上角 ♯/♭ 角标**（角标字号 = 字母 3/4、上移 0.35×字号；adj638 起两者**内联**排版，
+ * 之间只加固定 0.2px 净距，位置由字体推进量决定）。
+ *
+ * 描述头调式行（`data-meta="keyline"`）与临时转调记号（`转1=Ab`）**共用本函数**，两处预览因此长得一模一样；
+ * 此前转调记号是整串文字，`Ab` 的降号会显示成普通字母 `b`，与描述头的 `A♭` 不是一回事。
+ *
+ * @param prefix   调名前的固定文字（`1 = ` / `转1=`）
+ * @param prefixW  前缀实际占宽（px）：角标紧随其后（内联，无需再算它的 x）
+ * @param accW     角标**占宽**实测（px）——只影响拍号落点（adj638）
+ */
+function drawKeyName(o: {
+  x: number
+  y: number
+  size: number
+  font: string
+  /** 调名原文（如 `Ab` / `$B` / `F#`；非法时原样当字母画） */
+  keyRaw: string
+  prefix: string
+  prefixW: number
+  /** 角标**占宽**实测（px）——既用于拍号定位，也用于算右侧留白补偿（adj638） */
+  accW?: number
+  /** 角标**墨迹右缘**实测（px）——与 `accW` 一起给出时，右侧留白会被补偿掉，净距严格 = 0.2px */
+  accInkRight?: number
+  /** 写在 `<text>` 开头的额外属性（如 `data-meta="keyline" `） */
+  headAttrs?: string
+  /** 写在 `font-family` 与 `fill` 之间的额外属性（如 ` text-anchor="start"`） */
+  midAttrs?: string
+  /** 写在 `<text>` 末尾的额外属性（如 ` data-keychange="转1=Ab"`） */
+  tailAttrs?: string
+}): { parts: string[]; letter: string; accShift: number } {
+  const sig = keySignatureOf(o.keyRaw)
+  const letter = sig.letter // 调号字母（无效时原样）
+  const symb = sig.accidental // 升降号字形（♯ / ♭）
+  const symSize = symb ? o.size * (3 / 4) : 0 // 角标字号 = 字母 3/4
+  const raise = symb ? 0.35 * o.size : 0 // 角标上移量（下沿贴字母中线）
+  /**
+   * adj638（用户报「描述头 `D: C#` 的两个符号还有重叠／间距过宽」三轮后的最终口径）：
+   * 角标与字母写在**同一条 `<text>` 内联**（角标是个变小上移的 `<tspan>`），二者之间只加
+   * `accidentalGap(调号字号)`（adj646 起与音符变音共用；13px 下 = 0.2px）——
+   * **位置完全由字体自己的推进量决定**。
+   *
+   * 为什么要内联（不再"让位 + 猜字宽"）：引擎零 DOM，拿不到字形度量，之前只能估算 ♯/♭ 的宽度，
+   * 而各字体差异极大——♯ 可能是西文窄字形，也可能是**全角 CJK 字形**（占宽 1em、墨迹只有 0.62em、
+   * 右侧留白 1.75px）。按占宽让位会多出一整个右侧留白（用户看到的"明显过宽"），按墨迹让位又依赖
+   * 宿主实测（插件里一旦实测没生效就退回估算，误差照旧）。内联后**浏览器用真实推进量排版**：
+   * 墨迹紧邻、天然不会压字，我们只负责那点净距。
+   */
+  const gapDx = symb ? accidentalGap(o.size) : 0
+  /**
+   * adj638：字形**右侧留白**补偿。
+   *
+   * 内联排版下，字母起点 = 角标**占宽**之后 ⇒ 视觉净距 = 占宽 − 墨迹右缘（即字形的右侧留白）+ 我们的 0.2px。
+   * ♯ 在简谱字体栈里是全角字形，这留白有 1.75px（实测），用户看到的"缝"主要就是它。
+   * 宿主给了 `accW` + `accInkRight` 两个实测值就按差值补偿；否则不动（保留字体自然留白，≥0.2px、绝不压字）。
+   * 防御：实测值明显不合理（≤0 或超过占宽）时不补偿，避免把字母推进角标里。
+   */
+  const rsb =
+    symb && o.accW !== undefined && o.accInkRight !== undefined && o.accInkRight > 0 && o.accInkRight <= o.accW
+      ? o.accW - o.accInkRight
+      : 0
+  const letterDx = gapDx - rsb
+  const parts: string[] = []
+  if (letter) {
+    const body = symb
+      ? `<tspan font-size="${r1n(symSize)}" dy="${r1n(-raise)}">${symb}</tspan>` +
+        `<tspan dy="${r1n(raise)}" dx="${r2n(letterDx)}">${xmlEsc(letter)}</tspan>`
+      : xmlEsc(letter)
+    parts.push(
+      `<text ${o.headAttrs ?? ''}x="${o.x}" y="${o.y}" font-size="${o.size}" font-family="${o.font}"${o.midAttrs ?? ''} fill="#1b1b1b"${o.tailAttrs ?? ''}>${o.prefix}${body}</text>`,
+    )
+  }
+  /**
+   * 拍号定位要用的"调名区总占宽" = 角标占宽 + 净距（补偿后的实际位移）。角标占宽优先用宿主实测（`wAcc`），
+   * 缺省按角标字号（全角字形，偏保守 ⇒ 拍号只会更靠右，不会压字）。
+   */
+  const accShift = symb ? (o.accW ?? symSize) + letterDx : 0
+  return { parts, letter, accShift }
+}
+
+function renderMeta(page: ScorePage, config: PageConfig, opts?: RenderFontMeta): string {
+  const parts: string[] = []
+  const { width } = page
+  const posOf = (key: string, defOff: { x: number; y: number }) => {
+    // 绝对 = 锚点 + 偏移；无 metaPos 用默认偏移（等价旧默认公式）
+    const anchor = metaAnchorPt(metaAnchorOf(key), width, config)
+    const p = config.metaPos?.[key]
+    return p ? { x: anchor.x + p.x, y: anchor.y + p.y } : { x: anchor.x + defOff.x, y: anchor.y + defOff.y }
+  }
+
+  // ---- 调式 + 拍号（左下锚，同排）：调号文本 + 拍号分数（数字上下正对，中间横线） ----
+  // adj42：调式行 = 号两侧加空格（如 "1 = C"），与下方节拍行的 = 号垂直对齐
+  // adj174/175：调号支持升降号在前（#F/$B/bE）或在后（F#/B$/Eb），降号 $ 与 b 等价；
+  // 预览时 ♯/♭ 作角标画在调号字母左侧、中线以上，字号为调号的一半
+  const mFont = config.miaoshu_font
+  const mSize = config.miaoshu_size
+  // adj194：b/# 为字母左上角角标——字号=字母 2/3、下沿对齐字母中线；有 b/# 时字母右移
+  // 1.2×角标占宽给角标让位，确保不重叠（前一轮 1/3 角标起点正好压在字母左缘而重叠）。
+  const KEY_SHIFT = 6
+  const keyRaw = (page.meta.key ?? '').trim()
+  const scale0 = mSize / 13
+  // 按字体实际宽度摆放角标/字母：w1eq(1= 宽)/wAcc(♯ 宽) 由 PreviewPane 用 canvas.measureText 实测传入，
+  // 消除中/英文字体下 ♯ 宽度差异导致的间距忽大忽小或重叠；无实测（导出等场景）回退按字号估算（全角）
+  const W1eq = opts?.w1eq ?? metaTextW('1 = ') * scale0 // "1 = " 实际宽（决定字母/角标左缘）
+  // ---- adj629u：描述头默认布局 = **贴角**（左栏贴左下角、右栏贴右下角、居中栏贴区域上沿） ----
+  // 用户报「空设置下没有按『左靠左下角 / 右靠右下角 / 居中靠中上』排列」：
+  // 默认值原是与字号脱钩的硬编码（标题 30.6 = 旧字号 36×0.85，调式 -44 / 节拍 -12 / 作者 -16-18n），
+  // 空设置下三块恰好都落在区域中部。公式集中在 layout/metaAnchors.ts（与 smoke 共用一份）。
+  const hasKeyRow = Boolean(keyRaw || page.meta.meter)
+  const hasTempoRow = Boolean(page.meta.tempoNum || page.meta.tempoText || page.meta.tempo)
+  const corner = metaCornerOffsets({
+    mSize,
+    biaotiSize: config.biaoti_size,
+    hasKeyRow,
+    hasTempoRow,
+  })
+  const keyDefY = corner.keyline
+  const tempoDefY = corner.tempo
+  const keyPos = posOf('keyline', { x: KEY_SHIFT, y: keyDefY })
+  const keyName = drawKeyName({
+    x: keyPos.x,
+    y: keyPos.y,
+    size: mSize,
+    font: mFont,
+    keyRaw,
+    prefix: '1 = ',
+    prefixW: W1eq,
+    accW: opts?.wAcc,
+    accInkRight: opts?.accInkRight,
+    headAttrs: 'data-meta="keyline" ',
+  })
+  const keyLetter = keyName.letter // 调号字母（拍号定位要用）
+  const accShift = keyName.accShift // 字母右移量（拍号定位要用）
+  if (keyLetter) {
+    parts.push(...keyName.parts)
+  }
+  if (page.meta.meter) {
+    const pos = posOf('keyline', { x: KEY_SHIFT, y: keyDefY })
+    // 拍号左缘 = "1 = " 宽（优先实测 W1eq）+ 字母区（字母右移 accShift + 字母宽）+ 一个空格 + 10 间距
+    const meterX = pos.x + W1eq + accShift + metaTextW(keyLetter) * scale0 + metaTextW(' ') * scale0 + 10
+    parts.push(renderMeterMeta(page.meta.meter, meterX, pos.y, mFont, mSize))
+  }
+  // ---- 节拍（左下锚，keyline 下方；数字 ♩=N + 文字，多条 J 时并排） ----
+  // adj42：= 号后加空格（"♩= 80"），并与调式行 = 号垂直对齐：
+  // 调式行 "=" 位于 x + w("1 ")，节拍行 "=" 位于 x' + w("♩")，令 x' = x + w("1 ") - w("♩")
+  // 仅当节拍行含 "♩=" 前缀时对齐；纯文字节拍（无 = 号）保持与调式行左缘对齐
+  // adj629v（用户要求「描述头 D 的 = 号和 J 的 = 号保持对齐」）：调号带升降号时字母是在
+  // **字符串内部**用 `<tspan dx>` 右移的（adj190），调式行的 "=" 不再跟着右移；而节拍行还留着
+  // adj181 时代的 `+ accShift`（那是"整行右移给角标让位"的写法）⇒ 带升降号时 J 行的 "=" 恰好
+  // 右偏一个角标宽（`D: Bb` 实测 8.8px）。去掉 accShift，并优先用 PreviewPane 实测的
+  // "1 " / "♩" 宽（与 adj199 的角标实测同一口径），消除估算宽与实际字体的差。
+  const tempoNum = page.meta.tempoNum
+  const tempoText = page.meta.tempoText
+  const legacyTempo = page.meta.tempo
+  const hasTempoEq = Boolean(tempoNum) || (legacyTempo !== null && Number.isFinite(Number(legacyTempo)) && legacyTempo.trim() !== '')
+  const w1sp = opts?.w1sp ?? metaTextW('1 ') * scale0
+  const wTempo = opts?.wTempo ?? metaTextW('♩') * scale0
+  const tempoEqShift = keyLetter && hasTempoEq ? w1sp - wTempo : 0
+  if (tempoNum || tempoText) {
+    // adj：与调式行间距加大（偏移 -20 → -12），防止拍号分母与节拍行重叠；
+    // adj176：与调号同步右移 KEY_SHIFT（adj629v：不再叠加 accShift，= 号与调式行严格对齐）
+    const pos = posOf('tempo', { x: tempoEqShift + KEY_SHIFT, y: tempoDefY })
+    parts.push(
+      `<text data-meta="tempo" x="${pos.x}" y="${pos.y}" font-size="${mSize}" font-family="${mFont}" fill="#1b1b1b">${xmlEsc(tempoLabel(tempoNum ?? undefined, tempoText ?? undefined))}</text>`,
+    )
+  } else if (page.meta.tempo) {
+    // 兼容旧数据（无 tempoNum/tempoText 字段）：数字或原文
+    const n = Number(page.meta.tempo)
+    const tempoText =
+      Number.isFinite(n) && page.meta.tempo.trim() !== ''
+        ? `♩= ${n}`
+        : xmlEsc(page.meta.tempo.replace(/\s*\n\s*/g, '　'))
+    const pos = posOf('tempo', { x: tempoEqShift + KEY_SHIFT, y: tempoDefY })
+    parts.push(
+      `<text data-meta="tempo" x="${pos.x}" y="${pos.y}" font-size="${mSize}" font-family="${mFont}" fill="#1b1b1b">${tempoText}</text>`,
+    )
+  }
+
+  // ---- 主标题（上居中锚；默认偏移 = 字顶贴区域上沿 + 视觉余量，adj32/adj629u） ----
+  const titleDefY = corner.title
+  if (page.meta.titles[0]) {
+    const pos = posOf('title', { x: 0, y: titleDefY })
+    parts.push(
+      `<text data-meta="title" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${config.biaoti_size}" font-family="${config.biaoti_font}" font-weight="bold" fill="#1b1b1b">${linkifyText(page.meta.titles[0])}</text>`,
+    )
+  }
+  // ---- 副标题（上居中锚，主标题下） ----
+  let subIdx = 0
+  let subOffY = titleDefY + config.biaoti_size * 1.1
+  for (const t of page.meta.titles.slice(1)) {
+    const pos = posOf(`subtitle_${subIdx}`, { x: 0, y: subOffY })
+    parts.push(
+      `<text data-meta="subtitle_${subIdx}" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${config.fubiaoti_size}" font-family="${config.fubiaoti_font}" fill="#1b1b1b">${linkifyText(t)}</text>`,
+    )
+    subOffY += config.fubiaoti_size * 1.3
+    subIdx++
+  }
+
+  // ---- 乐器（adj83：Y 行，多行，一行一种乐器；显示在副标题下面，上居中锚） ----
+  // adj151：颜色与 P:/J: 等描述头一致（#555 → #1b1b1b）
+  let instOffY = subOffY
+  for (let i = 0; i < page.meta.instruments.length; i++) {
+    const pos = posOf(`instrument_${i}`, { x: 0, y: instOffY })
+    parts.push(
+      `<text data-meta="instrument_${i}" x="${pos.x}" y="${pos.y}" text-anchor="middle" font-size="${mSize}" font-family="${mFont}" fill="#1b1b1b">${linkifyText(parseInstrumentRef(page.meta.instruments[i]).display)}</text>`,
+    )
+    instOffY += mSize * 1.4
+  }
+
+  // ---- 作者（右下锚，从底部往上：**末行贴区域下沿**，adj629u） ----
+  /**
+   * adj1304（用户要求）：**作者两端对齐**（`config.author_justify`）。
+   *
+   * 没勾选 ⇒ 逐字节保持旧输出（一行一个 `<text data-meta="author_i" text-anchor="end">`）。
+   * 勾选且确有多余 label ⇒ 每行拆成「label + value」：
+   *  · label 统一拉伸到**最长 label 的宽度**（`textLength` + `lengthAdjust="spacing"`），
+   *    右缘固定在 `右边界 − 最宽 value − 半字间隙`；
+   *  · value 仍 `text-anchor="end"` 钉在右边界（Z 块整体右对齐到右边距不变）。
+   * 行高/纵坐标与旧版完全一致（`metaAuthorRowY`）。
+   */
+  const authorSize = Math.max(9, mSize - 1)
+  const authorCols = config.author_justify ? alignAuthorLines(page.meta.authors, authorSize) : null
+  const authorTable = authorCols !== null && authorCols.hasLabel ? authorCols : null
+  const num = (v: number): string => String(Math.round(v * 100) / 100)
+  for (let i = 0; i < page.meta.authors.length; i++) {
+    const pos = posOf(`author_${i}`, { x: 0, y: metaAuthorRowY(i, page.meta.authors.length, mSize) })
+    const fontAttrs = `font-size="${authorSize}" font-family="${mFont}" fill="#1b1b1b"`
+    if (authorTable === null) {
+      parts.push(
+        `<text data-meta="author_${i}" x="${pos.x}" y="${pos.y}" text-anchor="end" ${fontAttrs}>${linkifyText(page.meta.authors[i])}</text>`,
+      )
+      continue
+    }
+    const row = authorTable.rows[i]
+    const valueRight = pos.x
+    const labelRight = valueRight - authorTable.valueW - authorTable.gap
+    if (row.label !== '' && row.value !== '') {
+      // 多字 label：左对齐 + 拉伸到 labelW；单字：贴列右缘（单字没有字间距可拉）
+      const labelAttr =
+        [...row.label].length > 1
+          ? `x="${num(labelRight - authorTable.labelW)}" text-anchor="start" textLength="${num(authorTable.labelW)}" lengthAdjust="spacing"`
+          : `x="${num(labelRight)}" text-anchor="end"`
+      parts.push(`<text class="meta-author-label" ${labelAttr} y="${pos.y}" ${fontAttrs}>${xmlEsc(row.label)}</text>`)
+      parts.push(
+        `<text data-meta="author_${i}" x="${num(valueRight)}" y="${pos.y}" data-meta-anchor-x="${num(valueRight)}" text-anchor="end" ${fontAttrs}>${linkifyText(row.value)}</text>`,
+      )
+      continue
+    }
+    // 没有 label（整行都是值）或值空：退回"整行右对齐"，保证不丢字
+    const text = row.value !== '' ? row.value : row.label
+    parts.push(
+      `<text data-meta="author_${i}" x="${num(valueRight)}" y="${pos.y}" data-meta-anchor-x="${num(valueRight)}" text-anchor="end" ${fontAttrs}>${linkifyText(text)}</text>`,
+    )
+  }
+
+  return parts.join('\n')
+}
+
+/**
+ * 拍号 → SVG 分数：数字上下正对，中间一条横线（传统拍号记法）。
+ * 几何（adj 调整）：横线 = 调式文字垂直中心（基线 - 0.35×字号）；
+ * 分子底部与分母顶部距横线各 2px（分子底≈基线+0.05em，分母顶≈基线-0.85em）。
+ * 支持多个拍号（空格分隔，如 "4/4 (2/4)"）：首个为主拍号（mSize），
+ * 括号内为辅助拍号（mSize-3，两侧带括号）；无法解析的片段按文本原样渲染。
+ * 字体/字号跟随描述头设置（adj45：miaoshu_font/miaoshu_size）。
+ */
+function renderMeterMeta(meter: string, x: number, baseline: number, mFont: string, mSize: number): string {
+  const parts = meter.split(/\s+/).filter(Boolean)
+  const out: string[] = []
+  let gx = 0
+  const auxSize = Math.max(8, mSize - 3)
+  for (const part of parts) {
+    const m = /^\(?(\d+)\s*\/\s*(\d+)\)?$/.exec(part)
+    if (!m) {
+      out.push(
+        `<text x="${x + gx}" y="${baseline}" font-size="${mSize}" font-family="${mFont}" fill="#1b1b1b">${xmlEsc(part)}</text>`,
+      )
+      gx += part.length * 7 + 8
+      continue
+    }
+    const aux = part.startsWith('(')
+    const size = aux ? auxSize : mSize
+    const num = m[1]
+    const den = m[2]
+    const cx = x + gx
+    // 分数半宽：按数字位数估算，两侧略留白
+    const halfW = Math.max(num.length, den.length) * size * 0.32 + 1.5
+    // 横线 = 调式文字垂直中心；分子/分母距线各 2px
+    const lineY = baseline - size * 0.35
+    const numY = lineY - 2 - size * 0.05
+    const denY = lineY + 2 + size * 0.85
+    const frac =
+      `<text x="${cx}" y="${numY.toFixed(1)}" text-anchor="middle" font-size="${size}" font-family="${mFont}" fill="#1b1b1b">${num}</text>` +
+      `<line x1="${(cx - halfW).toFixed(1)}" y1="${lineY.toFixed(1)}" x2="${(cx + halfW).toFixed(1)}" y2="${lineY.toFixed(1)}" stroke="#1b1b1b" stroke-width="1.1"/>` +
+      `<text x="${cx}" y="${denY.toFixed(1)}" text-anchor="middle" font-size="${size}" font-family="${mFont}" fill="#1b1b1b">${den}</text>`
+    if (aux) {
+      out.push(
+        `<text x="${(cx - halfW - 5).toFixed(1)}" y="${(baseline + 2).toFixed(1)}" font-size="${auxSize}" font-family="${mFont}" fill="#1b1b1b">(</text>` +
+          frac +
+          `<text x="${(cx + halfW + 5).toFixed(1)}" y="${(baseline + 2).toFixed(1)}" font-size="${auxSize}" font-family="${mFont}" fill="#1b1b1b">)</text>`,
+      )
+      gx += halfW * 2 + 16
+    } else {
+      out.push(frac)
+      gx += halfW * 2 + 10
+    }
+  }
+  return `<g data-meta="meter" data-meter="${xmlEsc(meter)}">${out.join('')}</g>`
+}
+
+// ============================================================
+// 音符绘制
+// ============================================================
+
+// ============================================================
+// 附点几何（adj411：附点绘制与减时线延伸共用同一份，避免两处各算一次）
+// ============================================================
+
+/**
+ * 首个附点的圆心 x；无附点返回 null。
+ * adj284：空间优先给附点生成独立段（`el === 'dot'`，其 x 即圆心）；
+ * adj291：否则回退「主段起点 + 主时值×每拍宽」（时值优先路径，附点落在主时值结束处）。
+ */
+function dotCenterXOf(note: PlacedToken, noteSize: number): number | null {
+  const t = note.token
+  if (t.dots <= 0) return null
+  const rDot = DOT_R_DOT * noteScaleOf(noteSize)
+  const dotSeg = note.segments?.find((sg) => sg.el === 'dot')
+  if (dotSeg) return dotSeg.x
+  const seg0 = note.segments?.[0]
+  const mainDur = tokenDuration({ diminishCount: t.diminishCount, augmentCount: t.augmentCount, dots: 0 })
+  return seg0 ? seg0.x + mainDur * seg0.perBeat : note.x + noteSize * 0.62 + rDot
+}
+
+/** 末个附点的**右缘** x（供减时线延伸用）；无附点返回 null */
+function dotRightEdgeOf(note: PlacedToken, noteSize: number): number | null {
+  const cx = dotCenterXOf(note, noteSize)
+  if (cx === null) return null
+  const rDot = DOT_R_DOT * noteScaleOf(noteSize)
+  // 第 i 个附点圆心 = cx + i·2r（两附点相切），故末个右缘 = cx + (dots−1)·2r + r
+  return cx + (note.token.dots - 1) * rDot * 2 + rDot
+}
+
+/**
+ * adj629b：段层（`layerScale` = 整层纵向压缩比 k < 1）里**减时线那一块**的**存储坐标补偿**。
+ *
+ * 为什么需要：整层用一个 `<g transform="… scale(1,k)">` 压扁后，`BEAM_H` 只有 0.8px × k ≈ 0.53px
+ * ——渲染出来几乎看不见，两级十六分减时线也会挤在一起（用户报「低八度点出现了，但减时线没了」）。
+ * 所以**减时线的高度与层间距**在存储坐标里预先 ÷k：压扁后仍是原尺寸（线宽、层间距不变）。
+ *
+ * adj650：**低八度点不再做这个补偿**（用户反馈"伴奏段里 `7,` 的低八度点离音符太远"）——
+ * 它跟高八度点一样，随整层一起被压扁即可；否则整层压了 2/3、点却仍在"原尺寸"的距离上
+ * ⇒ 看上去离数字明显偏大。低八度点位置改由 `lowDotY()` 原值给出（见下），层内缩放交给 `<g>`。
+ */
+const layerBlockDiv = (v: number, k: number): number => (k === 1 ? v : v / k)
+
+/**
+ * adj629b（用户要求）：**临时叠加层整层纵向压扁**（不逐个元素压）。
+ *
+ * `renderScoreToSvg` 把同一段层的元素（数字、减时线、括号、小节线、连音线）收进**一个**
+ * `<g transform="translate(0, baseY·(1−k)) scale(1, k)">`（见 `layerGroupKey` / 页组装），
+ * 以层基线为不动点做非等比缩放：`y' = baseY + k·(y − baseY)`。
+ * **字号不变**（数字仍按原字号绘制，只是被压扁），减时线/低八度点那一块在存储坐标里
+ * 已按 `layerBlockDiv` 补偿，压扁后仍是原尺寸 ⇒ 看得见、不互相压。
+ */
+function segmentYScaleWrap(html: string, layerScale: number | undefined, baseY: number | undefined): string {
+  if (html === '' || layerScale === undefined || layerScale === 1 || baseY === undefined) return html
+  // 取到 3 位小数：2/3 的浮点尾（0.6666666666666666）会把 SVG 属性写得很长
+  const k = Math.round(layerScale * 1000) / 1000
+  return `<g transform="translate(0 ${r1n(baseY * (1 - k))}) scale(1 ${k})">${html}</g>`
+}
+
+function renderNote(note: PlacedToken, config: PageConfig): string {
+  const t = note.token
+  // adj629b：段层**字号不变**（用户口径：只压高度）；纵向压扁在 `segmentYScaleWrap` 里统一做
+  const size = config.note_size
+  const digitW = size * 0.62 // 数字槽宽（随字号）
+  const x = note.x
+  const y = note.y
+  const parts: string[] = []
+  const nid = noteposId(note.id)
+  const font = noteFont(config.shuzi_font)
+  // adj69：修饰符缩放因子（18 号字 = 1；字号调大后八度点/附点/增时线/倚音等同比率放大）
+  const s = noteScaleOf(size)
+
+  // 隐藏休止符 8：不绘制（占位）
+  if (t.kind === 'rest' && t.hidden) return ''
+
+  // 变音符号（数字左侧上方，随字号）
+  // adj645：位置与字号按**墨迹**算——`accidentalPenDx` 让墨迹右缘离数字左缘固定净距
+  //   （原来写死 `x − 7s`：对 `#`/`b` 是"多留一段空"，对全角字形 `♮` 则是墨迹**压进数字**）。
+  // adj647：锚点优先取**布局解析好**的 `accidentalGeo`（布局可能收到宿主实测的字形度量）；
+  //   没有该字段（老调用点/无变音）时才回退到内置常量表算一遍。
+  if (t.kind === 'note' && t.accidental) {
+    const sym = t.accidental === '#' ? '#' : t.accidental === '$' ? 'b' : '♮'
+    const penDx = note.accidentalGeo?.penDx ?? accidentalPenDx(size, t.accidental)
+    parts.push(
+      `<text x="${r1n(x + penDx)}" y="${y - 10 * s}" font-size="${r1n(accidentalFontSize(size))}" font-family="${font}" fill="#1b1b1b">${sym}</text>`,
+    )
+  }
+
+  // 高低音点（adj60 层级化：高音点层贴数字顶、低音点层贴数字底/减时线层底，层内间距 INNER_GAP×s）
+  const oct = t.kind === 'note' ? t.octaveShift : 0
+  if (oct !== 0) {
+    const n = Math.abs(oct)
+    // 数字槽宽中心：高/低八度点一律取「数字槽中心」（adj391 用户规则：高八度点与音符水平居中，
+    // 取消 adj19 的左移 1px——项目中其它居中元素（增时线/上方修饰符/注释）也都用这一中心）
+    const dotCx = x + digitW / 2
+    const dc = t.diminishCount
+    // adj629b/adj650：段层（纵向压缩 k）——低八度点与高八度点**同口径**：位置用原值、随整层一起压扁
+    // （adj629b 曾把低八度点也当"减时线块"预先 ÷k 保持原尺寸 ⇒ 整层压了 2/3、点仍在原距离上，
+    //  用户看到的"低八度点离音符太远"就是这个）。减时线那一块的补偿仍保留（见 `layerBlockDiv`）。
+    for (let i = 0; i < n; i++) {
+      const cy = oct > 0 ? octaveDotY(y, i, size) : lowDotY(y, i, dc, size)
+      // 点半径同样随整层等比压扁（与高八度点一致；k = 1 时就是正圆）
+      parts.push(`<circle cx="${dotCx}" cy="${r1n(cy)}" r="${r1n(DOT_R * s)}" fill="#1b1b1b"/>`)
+    }
+  }
+
+  /**
+   * 数字主体（含 notepos 契约；字号随字号）。
+   *
+   * adj907：**删掉了 `t.ghost`（"虚音符"）那条分支** —— 全仓从来没有生产者（`ghost` 字段只在
+   * `types.ts` 声明、只在这里被读一次），那个"给数字两侧加小括号"的画法**从未执行过**。
+   * 括号紧贴数字的写法在本项目里的语义是**连音线连接点**（`(2)` = 结束前一条连音线 + 起下一条，
+   * 见 `docs/SYNTAX.md` 2.7 与 `E-2026-099`/`E-2026-417`），由布局的画弧与配对负责，
+   * **不需要**在这里额外画括号。
+   */
+  const glyph = t.kind === 'rest' ? '0' : t.kind === 'rhythm' ? 'X' : String(t.pitch)
+  parts.push(
+    `<text x="${x}" y="${y}" data-notepos="${nid}" font-size="${size}" font-family="${font}" font-weight="bold" fill="#1b1b1b">${glyph}</text>`,
+  )
+
+  // 附点（adj71）：附点是音符的修饰符——增加前面音符一半时值（1. 总宽 1.5 拍、1/. 0.75 拍，
+  // tokenDuration 已按 ×1.5/×1.75 计算，占位宽度随之增半）；
+  // adj288：主音符与附点在 1.5 倍时值宽内平均分布（三等分）——附点圆心 = 主段（第 1 拍段）右端
+  // = 总宽 2/3 处，数字中心在主段中点 = 1/3 处；原附点紧贴数字右缘（视觉挤在左侧）
+  // adj396/adj411：附点圆心与右缘的几何收敛到 dotCenterXOf/dotRightEdgeOf（与减时线延伸共用）
+  const rDot = DOT_R_DOT * s
+  const dotX0 = dotCenterXOf(note, size) ?? x + digitW + rDot
+
+  // 倚音（adj23/65/97/98/99/100/101/102/103）：前倚音 [65] 排于主音符左上角、后倚音 [h65] 排于右上角
+  // 规范（用户 2026-08-22 + adj100~103 调整）：
+  //  ① 倚音字号 = 主音符 × 0.5（adj105 由 0.4 调大），**加粗**（adj105，与主音符粗体一致）；
+  //  ② 倚音减时线 = 实际时值 +1 条（2[3] → 1 条、2[3/] → 2 条），线**更细**（0.6）、
+  //     间距固定 1.2px（adj100 由 1.8px 减小）；
+  //  ③ 第一条减时线落在「主音符**墨迹高的 2/3** 处」（adj980，用户口径；此前是"与主音符文本上端对齐"）；
+  //     adj101 数字整体下移 1.5px（数字底距线 0.5px）；
+  //  ④ 低八度点紧贴该音符最后一条减时线下方，间距规则同主音符
+  //     （线底 + LAYER_GAP×s + DOT_R×s = 圆心，层内点距 INNER_GAP×s，adj101）；
+  //  ⑤ 无论几个倚音，只有**一条弧线**：起点 = 组中心正下方，控制点 = 起点正下方
+  //     → 前倚音**先向下再弯向右**、后倚音**先向下再弯向左**（二次贝塞尔，adj101）；
+  //     adj102：无低八度点 → 弧线起点 = 最后一条减时线底（直接连接）；
+  //             有低八度点 → 弧线起点 = 最低低八度点底 + LAYER_GAP×s（间距 = 点到减时线的距离）；
+  //  adj103：所有固定 px 间距改为 ×s（主音符缩放因子）随字号等比缩放；多音符（≥2）数字间
+  //          间距由 0.62×字号 缩为 0.5×字号（GRACE_SLOT_RATIO_MULTI），占位宽度同步
+  //  adj396：后倚音**位置规则**（用户规范）——主音符带**增时线或附点**时，
+  //          后倚音移到这些时值元素**之后**（`3 -[h5/]` 的倚音画在 `-` 右侧、
+  //          `3.[h5/]` 画在附点右侧），弧线终点同样落在该尾部元素右缘；
+  //          无增时线也无附点的后倚音仍紧贴数字右上角（既有行为不变）。
+  //  adj632（用户要求）：**倚音自身也能挂修饰符**——写在括号内该倚音之后（如 `6/[5/&tu]`）：
+  //          `&tu`/`&die`/`&da` 画在该倚音**正上方**、`&shy`/`&xhy` 画在该倚音**右侧**，
+  //          尺寸一律随倚音字号（用户口径「与倚音等高」），字形/图形与主音符同款。
+  //  adj633（用户要求）：倚音也能挂**波音**（`&sby`/`&xby`/`&sby+`/`&xby+`，如 `2[3/&sby]`）——
+  //          画在该倚音**正上方**，墨迹宽按「波音 : 所属音符」同一比率随倚音等比缩小。
+  if (t.kind === 'note' && t.gracenotes && t.gracenotes.notes.length > 0) {
+    const gn = t.gracenotes
+    // ①倚音字号 = 主音符 × GRACE_SIZE_RATIO（adj105 定为 0.5，下限 6×s 随字号等比，adj103）
+    // adj632：字号 / 数字槽宽 / 组内间距 / 各倚音槽位偏移收敛到 `graceSlotLayout`
+    // （与布局端同一份几何，见 spaceLayout.ts）
+    const { offs: gOffs, leftExt0: gLeftExt, width: gGroupW, gSize, gW } = graceSlotLayout(gn.notes, size)
+    const gs = gSize / 18 // 倚音缩放因子（高低音点/间距随倚音字号缩放）
+    /**
+     * adj980（**用户 2026-10-18 口径**）：「倚音的减时线，第一条与主音符数字上沿同高 143.9：
+     * **调整为 2/3 主音符高**」。
+     *
+     * 口径：第一条减时线的 y = `基线 − DIGIT_HEIGHT_RATIO × 字号 × 2/3`
+     * （`DIGIT_HEIGHT_RATIO × 字号` 就是主音符数字的墨迹高 ⇒ "2/3 主音符高"）。
+     * 换句话说：相对以前"与数字上沿同高"**下移 1/3 个数字高**（13 号时 143.9 → 147.37）。
+     */
+    const beamTop = y - size * DIGIT_HEIGHT_RATIO * GRACE_BEAM_TOP_RATIO
+    /**
+     * ③ 数字底 = 首条减时线上方 0.5×s（adj101 下移 1.5px 后；间距随字号等比）
+     *    基线 = beamTop - 0.5×s - 字号/9（字号/9 = 2×gs，即数字底到基线的 descender）
+     *
+     * ⚠ adj980：这里以前锚 `mainTop`（主音符数字上沿）—— 减时线下移后必须跟着改成锚 `beamTop`，
+     * 否则那条线会**横穿倚音数字的墨迹**（二者是"数字在上、线在其下方 0.5×s 处"的固定关系）。
+     */
+    const gBaseY = beamTop - 0.5 * s - gSize / 9
+    // adj396：后倚音的锚点（组左缘基准 / 弧线终点）——尾部倚音取「末个时值元素右缘」
+    const tailGrace = graceAtTail(t)
+    let graceAnchorX = x + digitW
+    if (tailGrace) {
+      graceAnchorX = x + digitW
+      if (t.dots > 0) graceAnchorX = Math.max(graceAnchorX, dotX0 + (t.dots - 1) * rDot * 2 + rDot)
+      if (t.augmentCount > 0) {
+        // 空间优先路径的增时线段带 el 标记（点在附点段之后）；时值优先路径按段序取第 augmentCount 段
+        const augSegs = (note.segments ?? []).filter((sg) => sg.el === 'aug')
+        const lastAug = augSegs.length > 0 ? augSegs[augSegs.length - 1] : note.segments?.[t.augmentCount]
+        const augRight = lastAug ? lastAug.x + lastAug.beats * lastAug.perBeat : (note.rightX ?? x + note.width)
+        graceAnchorX = Math.max(graceAnchorX, augRight)
+      }
+    }
+    // 数字水平排列：前倚音从主音符左上角向左依次排；后倚音从锚点向右依次排
+    // adj106：组右端（前倚音）固定与主音符留 1px×s——多音符时组内间距 gapW < 槽宽 gW，
+    // 原公式按 gapW 排组尾会右移侵入主音符区造成重叠；后倚音原公式组左端已固定
+    // adj632：整组宽 = gGroupW（含末个倚音的右侧/上方修饰墨迹），故前倚音的组**左缘**要再往左让出这段墨迹，
+    //         组右缘（最右墨迹）才仍停在「主音符数字左缘 − 1px×s」。
+    // adj636c：倚音上的滑音改画在**左侧**后，首音的左伸墨迹（`leftExt0`）要从**组宽之外**再让出：
+    //         前倚音由 `gGroupW` 自动带出（组左缘再往左），后倚音则把组左缘右移 `leftExt0`，
+    //         否则滑音墨迹会压到主音符的收尾元素（数字/增时线/附点）上。
+    /**
+     * adj988（**用户 2026-10-18 实报**）：`7/$[6/]` 里**变音记号（`$`→`b`）与前倚音重叠**。
+     *
+     * 用户口径：「当两者共存时，**倚音给升降调符让位**，即升降符更靠近主音符 7，
+     * 以主音符往左算：主音符 7、升降符 b、倚音 6/」。
+     *
+     * 所以前倚音组的**右缘**要停在变音记号占位（`accLead` = 布局已算好的 `leadW`）之左，
+     * 而不是像原来那样紧贴主音符左缘（`x − 1s`）⇒ 那样必然压到 `b` 上 ✗。
+     * 占位总宽不变（布局本来就同时算了 `accW + graceGroupW`），只是组内让位。
+     */
+    const accLead =
+      t.kind === 'note' && t.accidental ? (note.accidentalGeo?.leadW ?? accidentalBodyW(size, t.accidental)) : 0
+    const gx0 = gn.after
+      ? graceAnchorX + 1 * s + gLeftExt
+      : x - (accLead > 0 ? accLead : 1 * s) - gGroupW
+    const gxs: number[] = gOffs.map((o) => gx0 + o)
+    const gy = gBaseY // 同基线（水平排列）
+    // 组范围（数字区）：组首 x、组尾 x
+    const gx1 = Math.min(...gxs)
+    const gx2 = Math.max(...gxs) + gW
+    // ② 减时线参数：首条 = `beamTop`（adj980 起 = 主音符墨迹高的 2/3 处），间距 GRACE_BEAM_GAP×s（adj103 等比）
+    const maxDim = Math.max(0, ...gn.notes.map((g) => g.diminishCount + 1))
+    const beamGap = GRACE_BEAM_GAP * s
+    const lineHalf = (GRACE_LINE_W * s) / 2 // 减时线/弧线半线宽（线底 = 线中心 + 半线宽）
+    for (let gi = 0; gi < gn.notes.length; gi++) {
+      const g = gn.notes[gi]
+      const gx = gxs[gi]
+      // 小高低音点（规则同主音符，以倚音字号为参照）
+      if (g.octaveShift !== 0) {
+        const cx = gx + gW / 2
+        const n = Math.abs(g.octaveShift)
+        for (let d = 0; d < n; d++) {
+          const cy =
+            g.octaveShift > 0
+              ? octaveDotY(gy, d, gSize)
+              : // ④ 低八度点：该音符最后一条减时线底（线中心 + 半线宽）+ LAYER_GAP×s + DOT_R×s
+                beamTop + g.diminishCount * beamGap + lineHalf + (LAYER_GAP + DOT_R) * gs + d * (DOT_R * 2 + INNER_GAP) * gs
+          parts.push(`<circle cx="${r1n(cx)}" cy="${r1n(cy)}" r="${r1n(DOT_R * gs)}" fill="#1b1b1b"/>`)
+        }
+      }
+      // 变音
+      if (g.accidental) {
+        const sym = g.accidental === '#' ? '#' : g.accidental === '$' ? 'b' : '♮'
+        parts.push(
+          `<text x="${gx - 3.5 * s}" y="${gy - 6 * s}" font-size="${r1n(8 * s)}" font-family="${font}" fill="#1b1b1b">${sym}</text>`,
+        )
+      }
+      // ①数字：adj105 加粗（与主音符粗体一致）
+      parts.push(
+        `<text x="${gx}" y="${gy}" font-size="${gSize}" font-family="${font}" font-weight="bold" fill="#1b1b1b">${g.pitch}</text>`,
+      )
+      // adj632（用户要求）：**倚音自身的修饰符**——写在该倚音数字之后（如 `6/[5/&tu]`）。
+      //   · `&tu`/`&die`/`&da`：画在该倚音**正上方**，字形与主音符同款（粗体 T / 又 / 扌；`die` 横向缩 0.75）；
+      //   · adj633（用户要求）：`&sby`/`&xby`（及加长的 `&sby+`/`&xby+`）波音也画在**正上方**，
+      //     用主音符同款矢量图形，墨迹宽按「波音 : 所属音符」**同一比率**随倚音等比缩小（`mordentInkW`）；
+      //   · `&shy`/`&xhy`：画在该倚音**右侧**，与主音符同款矢量图形。
+      // adj632b（用户要求「记号要随倚音变小，别比倚音还大」）：字号 = **记号所属音符字号 × SYM_FONT_RATIO**
+      //   ——与主音符的 `&tu` 等同一把尺子（主音符 `SYM_FS = 10×s`，s = 音符字号/18），
+      //   故记号随倚音一起等比缩小；实测与用户示例图的 T:5 高度比吻合（见 spacing.ts 的 SYM_FONT_RATIO）。
+      const mfs = markFontSize(gSize)
+      // adj633：该倚音的**上方层顶**——一个倚音上写多个上方记号（如 `&tu` + `&sby`）时逐层往上排，
+      //   与主音符的层进同一套（每层抬「记号字号 × 数字高比」）；右侧记号（滑音）不占上方层。
+      let gAboveTop = g.octaveShift > 0 ? octaveTopY(gy, g.octaveShift, gSize) : gy - DIGIT_INK_ASC_RATIO * gSize
+      for (const sym of g.symbols ?? []) {
+        if (sym === 'shy' || sym === 'xhy') {
+          // adj632b/adj636c：倚音上的滑音几何见 `graceSlideInk`——墨迹高 = 数字墨迹高、纵向与数字墨迹对齐、
+          // **右缘贴数字左缘**（与主音符一样画在音的**左侧**，语义都是"滑进本音"）。
+          const ink = graceSlideInk(sym, gSize)
+          parts.push(
+            glyphMarkup(
+              MODIFIER_GLYPHS[sym],
+              { x: gx + ink.dx, y: gy + ink.dy, w: 0, h: ink.h },
+              'height',
+              '#1b1b1b',
+            ),
+          )
+        } else if ((GRACE_MORDENT_CODES as readonly string[]).includes(sym)) {
+          // adj633：倚音上的**波音**——矢量图形画在该倚音正上方、以数字槽中心居中。
+          // 纵向沿用主音符那把尺子：先取该层「文字基线位」（层顶 − 层距×gs − descender），
+          // 图形中心 = 基线 − 2×gs（同主音符波音的 `wy = symY - 2s`）；尺寸只按 gs 缩（gs = 倚音缩放因子）。
+          const mcx = gx + gW / 2
+          const my = gAboveTop - LAYER_GAP * gs - mfs * DESC_RATIO
+          const w = mordentInkW(sym, gs)
+          parts.push(
+            glyphMarkup(
+              MODIFIER_GLYPHS[sym as ModifierGlyphKey],
+              { x: mcx - w / 2, y: my - 2 * gs, w, h: 0 },
+              'width',
+              '#1b1b1b',
+            ),
+          )
+          gAboveTop = my - mfs * DIGIT_HEIGHT_RATIO
+        } else if (ABOVE_GLYPH[sym]) {
+          const mcx = gx + gW / 2 // 倚音数字槽中心
+          // 层顶与主音符同一套口径：有**高八度点**时从「最高高八度点层顶」起算（否则记号会压在点上），
+          // 无高八度点时从**数字墨迹顶**起算。底 = 层顶 − LAYER_GAP×gs；基线再抬一个 descender。
+          const my = gAboveTop - LAYER_GAP * gs - mfs * DESC_RATIO
+          if (sym === 'die') {
+            parts.push(
+              `<text x="0" y="0" text-anchor="middle" transform="translate(${r1n(mcx)},${r1n(my)}) scale(0.75,1)" font-size="${r1n(mfs)}" font-weight="bold" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(ABOVE_GLYPH[sym])}</text>`,
+            )
+          } else {
+            parts.push(
+              `<text x="${r1n(mcx)}" y="${r1n(my)}" text-anchor="middle" font-size="${r1n(mfs)}" font-weight="bold" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(ABOVE_GLYPH[sym])}</text>`,
+            )
+          }
+          gAboveTop = my - mfs * DIGIT_HEIGHT_RATIO
+        }
+      }
+    }
+    // ②减时线（跨组平行横线）：实际时值 +1 条；线宽 GRACE_LINE_W×s、间距 GRACE_BEAM_GAP×s
+    for (let d = 0; d < maxDim; d++) {
+      const ly = beamTop + d * beamGap
+      parts.push(
+        `<line x1="${r1n(gx1)}" y1="${r1n(ly)}" x2="${r1n(gx2)}" y2="${r1n(ly)}" stroke="#1b1b1b" stroke-width="${GRACE_LINE_W * s}"/>`,
+      )
+    }
+    // ⑤ 一条弧线（二次贝塞尔 = 抛物线）：起点 = 组中心正下方；控制点 = 起点正下方（先向下再弯向主音符）
+    //    adj102：无低八度点 → 起点 = 最后一条减时线底（弧线与线**直接连接**）；
+    //            有低八度点 → 起点 = 最低低八度点底 + LAYER_GAP×s（与点留间距 = 点到减时线的距离）
+    const gcx = (gx1 + gx2) / 2 // 倚音组中心 x
+    let lowDotBottom = -Infinity // 组内最低低八度点底 y
+    for (const g of gn.notes) {
+      if (g.octaveShift < 0) {
+        const nLow = Math.abs(g.octaveShift)
+        const lastBeamBottom = beamTop + g.diminishCount * beamGap + lineHalf // 该音符最后一条线底（线中心+半线宽）
+        const cy = lastBeamBottom + (LAYER_GAP + DOT_R) * gs + (nLow - 1) * (DOT_R * 2 + INNER_GAP) * gs
+        lowDotBottom = Math.max(lowDotBottom, cy + DOT_R * gs)
+      }
+    }
+    const arcStartY =
+      lowDotBottom > -Infinity ? lowDotBottom + LAYER_GAP * gs : beamTop + (maxDim - 1) * beamGap + lineHalf
+    const arcDrop = 3 * s // 终点比起点低（垂度，随字号等比）
+    const arcW = GRACE_LINE_W * s // 弧线宽 = 减时线宽
+    if (gn.after) {
+      // 后倚音（组在右）：终点 = 锚点下方 → 先向下再弯向左
+      // adj396：尾部倚音的锚点 = 增时线/附点右缘（弧线随之落在这些元素之后）
+      parts.push(
+        `<path d="M ${r1n(gcx)} ${r1n(arcStartY)} Q ${r1n(gcx)} ${r1n(arcStartY + arcDrop)} ${r1n(graceAnchorX)} ${r1n(arcStartY + arcDrop)}" fill="none" stroke="#1b1b1b" stroke-width="${arcW}"/>`,
+      )
+    } else {
+      // 前倚音（组在左）：终点 = 主音符数字左缘（= x）下方 → 先向下再弯向右
+      parts.push(
+        `<path d="M ${r1n(gcx)} ${r1n(arcStartY)} Q ${r1n(gcx)} ${r1n(arcStartY + arcDrop)} ${r1n(x)} ${r1n(arcStartY + arcDrop)}" fill="none" stroke="#1b1b1b" stroke-width="${arcW}"/>`,
+      )
+    }
+  }
+
+  // 附点（adj71）：圆心与半径在倚音之前已算好（adj396），此处只绘制
+  // adj291：附点圆心 = 主时值部分结束处 = 段起点 + 主时值×每拍宽
+  //（1.5 倍时值宽的三等分点，数字中心在主时值段中心 = 1/3 处）。
+  // 此前误用 segments[0] 整段右端：总时值 < 1 拍的音符（如 2/. 0.75 拍）主/附点
+  // 合并为一段，段右端 = 音符结束位置 → 附点圆点压到下一音符（如 2/. 3//）
+  if (t.dots > 0) {
+    for (let i = 0; i < t.dots; i++) {
+      // 第 i 个附点：圆心在主时值结束处（第 2 个起紧贴前一个，间距 2×r）
+      const cx = dotX0 + i * rDot * 2
+      // 垂直居中于数字（数字视觉中心 ≈ 基线-0.4×字号）
+      parts.push(`<circle cx="${r1n(cx)}" cy="${r1n(y - size * 0.4)}" r="${r1n(rDot)}" fill="#1b1b1b"/>`)
+    }
+  }
+
+  /**
+   * 增时线（`-`，每条占一拍）。
+   *
+   * adj35：第 i 条增时线在第 i+1 拍段；adj73：垂直居中于音符数字（数字中心 = 基线−0.4×字号）。
+   *
+   * adj905w（**用户口径，看图定标**）：「**增时线在格里也左对齐，与音符一致**」。
+   *
+   * 由来：用户开「预览可视调试」看 `{bz 1, 3, 5, 3,} 3 - - - ||` —— 段层数字落在**格左缘 + off**，
+   * 而增时线画在**拍段居中**（旧式 `beatStart + (pb − digitW)/2`）⇒ 两层看着错开，越往后越明显。
+   * 用户原话：「清楚了，是因为增时线在格里居中对齐导致的，那把增时线都按格里左对齐，与音符一致」。
+   *
+   * 落法：增时线**墨迹左缘 = 该拍格左缘 + `off`**，`off = 数字 x − 本音符第 0 格左缘`
+   * —— 与数字**同源**（不是另算一套）。两条布局路径的自然结果：
+   *  · **空间优先**（应用默认）`off = 0` ⇒ 增时线左缘 = 格左缘 = 段层数字所在列（逐拍重合）；
+   *  · **时值优先** `off ≈ 6.4`（数字在拍槽内居中）⇒ 增时线保持与数字同一偏移。
+   * 无拍段信息时（理论上不该发生）保留旧的"拍段内居中"兜底。
+   */
+  const augY = y - size * 0.4
+  if (t.augmentCount > 0) {
+    const seg0 = note.segments?.[0]
+    const pb0 = seg0 ? seg0.perBeat : note.duration > 0 ? note.width / note.duration : digitW
+    const segStart0 = seg0 ? seg0.x : x + 6 - Math.min(note.duration, 1) * (pb0 / 2)
+    /** 数字相对**本音符第 0 格**左缘的偏移（`off`）—— 增时线按同一偏移左对齐 */
+    const inCellOff = seg0 ? x - seg0.x : 0
+    for (let i = 0; i < t.augmentCount; i++) {
+      const seg = note.segments?.[i + 1]
+      const beatStart = seg ? seg.x : segStart0 + (1 + i) * pb0
+      const pb = seg ? seg.perBeat : pb0
+      const lx = seg ? r1n(beatStart + inCellOff) : r1n(beatStart + (pb - digitW) / 2)
+      // adj73："-" 字符随音符字号；dominant-baseline=central 使字符垂直居中于数字中心；
+      // text-anchor=middle 使字符在占位宽（digitW）内居中；adj76：加粗与数字一致
+      // adj374：增时线同样带 data-notepos（与数字同一 id）——播放高亮/光标联动能覆盖到增时线，
+      // 此前只有数字带 id，试听时高亮"只显示到数字、后面的 -- 没有高亮"。
+      // 属性放在末尾：不影响既有断言/外部消费方对前面属性顺序的假设。
+      parts.push(
+        `<text x="${r1n(lx + digitW / 2)}" y="${augY}" text-anchor="middle" dominant-baseline="central" font-weight="bold" font-size="${size}" font-family="${font}" fill="#1b1b1b" data-notepos="${nid}">-</text>`,
+      )
+    }
+  }
+
+  // 装饰符号（& 编码，M7d）：tr 颤音带波浪线，其余画上方小文本；
+  // adj60：上方装饰层从「高八度点层顶（无高八度则数字顶）」往上，按书写顺序逐层排（层间距 LAYER_GAP×s）
+  // adj294：&zkh/&ykh 为独立 bracket token，不再作为音符 symbols——由 renderBracket 单独渲染
+  if (t.symbols.length > 0) {
+    // 当前已占用的上方层顶（高八度点层顶优先；无高八度点则为数字顶）
+    let aboveTop = oct > 0 ? octaveTopY(y, Math.abs(oct), size) : y - size * DIGIT_HEIGHT_RATIO
+    const SYM_FS = Math.round(10 * s) // 装饰符号字号（随字号）
+    for (const sym of t.symbols) {
+      // 上方符号（adj109 扩展 & 编码修饰符）：文字底 = aboveTop - LAYER_GAP×s；基线 = 底 - descender
+      const symY = aboveTop - SYM_LAYER_GAP * s - SYM_FS * DESC_RATIO
+      const cx = x + digitW / 2 // 数字槽中心
+        if (sym === 'tr' || sym === 'cy+') {
+          // 颤音：tr（粗体，adj112）+ 正弦波（adj115：周期数随音符点位/时值——每拍约 2 周期）
+          parts.push(
+            `<text x="${x}" y="${r1n(symY)}" font-size="${SYM_FS}" font-weight="bold" font-style="italic" font-family="${FONT_CN}" fill="#1b1b1b">tr</text>`,
+          )
+          // adj116：正弦波更细密（每拍约 4 周期）；adj117：正弦波与 tr 文本垂直居中对齐
+          // （tr 文本视觉中心 ≈ 基线 - 4×s，正弦波中心线取同高）
+          const cycles = Math.max(4, Math.round((note.duration || 1) * 4))
+          parts.push(wavePath(x + 16 * s, symY - 4 * s, x + 34 * s, 1, cycles))
+        } else if (sym === 'cy') {
+          // 颤音：仅 tr 文本（粗体，adj112；&cy 不带波浪线，&cy+ 才带）
+          parts.push(
+            `<text x="${x}" y="${r1n(symY)}" font-size="${SYM_FS}" font-weight="bold" font-style="italic" font-family="${FONT_CN}" fill="#1b1b1b">tr</text>`,
+          )
+        } else if (sym === 'bc') {
+          // 保持音：上方短横线（adj124：尺寸 ×0.8）
+          parts.push(
+            `<line x1="${r1n(cx - 3.6 * s)}" y1="${r1n(symY - 2 * s)}" x2="${r1n(cx + 3.6 * s)}" y2="${r1n(symY - 2 * s)}" stroke="#1b1b1b" stroke-width="${r1n(2 * s)}"/>`,
+          )
+        } else if (sym === 'zy') {
+          // 重音：上方线形 > 符号（adj112 非实心；adj113 调小 + 上移；adj124 尺寸 ×0.8）
+          parts.push(
+            `<path d="M ${r1n(cx - 3.2 * s)} ${r1n(symY - 5 * s)} L ${r1n(cx + 2 * s)} ${r1n(symY - 2 * s)} L ${r1n(cx - 3.2 * s)} ${r1n(symY + 1 * s)}" fill="none" stroke="#1b1b1b" stroke-width="1.5"/>`,
+          )
+        } else if (sym === 'dy') {
+          // 顿音：上方实心倒三角（尖朝下；adj113 上移；adj124 尺寸 ×0.8）
+          parts.push(
+            `<path d="M ${r1n(cx - 3.2 * s)} ${r1n(symY - 4.4 * s)} L ${r1n(cx + 3.2 * s)} ${r1n(symY - 4.4 * s)} L ${r1n(cx)} ${r1n(symY + 1.6 * s)} Z" fill="#1b1b1b"/>`,
+          )
+        } else if (sym === 'yc') {
+          // adj458（用户要求）：延长记号改用**用户提供的矢量图形**（同上），不再手绘"点 + 半圆弧"。
+          // 摆放沿用旧几何：旧图形墨迹 = 宽 9.6s（cx ± 4.8s）、纵向 cy0-2.8s ~ cy0+1.6s
+          // （cy0 = symY - 1.5s，adj113 下移、adj124 尺寸 ×0.8）⇒ 墨迹中心 = symY - 2.1s。
+          // 高度交给图形自身比例（`fit='width'`）：新图宽高比 1.89，比旧手绘的 2.18 略高一点。
+          // 层顶更新仍走下方 `symY - 8.7s` 的既有分支（留有富余，不受新图高度影响）。
+          parts.push(
+            glyphMarkup(MODIFIER_GLYPHS.yc, { x: cx - 4.8 * s, y: symY - 2.1 * s, w: 9.6 * s, h: 0 }, 'width', '#1b1b1b'),
+          )
+        } else if (sym === 'sby' || sym === 'xby' || sym === 'sby+' || sym === 'xby+') {
+          // adj458（用户要求）：波音改用**用户提供的矢量修饰符**（`./modifierGlyphs`，由
+          // `scripts/gen-modifier-glyphs.mjs` 从 `public/icons/*.svg` 生成），不再手绘锯齿线。
+          //   · 横向占位沿用此前逐轮调好的值（2.5 齿 = 9s、3.5 齿 = 13.5s），以数字槽中心 cx 居中；
+          //   · 高度交给图形自身比例（`fit='width'`）——「复下波音」中带竖线，天生比「复上波音」高；
+          //   · 垂直中心沿用 adj125 定下的 wy（= symY - 2s）。
+          // adj633：宽度算式抽到 `spaceLayout.mordentInkW`（倚音上的波音共用同一把尺子，见该函数）。
+          // 旧矢量实现（斜上细线 0.7 / 斜下粗线 1.8、adj113~adj125）随之移除；
+          // 需要退回旧画法时，从 git 历史取回该分支即可。
+          const w = mordentInkW(sym, s)
+          const wy = symY - 2 * s
+          parts.push(
+            glyphMarkup(
+              MODIFIER_GLYPHS[sym as ModifierGlyphKey],
+              { x: cx - w / 2, y: wy, w, h: 0 },
+              'width',
+              '#1b1b1b',
+            ),
+          )
+        } else if (sym === 'shy' || sym === 'xhy') {
+          // adj458（用户要求）：滑音改用**用户提供的矢量修饰符**（同上），不再手绘弧线 + 箭头。
+          // adj479：摆放几何抽到 `layout/spaceLayout.ts` 的 `slideGlyphInk`（与布局占宽**同源**）——
+          // 渲染端按它的 `dx/dy/w/h` 放置（按高度贴合 `fit='height'`），布局端按同一份宽度给音符占位。
+          // adj636b（用户要求）：记号改画在数字**左侧**（`dx` 为负）——"滑进本音"的记号写在音的左边；
+          //   再让开该音左侧已有的东西：变音角标占位、前倚音组占用的横向范围（否则会压在 `#` 或倚音上）。
+          //   高度/大小不变。
+          // adj647：角标占宽优先用布局解析好的 `accidentalGeo.leadW`（可能来自宿主实测）
+          const accW =
+            t.kind === 'note' && t.accidental
+              ? (note.accidentalGeo?.leadW ?? accidentalBodyW(size, t.accidental))
+              : 0
+          const gnSlide = t.kind === 'note' ? t.gracenotes : undefined
+          const graceL = gnSlide && !gnSlide.after ? 1 * s + graceSlotLayout(gnSlide.notes, size).width : 0
+          const ink = slideGlyphInk(sym, size, Math.max(accW, graceL))
+          parts.push(
+            glyphMarkup(
+              MODIFIER_GLYPHS[sym as ModifierGlyphKey],
+              { x: x + ink.dx, y: y + ink.dy, w: 0, h: ink.h },
+              'height',
+              '#1b1b1b',
+            ),
+          )
+        } else if (ABOVE_GLYPH[sym]) {
+          // adj334：吐音/打音/叠音——音符正上方居中显示一个粗体单字（T / 扌 / 又）。
+          // 用中文黑体栈（FONT_CN）保证 /扌/又 可见；粗体 + 居中于数字槽。
+          // adj335：叠音「又」显示宽度缩为 3/4（横向 scale 0.75）——以数字槽中心为锚缩放，
+          // 用 translate(cx,symY) + scale(0.75,1) + text-anchor="middle" 保持视觉居中。
+          if (sym === 'die') {
+            parts.push(
+              `<text x="0" y="0" text-anchor="middle" transform="translate(${r1n(cx)},${r1n(symY)}) scale(0.75,1)" font-size="${SYM_FS}" font-weight="bold" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(ABOVE_GLYPH[sym])}</text>`,
+            )
+          } else {
+            parts.push(
+              `<text x="${r1n(cx)}" y="${r1n(symY)}" text-anchor="middle" font-size="${SYM_FS}" font-weight="bold" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(ABOVE_GLYPH[sym])}</text>`,
+            )
+          }
+        } else if (DYN_MARKS.has(sym)) {
+          // 力度/速度标记（adj）：音符上方花体（斜体加粗），居中于数字槽。
+          // 不用 Bravura 等非系统音乐字体，避免缺字；花体字栈带通用 fallback 保证可见
+          parts.push(
+            `<text x="${r1n(cx)}" y="${r1n(symY)}" text-anchor="middle" font-size="${SYM_FS}" font-style="italic" font-weight="bold" font-family="${FONT_SCRIPT}" fill="#1b1b1b">${xmlEsc(sym)}</text>`,
+          )
+        } else {
+          // 其余编码：上方小文本（既有行为）
+          parts.push(
+            `<text x="${x}" y="${r1n(symY)}" font-size="${SYM_FS}" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(sym)}</text>`,
+          )
+        }
+        // 更新层顶：文字顶 = 基线 - ascent（0.8×字号）；延长记号弧顶更高单独处理（adj124 缩 80%）
+        aboveTop = sym === 'yc' ? symY - 8.7 * s : symY - SYM_FS * DIGIT_HEIGHT_RATIO
+      }
+    }
+
+  // 减时线由 computeBeams 按拍分组绘制（M3：同一拍内相连）
+  // 音符备注（引号注释，adj62）—— 字号 = 音符字体高度的一半（0.5×note_size）；
+  // 置于上方最高层之上（高八度点/装饰符号之后），数字中心居中
+  // adj392：紧接注释引号后的 + / - 逐级抬升/降低注释文本（每级 NOTE_COMMENT_RAISE px，
+  // 与跳房子 [+/[-、连音线 (+/(- 同一套记法）；其余元素不动，供用户手动避让
+  const commentRaise = (t.commentPlus ?? 0) - (t.commentMinus ?? 0)
+  if (t.comment) {
+    const cfs = Math.max(7, Math.round(size * NOTE_COMMENT_FONT_RATIO))
+    // 注释层顶：装饰符号处理后的层顶（无符号则高八度点层顶/数字顶）
+    let aboveTop = y - size * DIGIT_HEIGHT_RATIO
+    if (oct > 0) aboveTop = octaveTopY(y, Math.abs(oct), size)
+    if (t.symbols.length > 0) {
+      const SYM_FS = Math.round(10 * s)
+      const nTop = t.symbols.length
+      aboveTop -= nTop * (SYM_FS * (DIGIT_HEIGHT_RATIO + DESC_RATIO) + LAYER_GAP * s)
+    }
+    const base = aboveTop - LAYER_GAP * s - cfs * DESC_RATIO - commentRaise * NOTE_COMMENT_RAISE // 注释文字底距上层元素顶 LAYER_GAP×s
+    parts.push(
+      `<text x="${r1n(x + digitW / 2)}" y="${r1n(base)}" text-anchor="middle" font-size="${cfs}" font-family="${FONT_CN}" fill="#555">${linkifyText(t.comment)}</text>`,
+    )
+  }
+
+  // adj303：乐器名注释（@乐器名 / @@ 后第一个音符正上方标注；仅 config.showInstrument 开启时）
+  if (config.showInstrument === true && note.instrumentLabel) {
+    const ifs = Math.max(7, Math.round(size * NOTE_COMMENT_FONT_RATIO))
+    // 位于注释层顶之上（有注释再往上，否则数字/高音点/装饰之上）
+    let iTop = y - size * DIGIT_HEIGHT_RATIO
+    if (oct > 0) iTop = octaveTopY(y, Math.abs(oct), size)
+    if (t.symbols.length > 0) {
+      const SYM_FS = Math.round(10 * s)
+      const nTop = t.symbols.length
+      iTop -= nTop * (SYM_FS * (DIGIT_HEIGHT_RATIO + DESC_RATIO) + LAYER_GAP * s)
+    }
+    if (t.comment) {
+      const cfs = Math.max(7, Math.round(size * NOTE_COMMENT_FONT_RATIO))
+      iTop -= LAYER_GAP * s + cfs * DESC_RATIO + cfs // 注释占位高
+      iTop -= commentRaise * NOTE_COMMENT_RAISE // adj392：注释被 +/- 抬降后，其上的乐器名随之同向平移
+    }
+    const ibase = iTop - LAYER_GAP * s - ifs * DESC_RATIO
+    parts.push(
+      `<text x="${r1n(x + digitW / 2)}" y="${r1n(ibase)}" text-anchor="middle" font-size="${ifs}" font-family="${FONT_CN}" fill="#888">${xmlEsc(note.instrumentLabel)}</text>`,
+    )
+  }
+
+  // adj1161（用户 2026-10-25）：「0{jz 16}」在预览里只有一个 0，看不出这是间奏——
+  // 在 0 正上方标一行「间奏16拍」。位置按**已有上层元素**（装饰/注释/乐器名）继续往上叠，
+  // 与音符注释同一套字号/留白，不改排版宽度（间奏仍是零宽、只影响播放时长）。
+  if (t.kind === 'rest' && t.interludeBeats !== undefined) {
+    const ifs0 = Math.max(7, Math.round(size * NOTE_COMMENT_FONT_RATIO))
+    let top = y - size * DIGIT_HEIGHT_RATIO
+    if (t.symbols.length > 0) {
+      const SYM_FS = Math.round(10 * s)
+      top -= t.symbols.length * (SYM_FS * (DIGIT_HEIGHT_RATIO + DESC_RATIO) + LAYER_GAP * s)
+    }
+    if (t.comment) {
+      top -= LAYER_GAP * s + ifs0 * DESC_RATIO + ifs0 + commentRaise * NOTE_COMMENT_RAISE
+    }
+    if (config.showInstrument === true && note.instrumentLabel) {
+      top -= LAYER_GAP * s + ifs0 * DESC_RATIO + ifs0
+    }
+    const base = top - LAYER_GAP * s - ifs0 * DESC_RATIO
+    parts.push(
+      `<text class="jp-interlude-label" x="${r1n(x + digitW / 2)}" y="${r1n(base)}" text-anchor="middle" font-size="${ifs0}" font-family="${FONT_CN}" fill="#555">间奏${t.interludeBeats}拍</text>`,
+    )
+  }
+
+  return parts.join('\n')
+}
+
+// ============================================================
+// 小节线绘制
+// ============================================================
+
+function renderBarline(bar: PlacedBarline, noteSize = 18, noteFontFamily = FONT_CN): string {
+  // 纯跳房子起点（] 后连续 [ 或行首）：只承载跳房子线，不画小节线竖线（adj26）
+  if (bar.voltaOnly) return ''
+  const { x, yTop, yBottom } = bar
+  const parts: string[] = []
+  const h = (yBottom - yTop).toFixed(1)
+  const draw = (off: number, w: number) =>
+    `<rect x="${x + off}" y="${yTop}" width="${w}" height="${h}" fill="#1b1b1b"/>`
+  // adj69：小节线高度/反复点随曲部字号缩放（线宽与占位保持，避免布局占位连锁变化）
+  const s = noteScaleOf(noteSize)
+  // 反复点（r=BARLINE_DOT_R×s，adj58/104 调小），off 为几何给出的圆心偏移；
+  // 垂直对称于小节线中心 ±BARLINE_DOT_OFF×s
+  const dotR = BARLINE_DOT_R * s
+  const dots = (off: number) => {
+    const midY = (yTop + yBottom) / 2
+    return (
+      `<circle cx="${x + off}" cy="${(midY - BARLINE_DOT_OFF * s).toFixed(1)}" r="${r1n(dotR)}" fill="#1b1b1b"/>` +
+      `<circle cx="${x + off}" cy="${(midY + BARLINE_DOT_OFF * s).toFixed(1)}" r="${r1n(dotR)}" fill="#1b1b1b"/>`
+    )
+  }
+  // adj391：线组几何统一由 spacing.ts 的 barlineGeometry 产出——**以小节线中心 x 对称**，
+  // 线宽 细 1 / 粗 2（用户规则）、线与线 1px、线与点 1.2px；渲染与布局占位共用同一份定义。
+  // `|/` 不绘制也不占位；`|*` 不绘制但占位（几何同 `|`）。
+  if (bar.type !== '|/' && bar.type !== '|*') {
+    const geom = barlineGeometry(bar.type)
+    for (const ln of geom.lines) parts.push(draw(ln.off, ln.w))
+    for (const cx of geom.dots) parts.push(dots(cx))
+  }
+
+  // 线组右缘（相对中心 x）：临时节拍分数、小节线修饰符都以此起排（adj391 改用几何，不再写死偏移表）
+  const barRightEdge = barlineGeometry(bar.type).total / 2
+
+  // 小节线备注；adj67：|"P:2/4" 临时节拍 → 小节线右侧画分数（上下数字+横线，整体高度与小节线等高，随字号 adj69）
+  // adj86：|"p:2/4" 与 |"P:2/4" 等效（大小写不敏感）
+  // adj357：字体=音符字体（shuzi_font）、字号=音符字号、加粗；分数高度缩减为正常字号的 2/3（紧凑，不压小节线）
+  if (bar.comment) {
+    const pm = /^p:\s*(\d+)\s*\/\s*(\d+)$/i.exec(bar.comment)
+    if (pm) {
+      const size = noteSize // 分数字号 = 音符字号（与音符一致）
+      const hScale = 2 / 3 // 高度缩减为正常字号高度的 2/3（围绕小节线中点纵向压缩）
+      const halfW = Math.max(pm[1].length, pm[2].length) * size * 0.32 + 1.5 * s
+      const midY = (yTop + yBottom) / 2
+      const lineY = midY - s // 横线略上移，使分数整体居中于小节线
+      const numY = lineY - 2 * s - size * 0.05
+      const denY = lineY + 2 * s + size * 0.85
+      // 分数中心：左缘 = 小节线右缘 + 2px×s（adj68：左右留空），即 fx = 右缘 + 2s + halfW
+      const fx = x + barRightEdge + 2 * s + halfW
+      parts.push(
+        `<g transform="translate(0,${midY.toFixed(1)}) scale(1,${hScale}) translate(0,${(-midY).toFixed(1)})">` +
+          `<text x="${fx.toFixed(1)}" y="${numY.toFixed(1)}" text-anchor="middle" font-weight="bold" font-size="${size}" font-family="${noteFontFamily}" fill="#1b1b1b">${pm[1]}</text>` +
+          `<line x1="${(fx - halfW).toFixed(1)}" y1="${lineY.toFixed(1)}" x2="${(fx + halfW).toFixed(1)}" y2="${lineY.toFixed(1)}" stroke="#1b1b1b" stroke-width="1"/>` +
+          `<text x="${fx.toFixed(1)}" y="${denY.toFixed(1)}" text-anchor="middle" font-weight="bold" font-size="${size}" font-family="${noteFontFamily}" fill="#1b1b1b">${pm[2]}</text>` +
+        `</g>`,
+      )
+    } else {
+      parts.push(
+        `<text x="${x}" y="${yBottom + 13}" text-anchor="middle" font-size="10" font-family="${FONT_CN}" fill="#333">${linkifyText(bar.comment)}</text>`,
+      )
+    }
+  }
+
+  // adj126：小节线修饰符（&fine 曲终 / &dc 从头反复 / &ds 大反复 → 正下方文本；
+  // &ty 大跳跃 → 正上方 ⊕；&hs 花S → 正上方花 S 记号）
+  // adj206：同一条小节线可叠加多个修饰符（如 |&ty&ds）——全部渲染；
+  // 正上方记号（ty/hs）横向依次排开，正下方文本（fine/dc/ds）也横向排开
+  if (bar.marks?.length) {
+    // adj391：横排基准沿用原式（线组右缘的一半 = 总宽/4），右缘由几何给出，不再写死偏移表
+    const mx = x + barRightEdge / 2
+    // 上方记号组（ty/hs）
+    const upMarks = bar.marks.filter((m) => m === 'ty' || m === 'hs')
+    upMarks.forEach((m, idx) => {
+      const ux = mx + (idx - (upMarks.length - 1) / 2) * 9 * s
+      if (m === 'ty') {
+        /**
+         * 大跳跃记号 `𝄌`（Unicode `U+1D10C`）。
+         *
+         * 沿革：`adj130` 引入；`adj131` 调大 + 下移靠近小节线；`adj182` 高度 120%（`16s→19.2s`）、
+         * 记号下端与小节线上端（`yTop`）齐平；`adj183`/`adj184` 按"自身高度百分比"微调落点
+         * （净 +10% ⇒ `y = yTop + 0.35×fs`）。
+         *
+         * **`adj723h`（用户三轮口径，最终）**：
+         * ① **只把高度放大 1.5 倍、宽度保持原样**（`font-size` 一刀切会连宽度一起变大
+         *   —— 上一版就是这样，用户说"效果不对"）；
+         * ② **墨迹间距 = 0**（记号墨迹下端与小节线上端齐平）。
+         *
+         * 实现：`font-size` 回到 `adj182` 原值，另用
+         * `transform="translate(0 tyY) scale(kx ky) translate(0 -tyY)"` **以记号自身基线为不动点**
+         * 纵向拉伸 `TY_HEIGHT_SCALE`（横向 `TY_WIDTH_SCALE = 1`）。
+         *
+         * ⚠ 必须**显式把不动点移到基线上**：SVG `transform` 的默认原点是**用户坐标系原点**，
+         * 直接写 `scale(1 1.5)` 会把基线本身也放大 1.5 倍（实测 `y=143.1` 被拉到
+         * `1.5×143.1 = 214.65`，记号飞出老远）。以基线为不动点后：
+         * 文字定位 `y` 仍就是**最终坐标系**里的基线，`0.15×fs` 的换算才成立。
+         *
+         * 两处口径都由 `spacing.ts` 给出（`六之二·4`「数值口径必须同源」）。
+         *
+         * 落点：直接消费 `tyBaselineY()`——**与断言同一个式子**，避免"渲染端一份、断言各写一份"
+         * 而对不上（本轮连续两次：一次把 `ky` 乘重、一次符号写反）。
+         * ⇒ 记号墨迹下端落在 `yTop + TY_BAR_GAP`（= 0，即与小节线上端齐平）。
+         */
+        const fs = TY_FONT_SIZE(noteSize)
+        const tyY = tyBaselineY(yTop, noteSize)
+        const tyTf = `translate(0 ${tyY}) scale(${TY_WIDTH_SCALE} ${TY_HEIGHT_SCALE}) translate(0 ${-tyY})`
+        parts.push(
+          `<text x="${ux.toFixed(1)}" y="${tyY.toFixed(1)}" text-anchor="middle" font-size="${fs}" transform="${tyTf}" font-family="'Bravura','Finale Maestro','Noto Music','Segoe UI Symbol',sans-serif" fill="#1b1b1b">𝄌</text>`,
+        )
+      } else {
+        // 花 S 记号 `𝄋`（Unicode `U+1D10B`）：`adj129` 引入、`adj131` 调小与大跳跃匹配 + 下移靠近小节线、
+        // `adj182` 记号下端与小节线上端（`yTop`）齐平；`adj723h` 起字号统一走 `HS_FONT_SIZE`
+        const fs = HS_FONT_SIZE(noteSize)
+        parts.push(
+          `<text x="${ux.toFixed(1)}" y="${(yTop - 0.15 * fs).toFixed(1)}" text-anchor="middle" font-size="${fs}" font-family="'Bravura','Finale Maestro','Noto Music','Segoe UI Symbol',sans-serif" fill="#1b1b1b">𝄋</text>`,
+        )
+      }
+    })
+    // 下方文本组（fine/dc/ds）—— adj970 起判据与几何都取自 `spacing.ts`（布局端避让消费同一份）
+    const downMarks = (bar.marks ?? []).filter((m) => m === 'fine' || m === 'dc' || m === 'ds')
+    downMarks.forEach((m, idx) => {
+      const label = m === 'fine' ? 'Fine' : m === 'dc' ? 'D.C.' : 'D.S.'
+      // 小节线正下方文本（adj：&fine/&dc/&ds 一律粗体 + 斜体；adj210：字号为主音符的 0.5）
+      const fs = barDownMarkFontSize(noteSize)
+      const bold = ' font-weight="bold"'
+      const italic = ' font-style="italic"'
+      const dx = mx + (idx - (downMarks.length - 1) / 2) * 10 * s
+      parts.push(
+        // adj：位置下移 0.1 音符高度（0.1×18×s = 1.8×s），与字号缩放一致；花体渲染
+        // adj970：基线算式搬进 `barDownMarkBaselineY`（布局端算"序号方框要不要让"用的是同一个函数）
+        `<text x="${dx.toFixed(1)}" y="${barDownMarkBaselineY(yBottom, noteSize).toFixed(1)}" text-anchor="middle" font-size="${fs}" font-family="${FONT_SCRIPT}"${bold}${italic} fill="#1b1b1b">${label}</text>`,
+      )
+    })
+  }
+
+  // adj627（用户要求）：**临时转调记号**——小节线引号备注写了 `"d:..."` 时，在线的**右上方**
+  // 画一小段 `转1=D`（文本由布局端算好，含 `d:` 单用时的"恢复调名"）。
+  // 位置取"线右缘 + 2×s"（与 `"p:2/4"` 临时节拍分数的起始口径一致），纵向在**小节线上端之上**，
+  // 与上方记号（&ty/&hs 画在线中心 mx）横向错开、互不压。
+  // adj627b（用户要求）：调名后面紧跟的 `+` / `-` 逐级抬升/降低记号（口径同 adj392 的音符注释）。
+  // adj627c（用户要求）：调名部分**与描述头 `D: Ab` 同款**——字母 + 左上角 ♯/♭ 角标
+  // （共用 `drawKeyName`；此前整串文字里 `Ab` 的降号只是普通字母 b，与描述头的 `A♭` 不一致）。
+  // 角标左缘 = `转1=` 起始 + 该前缀占宽（按字号估算，与导出路径上的描述头同口径）。
+  // adj627d（用户要求）：记号**只用粗体、不要斜体**（斜体让角标与字母的贴合看着发飘）。
+  if (bar.keyChangeLabel) {
+    const fs = Math.max(8, Math.round(9 * s))
+    const kcRaise = ((bar.keyChange?.plus ?? 0) - (bar.keyChange?.minus ?? 0)) * NOTE_COMMENT_RAISE
+    const kcX = x + barRightEdge + 2 * s
+    const kcY = yTop - 3 * s - kcRaise
+    parts.push(
+      ...drawKeyName({
+        x: r1n(kcX),
+        y: r1n(kcY),
+        size: fs,
+        font: noteFontFamily,
+        keyRaw: bar.keyChangeName ?? bar.keyChangeLabel.replace(/^转1=/, ''),
+        prefix: '转1=',
+        prefixW: metaTextW('转1=') * (fs / 13),
+        midAttrs: ' text-anchor="start" font-weight="bold"',
+        tailAttrs: ` data-keychange="${xmlEsc(bar.keyChangeLabel)}"`,
+      }).parts,
+    )
+  }
+
+  return parts.join('\n')
+}
+
+// ============================================================
+// 方框小节序号（adj625，用户要求）
+// ============================================================
+
+/**
+ * 画一个**带外框的小节序号**（`showBarCount`）。几何全部来自 `spacing.ts`（布局端同源）：
+ *  - 字号 = **倚音音符**字号 **× 3/4**（`barNumberFontSize`；框内空隙与线宽同步 ×0.75，见 `spacing.ts`）；
+ *  - 外框顶 = 该谱行小节线底缘 + `BAR_NUMBER_BOTTOM_GAP`（+ `yDrop`：adj970 为线下方文本记号让位）；
+ *  - 数字在框内**上下居中**；
+ *  - 框宽按数字位数自适应（等宽估算 0.62em，与数字槽同比例）。
+ */
+function renderBarNumber(bn: PlacedBarNumber, config: PageConfig): string {
+  const noteSize = config.note_size
+  const fs = barNumberFontSize(noteSize)
+  const boxH = barNumberBoxH(noteSize)
+  const text = String(bn.n)
+  const boxW = barNumberBoxW(bn.n, noteSize)
+  // adj970：线下方有 `&fine`/`&dc`/`&ds` 时布局端会给错开量（上下优先、放不下才左右）
+  const top = bn.yBarBottom + BAR_NUMBER_BOTTOM_GAP + (bn.yDrop ?? 0)
+  const cx = bn.x - (bn.xShift ?? 0)
+  const cy = top + boxH / 2
+  // adj625（用户反馈"序号在方框里偏靠上"）：必须用 `central` 而**不是** `middle`——
+  // `middle` 对齐的是 **x-height 的中线**，而数字占的是 cap 高 ⇒ 数字整体偏上；
+  // `central` 才是"字符中心对齐"（本库增时线 `-`、段层括号等居中文本一直用 `central`）。
+  return (
+    `<g data-barnumber="${bn.n}">` +
+    `<rect x="${r1n(cx - boxW / 2)}" y="${r1n(top)}" width="${r1n(boxW)}" height="${r1n(boxH)}" ` +
+    `fill="none" stroke="#1b1b1b" stroke-width="${r1n(BAR_NUMBER_STROKE * noteScaleOf(noteSize))}"/>` +
+    `<text x="${r1n(cx)}" y="${r1n(cy)}" text-anchor="middle" dominant-baseline="central" ` +
+    `font-size="${r1n(fs)}" font-family="${noteFont(config.shuzi_font)}" fill="#1b1b1b">${text}</text>` +
+    `</g>`
+  )
+}
+
+// ============================================================
+// 歌词绘制
+// ============================================================
+
+function renderLyric(lyric: PlacedLyric, config: PageConfig): string {
+  const size = config.geci_size
+  const cid = noteposId(lyric.id)
+  // adj71：歌词字宽 > 对应音符占位宽 **且** 相邻歌词间距 < 字宽（任一侧密集会重叠）时，
+  // 横向缩窄歌词字：缩窄到 min(槽宽, 相邻间距−1)（预留 ≥1px 间距避免文字粘黏；下限 0.5）；
+  // 缩放以歌词中心为基准——左缘平移 size×(1-sx)/2，使中心仍对中音符槽中心
+  // adj292：仅当页面设置开启「宽度不足时压缩文字宽度」（lyricShrink）才压缩，否则允许重叠
+  const gap = lyric.gapL ?? Infinity
+  const need = config.lyricShrink === true && !!lyric.slotW && lyric.slotW < size && gap < size
+  const sx = need ? Math.max(Math.min(lyric.slotW!, gap - 1) / size, 0.5) : 1
+  const parts = [
+    // 字以 x 为左边缘，中心 = x + 字号/2（对中音符槽中心，adj40）；横向缩放时中心保持对齐
+    sx < 1
+      ? `<text x="0" y="${lyric.y}" transform="translate(${r1n(lyric.x + (size * (1 - sx)) / 2)},0) scale(${sx.toFixed(3)},1)" data-cipos="${cid}" font-size="${size}" font-family="${config.geci_font}" fill="#101010">${xmlEsc(lyric.char.text)}</text>`
+      : `<text x="${lyric.x}" y="${lyric.y}" data-cipos="${cid}" font-size="${size}" font-family="${config.geci_font}" fill="#101010">${xmlEsc(lyric.char.text)}</text>`,
+  ]
+  // 引号注释（adj58）：双引号文本显示在「注释后面的歌词」前面，不占歌词对齐位（灰色小字）
+  if (lyric.char.note) {
+    /**
+     * adj672/adj677（用户要求「歌词注释也要不与歌词重叠」+「调整到同一水平线上」）：注释的
+     * **锚点由布局算好**（`noteX` 左缘、`noteY` 基线、`noteSx` 横向压缩比）——布局知道同一行
+     * 全部歌词的最终位置，能在"前后两字之间"重排、放不下时压缩字形；渲染端照搬即可。
+     * 缺省（老数据 / 未走布局）时回退历史公式：紧贴本字左侧、与本字同基线、不压缩。
+     */
+    const noteSize = lyricCommentFontSize(size)
+    const w = lyricCommentWidth(lyric.char.note, noteSize)
+    const nx = lyric.noteX ?? lyric.x - w - LYRIC_COMMENT_GAP
+    const ny = lyric.noteY ?? lyric.y
+    const sx = lyric.noteSx ?? 1
+    const fontAttrs = `y="${r1n(ny)}" font-size="${noteSize}" font-family="${config.geci_font}" fill="#999"`
+    parts.unshift(
+      sx < 0.999
+        ? // 压缩以**右缘**为基准（贴住本字），与布局的落点口径一致
+          `<text x="0" ${fontAttrs} transform="translate(${r1n(nx + w * (1 - sx))},0) scale(${sx.toFixed(3)},1)">${xmlEsc(lyric.char.note)}</text>`
+        : `<text x="${r1n(nx)}" ${fontAttrs}>${xmlEsc(lyric.char.note)}</text>`,
+    )
+  }
+  // 中文标点不占音符位，紧跟本字之后独立渲染（adj35/40）——
+  // 分开渲染避免标点并入后整个文本视觉中心偏移、与音符失中
+  if (lyric.char.trailing) {
+    parts.push(
+      `<text x="${r1n(lyric.x + size + 1)}" y="${lyric.y}" font-size="${size}" font-family="${config.geci_font}" fill="#101010">${xmlEsc(lyric.char.trailing)}</text>`,
+    )
+  }
+  return parts.join('\n')
+}
+
+// ============================================================
+// 多声部括弧与名称（M7a）
+// ============================================================
+
+
+/**
+ * adj666（用户要求）：**临时多声部（`{dsb}`）的大括号用图形** `public/icons/大括号.svg`——
+ * 左括号用原图、右括号用**水平翻转**。
+ *
+ * 该图形是 iconfont 的**填充**路径（1024 视口），实测 bbox = `(417.5, 33.5)`、尺寸 `215×877`。
+ * 它是**填充**字形：粗细与形状是同一个轮廓 ⇒ 不能等比铺满段高（段越高越像一坨黑），
+ * 要细只能**横向收**。
+ *
+ * ⚠️ adj667：横向宽度**不再由渲染端按段高算**，而是布局层按"两侧邻居墨迹边界"钳定后
+ * 经 `PlacedSegmentBracket.inkW` 传进来（理想比例见 `layout/spacing.ts` 的
+ * `SEGMENT_BRACE_ASPECT`）——只有布局知道邻居在哪，渲染自己算必然溢出压字。
+ */
+const BRACE_SVG = {
+  d: 'M601.5 632.5c0-66-45.67-119.67-137-161 91.33-42 137-96 137-162 0-13.33-11.67-41.33-35-84s-35-75-35-97c0-38.67 33.67-66 101-82l-7-13c-115.33 4.67-173 45.67-173 123 0 25.33 11.17 64.17 33.5 116.5s33.5 81.5 33.5 87.5c0 25.33-34 59.67-102 103v16c68 43.33 102 78.33 102 105 0 4.67-11.17 33-33.5 85s-33.5 91.33-33.5 118c0 76.67 57.67 117.67 173 123l7-16c-67.33-13.33-101-40.67-101-82 0-20.67 11.67-52.33 35-95s35-71 35-85z',
+  x: 417.5,
+  y: 33.5,
+  w: 215,
+  h: 877,
+}
+
+/**
+ * adj276/adj644：多声部括号——左粗(2.1)右细(1.125)双竖线（间距 3px）；上下弧各自以弧两端点为轴翻转（sweep 交换）、
+ *  上弧顺转 30°、下弧逆转 30°，弧 = 1/6 圆。
+ *  adj644：几何常量与"墨迹右缘"收敛到 `layout/spaceLayout.ts`（布局要按同一份几何把括号
+ *  贴到音符一侧，见 `braceInkRightOffset`）——渲染只消费，不再自己写 3 / 0.15 / 0.866。
+ *  ⚠️ 这条只服务**多声部块**（`V:` 多行曲部）的大括号；**临时多声部段（`{dsb}`）** 的大括号
+ *  另有 `renderSegmentBracket`（用 `大括号.svg` 图形，见那里的 adj666 说明）。 */
+function bracePath(x: number, yTop: number, yBottom: number, noteSize: number): { arc: string; lineL: string; lineR: string } {
+  const R = Math.min(noteSize / 2, (yBottom - yTop) * BRACE_ARC_R_RATIO)
+  const dx = BRACE_LINE_DX // 粗/细线间距 ×1.5（2 → 3）
+  // 弧 = 1/6 圆（60°）；上下弧各以两端点为轴翻转一次（sweep 1↔0），凸向翻到另一侧
+  const endX = x + R * BRACE_ARC_DX_RATIO
+  const endTopY = yTop + R * 0.5
+  const endBotY = yBottom - R * 0.5
+  const aTop = `M ${x} ${yTop + R} A ${R} ${R} 0 0 0 ${endX.toFixed(2)} ${endTopY.toFixed(2)}`
+  const aBot = `M ${x} ${yBottom - R} A ${R} ${R} 0 0 1 ${endX.toFixed(2)} ${endBotY.toFixed(2)}`
+  const lineL = `M ${x} ${yTop + R} L ${x} ${yBottom - R}`
+  const lineR = `M ${x + dx} ${yTop + R} L ${x + dx} ${yBottom - R}`
+  return { arc: `${aTop} ${aBot}`, lineL, lineR }
+}
+
+function renderVoiceBlocks(page: ScorePage, vb: VoiceBlock, noteSize: number): string {
+  const parts: string[] = []
+  // 大括号：弧线/右细线 1.125（0.9×1.25）、左粗线 2.1；括号整体上移 0.1×音符高（在上移 0.2 基础上再下移 0.1，注释不动）
+  const { arc, lineL, lineR } = bracePath(vb.x, vb.yTop - noteSize * 0.1, vb.yBottom - noteSize * 0.1, noteSize)
+  parts.push(`<path d="${arc}" fill="none" stroke="#1b1b1b" stroke-width="1.125"/>`)
+  parts.push(`<path d="${lineL}" fill="none" stroke="#1b1b1b" stroke-width="2.1"/>`)
+  parts.push(`<path d="${lineR}" fill="none" stroke="#1b1b1b" stroke-width="1.125"/>`)
+  // 声部名称（括弧左侧，与该声部曲部垂直居中；仅当有声部名注释时显示，无注释不显示）
+  const n = vb.voices.length
+  for (let i = 0; i < n; i++) {
+    const v = vb.voices[i]
+    if (!v.name) continue
+    const cy = vb.voiceCenters?.[i] ?? vb.yTop + ((vb.yBottom - vb.yTop) * (i + 0.5)) / n
+    parts.push(
+      `<text x="${vb.x - 10}" y="${cy}" text-anchor="end" dominant-baseline="middle" font-size="${noteSize}" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(v.name)}</text>`,
+    )
+  }
+  void page
+  return parts.join('\n')
+}
+
+// ============================================================
+// 跳房子渲染（M7b）
+// ============================================================
+
+/** 画一条跳房子线（起点 [ 至终点 ]；未封闭或 |]/ 开口时终点不封闭；
+ *  adj107：跨行（起点与终点在不同行）时拆两半——左半到页面右边距、右半从行首小节线/边距到终点 */
+function renderVoltaLine(
+  start: PlacedBarline,
+  end: PlacedBarline | null,
+  noteSize = 18,
+  marginLeft = 40,
+  pageWidth = 595.28,
+  marginRight = 80,
+  firstOfRow?: Map<number, PlacedBarline>,
+): string {
+  const plus = start.voltaStart?.plus ?? 0
+  const minus = start.voltaStart?.minus ?? 0
+  // adj60：跳房子线基于小节线定位（距小节线上端 VOLTA_BAR_GAP，+ 修饰每级 VOLTA_RAISE 抬升、- 修饰每级降低，adj356）
+  // adj667：`voltaYTop` 由布局给出（该行有 `{dsb … }` 段层时要抬到段层墨迹之上，否则线从多声部音符里穿过）
+  const baseY = (bar: PlacedBarline): number => bar.voltaYTop ?? bar.yTop - VOLTA_BAR_GAP
+  const y = baseY(start) - plus * VOLTA_RAISE + minus * VOLTA_RAISE
+  // 起止偏移（adj50）：起点 = 小节线正中右移 2px、终点 = 小节线正中左移 2px
+  const x1 = start.x + 2
+  const openEnd = !end || !!end.voltaEndSlash // 开口结束：无终点折线（adj26）
+  const parts: string[] = []
+  // 起点竖线（[ 处：从线高向下到小节线上端上方 2px，adj29；adj150 线宽 0.8；adj76：下沿下延 2px）
+  parts.push(
+    `<line x1="${x1}" y1="${y}" x2="${x1}" y2="${start.yTop - 2}" stroke="#1b1b1b" stroke-width="0.8"/>`,
+  )
+  // 番号（[ 后引号注释优先；小节线引号备注兼容）显示在跳房子线下方（adj27/28）；
+  // adj71：字号 = 音符高度的 0.5（VOLTA_COMMENT_FONT_RATIO），随音符字号
+  // adj77：注释相对起点竖线 左上移 2px（x=x1+2、y=线+8）
+  const label = start.voltaStart?.comment ?? start.comment
+  const labelSvg = label
+    ? `<text x="${x1 + 2}" y="${y + 8}" font-size="${Math.max(8, Math.round(noteSize * VOLTA_COMMENT_FONT_RATIO))}" font-family="${FONT_CN}" fill="#1b1b1b">${xmlEsc(label)}</text>`
+    : ''
+  if (end && end.yTop !== start.yTop) {
+    // 跨行：左半（起点行）延伸到页面右边距（adj162：与跨行连音线一致——
+    // 上一行横线贯穿到右侧边距）；右半从下一行行首小节线（有则从其开始，
+    // 与连音线 rowStartBarX 一致）否则从行首边距开始，连到终点小节线
+    const xEndA = pageWidth - marginRight
+    parts.push(
+      `<line x1="${x1}" y1="${y}" x2="${xEndA}" y2="${y}" stroke="#1b1b1b" stroke-width="0.8"/>`,
+    )
+    parts.push(labelSvg)
+    const yB = baseY(end) - plus * VOLTA_RAISE + minus * VOLTA_RAISE
+    const rowFirst = firstOfRow?.get(end.yTop)
+    const xStartB =
+      rowFirst && rowFirst.x < end.x - 2 ? rowFirst.x : marginLeft + 2
+    const x2B = end.x - 2
+    parts.push(
+      `<line x1="${xStartB}" y1="${yB}" x2="${x2B}" y2="${yB}" stroke="#1b1b1b" stroke-width="0.8"/>`,
+    )
+    if (!openEnd) {
+      parts.push(
+        `<line x1="${x2B}" y1="${yB}" x2="${x2B}" y2="${end.yTop - 2}" stroke="#1b1b1b" stroke-width="0.8"/>`,
+      )
+    }
+    return parts.join('\n')
+  }
+  const x2 = end ? end.x - 2 : start.x + 60
+  // 水平线（adj150 线宽 0.8）
+  parts.push(
+    `<line x1="${x1}" y1="${y}" x2="${x2}" y2="${y}" stroke="#1b1b1b" stroke-width="0.8"/>`,
+  )
+  // 终点折线（] 处：向下到小节线上端上方 2px，adj29；开口结束不画；adj150 线宽 0.8；adj76：下沿下延 2px）
+  if (end && !openEnd) {
+    parts.push(
+      `<line x1="${x2}" y1="${y}" x2="${x2}" y2="${end.yTop - 2}" stroke="#1b1b1b" stroke-width="0.8"/>`,
+    )
+  }
+  parts.push(labelSvg)
+  return parts.join('\n')
+}
+
+/** 渲染页内全部跳房子线（配对 [ ]；未闭合 [ 向右延伸） */
+function renderVoltas(
+  barlines: PlacedBarline[],
+  noteSize = 18,
+  marginLeft = 40,
+  pageWidth = 595.28,
+  marginRight = 80,
+  notes?: PlacedToken[],
+): string {
+  const parts: string[] = []
+  // adj164：按行（yTop 容差匹配，避免浮点误差）求「真正的行首小节线」
+  // （位于该行首音符左侧，与连音线 rowStartBarX 语义一致），供跨行跳房子
+  // 右半从下一行行首小节线开始；行首无小节线则从边距+2 开始
+  const rows = new Map<number, PlacedBarline[]>()
+  for (const bar of barlines) {
+    const arr = rows.get(bar.yTop) ?? []
+    arr.push(bar)
+    rows.set(bar.yTop, arr)
+  }
+  const firstOfRow = new Map<number, PlacedBarline>()
+  /**
+   * adj1007（**用户 2026-10-20 实报**）：跨行跳房子的"右半"必须从**行首内容左缘**起画，
+   * 不能从"该行第一根小节线"起 —— 行首若直接从音符开始（没有小节线），
+   * 第一根小节线在**第一小节之后**，右半就会漏掉最左那一小节。
+   *
+   * 行首音符的纵向偏移 = `18.4 × noteScaleOf(noteSize)`（与布局 `bar.yTop = 行顶 − 18.4×s`
+   * 同一口径）。**不能写死 18.4**：默认字号 13 时偏移是 13.29，写死就一个都匹配不到。
+   */
+  const noteYOffset = 18.4 * noteScaleOf(noteSize)
+  for (const [y, arr] of rows) {
+    arr.sort((a, b) => a.x - b.x)
+    // 该行首音符 x（音符基线 y - 18.4×s = 小节线 yTop，容差 1px）
+    let firstNoteX: number | undefined
+    if (notes) {
+      for (const n of notes) {
+        // 段层音符（{bz}/{dsb}/{tp}）有自己的纵向偏移，不能拿来定"行首"
+        if (n.segment) continue
+        if (Math.abs(n.y - noteYOffset - y) < 1 && (firstNoteX === undefined || n.x < firstNoteX)) {
+          firstNoteX = n.x
+        }
+      }
+    }
+    /**
+     * 只认"**第一音左侧**"的小节线；没有就**不设** `firstOfRow`，
+     * 让 `renderVoltaLine` 退到"边距+2"（盖住行首那一小节）。
+     * 旧写法在这里回退到 `arr[0]`（第一根小节线），正是"少画一小节"的来源。
+     */
+    const lead = firstNoteX !== undefined ? arr.find((b) => b.x < firstNoteX) : undefined
+    if (lead) firstOfRow.set(y, lead)
+  }
+  let open: PlacedBarline | null = null
+  for (const bar of barlines) {
+    // adj139：一根小节线可同时 voltaEnd（闭合上一段）与 voltaStart（开启下一段）
+    // —— 连续跳房子共用同一小节线（|["1" …|]["2" …|]）
+    if (bar.voltaEnd && open) {
+      parts.push(renderVoltaLine(open, bar, noteSize, marginLeft, pageWidth, marginRight, firstOfRow))
+      open = null
+    }
+    if (bar.voltaStart) {
+      if (open) parts.push(renderVoltaLine(open, null, noteSize, marginLeft, pageWidth, marginRight, firstOfRow)) // 未闭合上一段
+      open = bar
+    }
+  }
+  if (open) parts.push(renderVoltaLine(open, null, noteSize, marginLeft, pageWidth, marginRight, firstOfRow))
+  return parts.join('\n')
+}
+
+// ============================================================
+// 连音线绘制（M7c）
+// ============================================================
+
+/** adj459：测试用导出——直接调用 renderSlur，便于在不依赖布局的情况下核对路径与弧线半径 */
+export function renderSlurForTest(s: PlacedSlur, noteSize = 18): string {
+  return renderSlur(s, noteSize)
+}
+
+function renderSlur(s: PlacedSlur, noteSize = 18): string {
+  const { x1, x2, y } = s
+  /**
+   * adj667（用户报「两个声部重叠」）：`dir` = 弧线拱起的方向——
+   * `-1` 往**上**拱（缺省、历史行为一字不变）、`+1` 往**下**拱（dsb 下层声部用）。
+   * 所有"向上偏移"的量统一乘 `dir`，`sweep` 同步取反；文字标注的反向偏移也一并处理。
+   */
+  const dir = s.below ? 1 : -1
+  const sweep = s.below ? 0 : 1
+  // 平均连音组标注（adj43）：仅 (y...) 组在弧线/横线正中画数字（不透明背景）；
+  // 普通连音线 (…) 不标注。数字向下偏移 2px 使其居于线正中。
+  // adj89：数字字号 = 音符字号 × TUPLET_NUM_RATIO（默认 0.2，可调常量）
+  const label = (cx: number, cy: number): string => {
+    if (!s.tupletCount || s.tupletCount < 2) return ''
+    const size = Math.max(7, Math.round(noteSize * TUPLET_NUM_RATIO))
+    const text = String(s.tupletCount)
+    // adj222：不透明背景只包裹文字字形——数字宽 ≈ 0.62em/字 + 两侧各 1px 空隙；
+    // 原 max(14, n×7+3) 白底远大于字形（单数字 14px vs 字形约 4px），大片白块遮线
+    const w = text.length * size * TUPLET_NUM_W_RATIO + TUPLET_LABEL_PAD * 2
+    const dy = 2 * -dir // 数字往"线内侧"偏 2px → 位于线正中（上方线向下偏、下方线向上偏）
+    return (
+      `<rect x="${(cx - w / 2).toFixed(1)}" y="${(cy - size + 1 + dy).toFixed(1)}" width="${w.toFixed(1)}" height="${size}" rx="2" fill="#ffffff"/>` +
+      `<text x="${cx.toFixed(1)}" y="${(cy + dy).toFixed(1)}" text-anchor="middle" font-size="${size}" font-family="${FONT_CN}" fill="#1b1b1b">${text}</text>`
+    )
+  }
+  if (s.style === 'flat') {
+    // adj96：嵌套内层（depth>0）连音线高度少 1px（横线更贴音符，层次更分明）
+    // adj148：平顶线高度 leg 由 7 减小到 5（更贴音符）
+    const leg = 5 - (s.depth > 0 ? 1 : 0)
+    const barY = y + dir * leg
+    // adj147：弧线 = 标准 1/4 圆弧（SVG A 命令），半径 = 平顶线高度 leg，
+    // 从音符竖直上弯、平滑转水平接横线（真正的圆弧，非贝塞尔近似）。
+    // adj459：弧线半径**统一**为 leg，与连音线总长无关——
+    //   完整连音线（无 half）：两端各占一段，R 受半段约束（span<12 时收缩，避免两弧重叠）
+    //   半条连音线（half=l/r，仅一端有弧）：R 占满整段 span-1，不再随总长收缩
+    //   → 无论跨行连音线跨多远，端点弧线都是同一个标准半径，观感统一
+    const R = s.half
+      ? Math.min(leg, Math.abs(x2 - x1) - 1)
+      : Math.min(leg, Math.abs(x2 - x1) / 2 - 1)
+    if (s.half === 'l') {
+      // 左半部：1/4 圆弧（音符竖直上弯转水平）+ 横线平直延伸到行末（右侧开口）
+      return (
+        `<path d="M ${x1} ${y} ` +
+        `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 ${sweep} ${(x1 + R).toFixed(1)} ${barY} ` +
+        `L ${x2} ${barY}" ` +
+        `fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>`
+      )
+    }
+    if (s.half === 'r') {
+      // 右半部：横线从行首平直伸来（左侧开口）+ 1/4 圆弧弯到音符（凸右上，sweep=1 与左半镜像）
+      return (
+        `<path d="M ${x1} ${barY} ` +
+        `L ${(x2 - R).toFixed(1)} ${barY} ` +
+        `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 ${sweep} ${x2} ${y}" ` +
+        `fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>`
+      )
+    }
+    // 完整：两端 1/4 圆弧弯到平顶线 + 中间横线；正中标连音组数字
+    const midX = (x1 + x2) / 2
+    return (
+      `<path d="M ${x1} ${y} ` +
+      `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 ${sweep} ${(x1 + R).toFixed(1)} ${barY} ` +
+      `L ${(x2 - R).toFixed(1)} ${barY} ` +
+      `A ${R.toFixed(1)} ${R.toFixed(1)} 0 0 ${sweep} ${x2} ${y}" ` +
+      `fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>` +
+      label(midX, barY)
+    )
+  }
+  // 圆弧（adj96：嵌套内层 depth>0 高度少 1px，弧线更贴音符）
+  const topY = y + dir * (s.depth > 0 ? 3.5 : 4.5) // 弧线最高点（与完整弧线顶点同高）
+  if (s.half === 'l') {
+    // 左半部：从最低处（x1,y）竖直向上出发，行末为最高点（x2, topY），右侧开口
+    return (
+      `<path d="M ${x1} ${y} C ${x1} ${(y + dir * 9).toFixed(1)} ${x2} ${topY.toFixed(1)} ${x2} ${topY.toFixed(1)}" ` +
+      `fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>`
+    )
+  }
+  if (s.half === 'r') {
+    // 右半部：行首为最高点（x1, topY）水平出发，到最低处（x2,y）竖直向下，左侧开口
+    return (
+      `<path d="M ${x1} ${topY.toFixed(1)} C ${x1} ${topY.toFixed(1)} ${x2} ${(y + dir * 9).toFixed(1)} ${x2} ${y}" ` +
+      `fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>`
+    )
+  }
+  // 完整：二次贝塞尔（两端低、中间高）；正中（顶点）标连音组数字
+  const midX = (x1 + x2) / 2
+  /**
+   * adj929（用户口径，**取代 adj649 的"垂度随跨度自适应"**）：
+   * 「连音线的**弧顶高度不管长短都一样**」——短连音曲度大（不再"塌"），长连音曲度小（用户接受）。
+   *
+   * 几何：`M x1 y Q midX (y + dir·SAG) x2 y` 的顶点在 `t = 0.5`：
+   * `B(0.5) = 弦/2 + 控制点/2` ⇒ **弧顶离弦 = 垂度 ÷ 2 = `SLUR_APEX_H`（常量）**。
+   * 所以控制点偏移取 `2 × SLUR_APEX_H`（`SLUR_SAG`，定义在 `spacing.ts`，渲染/布局同一常量）。
+   *
+   * 为什么不是"弦 y 抬高"：弦 `y` 由布局给出（在 ① 高八度点/② 本音符修饰符之上 `LAYER_GAP`），
+   * 端点必须落在弦上才连得住两个数字；变的是**顶点高度**，两端 `x`/`y` 与连音组数字的居中随顶点走。
+   *
+   * 旧口径（adj649）的取舍已作废：`clamp(跨度 × 0.28, 2.5, 9)` 让短弧几乎看不出弧（实测最短
+   * 1.25px），用户 2026-10 明确改主意（见 `E-2026-337` 的"预防"与 `SLUR_APEX_H` 的说明）。
+   */
+  const sag = SLUR_SAG
+  const midY = y + dir * sag
+  return (
+    `<path d="M ${x1} ${y} Q ${midX} ${midY} ${x2} ${y}" fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>` +
+    label(midX, y + (dir * sag) / 2)
+  )
+}
+
+// ============================================================
+// 渐强渐弱与波浪线（M7d）
+// ============================================================
+
+/** 颤音尾部正弦波（adj113 正弦；adj115：幅度 = 原 1/3、周期数由调用方按音符点位传入） */
+function wavePath(x1: number, y: number, x2: number, w = 1, cycles = 3): string {
+  const amp = 2.5 / 3 // 幅度（adj115：原 2.5 的 1/3）
+  const wl = (x2 - x1) / Math.max(1, cycles) // 波长 = 总长/周期数
+  let d = `M ${x1} ${y}`
+  const n = Math.max(8, Math.round(x2 - x1))
+  for (let i = 1; i <= n; i++) {
+    const x = x1 + ((x2 - x1) * i) / n
+    const yy = y - amp * Math.sin(((x - x1) / wl) * 2 * Math.PI)
+    d += ` L ${x.toFixed(1)} ${yy.toFixed(1)}`
+  }
+  return `<path d="${d}" fill="none" stroke="#1b1b1b" stroke-width="${w}"/>`
+}
+
+function renderDynamic(d: PlacedDynamic, noteSize = 18): string {
+  // adj：渐强渐弱 "<" / ">" 每 +1 提升数级（类似跳房子），整体上移 VOLTA_RAISE×plus；
+  // 记号为开口尖括号（两条线从尖点向内/外张开，非梯形闭合）；张开半高随音符字号缩放
+  const midY = d.y - (d.plus ?? 0) * VOLTA_RAISE
+  const h = DYN_HALF_H * noteScaleOf(noteSize)
+  if (d.type === 'crescendo') {
+    // 渐强：尖在左（起点音符正中），向右上/右下张开成开口尖括号 "<"
+    return `<path d="M ${d.x1} ${midY} L ${d.x2} ${midY - h} M ${d.x1} ${midY} L ${d.x2} ${midY + h}" fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>`
+  }
+  // 渐弱：尖在右（起点音符正中），向左上/左下张开成开口尖括号 ">"
+  return `<path d="M ${d.x2} ${midY} L ${d.x1} ${midY - h} M ${d.x2} ${midY} L ${d.x1} ${midY + h}" fill="none" stroke="#1b1b1b" stroke-width="${SLUR_W}"/>`
+}
+
+// ============================================================
+// 减时线分组（adj3：同一拍内相连）
+// ============================================================
+
+interface Beam {
+  x1: number
+  x2: number
+  y: number
+  /** adj629b：线高（段层里已 ÷k 补偿，压扁后仍是 BEAM_H；缺省 = BEAM_H） */
+  h?: number
+  /**
+   * adj629b：该减时线所属**段层**的纵向压缩比与不动点（基线）——
+   * 段层整层用一个 `<g>` 压扁，减时线高度在存储坐标里已补偿（`h`），
+   * 这里只用于把该 beam 归到"哪一层"的组里。主旋律缺省（= 1）。
+   */
+  layerScale?: number
+  layerBase?: number
+}
+
+/**
+ * 计算减时线横线组：
+ * 第 n 条横线连接「相邻且减时线数 ≥ n」的音符（相邻判定见 linked）。
+ * 例：1/2/ → 1 条（整拍连）；1/2/3/4/ → 拍 1 连、拍 2 连（中间断开）；
+ *     1//2//3//4// → 2 条（各整拍连）；1//2//3/ → 第 1 条全连、第 2 条连 1//2//
+ */
+function computeBeams(notes: PlacedToken[], noteSize = 18): Beam[] {
+  const beams: Beam[] = []
+  const digitW = noteSize * 0.62
+  // adj219：近整数归整——浮点拍位（0.9999…）误判拍边界（同布局 adj217/218）
+  const beatOf = (v: number) => (Math.abs(v - Math.round(v)) < 1e-3 ? Math.round(v) : Math.floor(v))
+  /**
+   * adj397：相邻两音符是否共用同一条减时线（**逐对判定**，不再按"分组桶"比较）：
+   *  ① 同属一个等时值连音组 `(y...)` → 相连（跨拍也不断开，adj395 保留）；
+   *  ② 否则只要落在**同一拍**内 → 相连。
+   * 旧实现「组号优先」把连音组音符与同拍组外音符分到两个桶里，于是
+   * `2/. 3// 5/ (y5// 6// 5//) …` 中 5/（拍 2 起点）与组首音（拍 2 内）各自成线、
+   * 减时线在谱面上断开——而二者本在同一拍内，按拍相连才是简谱的书写习惯。
+   */
+  const linked = (a: PlacedToken, b: PlacedToken): boolean => {
+    const ga = a.token.tupletGroup
+    if (ga !== undefined && ga === b.token.tupletGroup) return true
+    return beatOf(a.beatPos) === beatOf(b.beatPos)
+  }
+  const groups = new Map<string, PlacedToken[]>()
+  for (const n of notes) {
+    const key = `${n.y}|${n.barIndex}`
+    const arr = groups.get(key) ?? []
+    arr.push(n)
+    groups.set(key, arr)
+  }
+  for (const list of groups.values()) {
+    list.sort((a, b) => a.beatPos - b.beatPos)
+    const maxLevel = Math.max(0, ...list.map((n) => n.token.diminishCount))
+    for (let level = 1; level <= maxLevel; level++) {
+      let i = 0
+      while (i < list.length) {
+        if (list[i].token.diminishCount < level) {
+          i++
+          continue
+        }
+        let j = i
+        while (j + 1 < list.length && linked(list[j], list[j + 1]) && list[j + 1].token.diminishCount >= level) {
+          j++
+        }
+        // adj411：组尾音符带附点时，减时线**延伸到附点下面**——`1//2/.` 里 2 的减时线
+        // 原本止于数字右缘，而附点画在数字右侧（一拍的后半），线在谱面上"提前断了"；
+        // 附点右缘与该音符时值宽度一致（附点属于该音符），故取两者的较大值。
+        const dotRight = dotRightEdgeOf(list[j], noteSize)
+        const digitRight = list[j].x + digitW - 1
+        beams.push({
+          x1: r1n(list[i].x + 1),
+          x2: r1n(dotRight !== null ? Math.max(digitRight, dotRight) : digitRight),
+          // adj60/69：减时线层贴数字底（LAYER_GAP×s），层内线距 INNER_GAP×s，随字号
+          // adj629b：段层——"基线→块顶"照常随整层压扁，块内（层距/线高）÷k 补偿成原尺寸
+          y: r1n(
+            list[i].y +
+              (DIGIT_BOTTOM + LAYER_GAP) * noteScaleOf(noteSize) +
+              layerBlockDiv((level - 1) * (BEAM_H + INNER_GAP) * noteScaleOf(noteSize), list[i].layerScale ?? 1),
+          ),
+          h: r1n(layerBlockDiv(BEAM_H, list[i].layerScale ?? 1)),
+          layerScale: list[i].layerScale,
+          layerBase: list[i].layerScale !== undefined ? list[i].y : undefined,
+        })
+        i = j + 1
+      }
+    }
+  }
+  return beams
+}
+
+// adj965：`r1n` 已移到 `render/svgUtil.ts`（与 overlay 共用一份口径）
+
+/** 供冒烟测试：计算减时线横线组 */
+export function computeBeamsForTest(notes: PlacedToken[], noteSize = 18): Beam[] {
+  return computeBeams(notes, noteSize)
+}
+
+/**
+ * adj629b：把同一段层的元素收进**一个** `<g transform>`（用户要求"整体压扁，而不是逐个元素压"）。
+ * 键 = `压缩比|层基线`；同层元素（数字/减时线/括号/小节线/连音线）在页组装时归到同一组，
+ * 最后一次性包一层 `<g>`。
+ */
+function layerGroupKey(layerScale: number | undefined, layerBase: number | undefined): string | null {
+  if (layerScale === undefined || layerScale === 1 || layerBase === undefined) return null
+  return `${Math.round(layerScale * 1000) / 1000}|${layerBase}`
+}
+
+function renderBeams(beams: Beam[], collect?: (html: string, layerScale?: number, layerBase?: number) => void): string {
+  return beams
+    .map((b) => {
+      const html = `<rect x="${b.x1}" y="${b.y}" width="${Math.max(1, b.x2 - b.x1)}" height="${b.h ?? BEAM_H}" fill="#1b1b1b"/>`
+      // 有收集器（页组装）：交给调用方按层归组，最后统一包一层 `<g>`——此处**不再**单独包（否则双重包裹）
+      if (collect) {
+        collect(html, b.layerScale, b.layerBase)
+        return html
+      }
+      return segmentYScaleWrap(html, b.layerScale, b.layerBase)
+    })
+    .join('\n')
+}
+
+// ============================================================
+// 页面组装
+// ============================================================
+
+/**
+ * 页号（adj42）：多页时渲染在页面内、下边距线与页面边沿之间垂直居中
+ *  - x = 页面水平中心（text-anchor middle）
+ *  - y = 下边距线（height - margin_bottom）与页面底边沿（height）的中点
+ *  - 仅多页（pageCount > 1）时输出，与预览页脚行为一致；单页不画
+ */
+function renderPageNum(page: ScorePage, config: PageConfig, pageCount: number): string {
+  if (pageCount <= 1) return ''
+  const size = 11
+  const bandTop = page.height - config.margin_bottom
+  const centerY = (bandTop + page.height) / 2
+  const baseline = centerY + size * 0.35
+  const label = `第 ${page.index + 1} / ${pageCount} 页`
+  return (
+    `<text data-pagenum="1" x="${(page.width / 2).toFixed(1)}" y="${baseline.toFixed(1)}" text-anchor="middle" font-size="${size}" font-family="${FONT_CN}" fill="#8a8a8a">${xmlEsc(label)}</text>`
+  )
+}
+
+/**
+ * 渲染独立标记（&zkh/&ykh 括号、&hx 呼吸记号）——放在插位、垂直居中于数字
+ * （dominant-baseline=central 使字符中心对齐数字中心）。
+ * adj375：&hx 已独立化——画呼吸记号（单线 V、尖朝下，adj112 的既有画法），
+ * 位置取「占位中心 x」以及**略高于数字**的 y（呼吸记号画在音符右上方，不用数字基线中心）。
+ */
+function renderBracket(
+  b: {
+    code: 'zkh' | 'ykh' | 'hx'
+    dir: 'open' | 'close'
+    x: number
+    yTop: number
+    width: number
+    layerScale?: number
+    layerBase?: number
+  },
+  config: PageConfig,
+): string {
+  const size = config.note_size
+  if (b.code === 'hx') {
+    // adj180：线宽 0.8（不加粗）、横向尺寸 80%（3.5s → 2.8s）。
+    // 纵向与旧「依附音符」画法一致：旧式为 `音符基线 - 0.8×字号 - 4s`，而括号/标记的
+    // yTop = 行顶 + 0.7×字号 = 数字中心 = 基线 - 0.4×字号 → 基线 = yTop + 0.4×字号。
+    const s = noteScaleOf(size)
+    const hw = 3.5 * s * 0.8
+    const cy = b.yTop - size * 0.4 - 4 * s
+    return `<path d="M ${r1n(b.x - hw)} ${r1n(cy - 3 * s)} L ${r1n(b.x)} ${r1n(cy + 3 * s)} L ${r1n(b.x + hw)} ${r1n(cy - 3 * s)}" fill="none" stroke="#1b1b1b" stroke-width="0.8"/>`
+  }
+  const glyph = b.dir === 'open' ? '(' : ')'
+  // adj629b：段层括号**字号不变**，随整层一起压扁——压扁由页组装的整层 `<g>` 统一做，这里不再单独包
+  return `<text x="${r1n(b.x)}" y="${r1n(b.yTop)}" text-anchor="middle" dominant-baseline="central" font-weight="bold" font-size="${size}" font-family="${noteFont(config.shuzi_font)}" fill="#1b1b1b">${glyph}</text>`
+}
+
+/**
+ * adj427：临时段（`{bz … }` / `{dsb … }`）的**跨两层大花括号** `{ … }`（dsb 专用）。
+ *
+ * - 位置与宽度由**布局层**给出（adj667 起）：
+ *   `x1` = 左大括号**墨迹左缘**、`x2` = 右大括号**墨迹左缘**、`inkW` = 墨迹宽（左右同宽）。
+ *   布局按"两侧邻居的墨迹边界"算准，渲染端**照搬**——不再自己按段高算宽度，
+ *   否则图形会比布局预留的槽位宽、向两侧溢出压到邻居（用户报图 1/图 2 的括号与音符重叠）。
+ *   `yTop` / `yBottomLower` 由布局按上下两层音符的外沿给出（上过上层音符上沿、下过下层音符下沿）。
+ * - 形状：**`大括号.svg` 的填充图形**（左 `{` 原图、右 `}` 水平翻转）。
+ * - 圆括号 `( … )` 不在这里画——由布局层发成 `page.brackets`（`zkh`/`ykh` 文本字形），
+ *   与全项目其它括号同一套渲染与纵向基准（字形中心 = 数字中心）。
+ */
+function renderSegmentBracket(b: PlacedSegmentBracket, config: PageConfig): string {
+  /**
+   * adj685：优先用大括号**自己的**墨迹端点（`braceTop`/`braceBottom`，布局按"内容墨迹 + 对称留白"算），
+   * 缺省时回退 `yTop`/`yBottomLower`（老数据）——后者还被色块等消费，口径偏"块"。
+   */
+  const lo = b.braceBottom ?? b.yBottomLower
+  const top = b.braceTop ?? b.yTop
+  if (b.type !== 'dsb' || lo === undefined || lo <= top) return ''
+  const ns = config.note_size
+  /** 墨迹宽：布局给的优先；缺省（老数据）回退到旧口径 `max(3, 0.32×字号)` */
+  const gw = b.inkW ?? Math.max(3, ns * 0.32)
+  if (!(gw > 0.01)) return ''
+  const yTop = top
+  const yBot = lo
+  /**
+   * 单个大括号。
+   * `dir=-1` → `{`（原图，cusp 朝左），墨迹占 `[x, x + gw]`；
+   * `dir=+1` → `}`（**水平翻转**，cusp 朝右），墨迹同样占 `[x, x + gw]`。
+   *
+   * 纵向铺满段高；横向宽度**由布局钳定**（`SEGMENT_BRACE_ASPECT × 段高` 只是理想值，
+   * 空间不足时会变窄，见 `layout/spacing.ts` 的常量注释）。
+   * 缩放值**不能**用 `r1n()`（只留 1 位小数）——横向 ≈0.02、纵向 ≈0.047，会被舍成 0。
+   */
+  const brace = (x: number, dir: 1 | -1): string => {
+    const sx = gw / BRACE_SVG.w
+    const sy = (yBot - yTop) / BRACE_SVG.h
+    const st = `${sx.toFixed(5)} ${sy.toFixed(5)}`
+    const transform =
+      dir === -1
+        ? `translate(${r1n(x)}) translate(0 ${r1n(yTop)}) scale(${st}) translate(${r1n(-BRACE_SVG.x)} ${r1n(-BRACE_SVG.y)})`
+        : `translate(${r1n(x + gw)}) translate(0 ${r1n(yTop)}) scale(-${st}) translate(${r1n(-BRACE_SVG.x)} ${r1n(-BRACE_SVG.y)})`
+    return `<path d="${BRACE_SVG.d}" transform="${transform}" fill="#1b1b1b" data-segment-brace="${b.type}"/>`
+  }
+  return brace(b.x1, -1) + brace(b.x2, 1)
+}
+
+function renderPage(page: ScorePage, config: PageConfig, pageCount: number, opts?: RenderOpts): string {
+  const { width, height } = page
+  const body: string[] = []
+
+  // 描述头（标题/作者/调号/拍号/节拍）仅第一页显示，后续页面不重复
+  if (page.index === 0) body.push(renderMeta(page, config, opts))
+  body.push(renderVoltas(page.barlines, config.note_size, config.margin_left, width, config.margin_right, page.notes)) // 跳房子线画在最底层
+  /**
+   * adj629b（用户要求）：**临时叠加层整层压扁**——把同一段层的元素（连音线/减时线/数字/括号/小节线）
+   * 先按 `压缩比|层基线` 归组，页末一次性各包一层 `<g transform>`，而不是逐个元素各包一层。
+   * 主旋律元素（键为 null）照原顺序直接进 `body`。
+   */
+  const layerGroups = new Map<string, string[]>()
+  const pushEl = (html: string, layerScale?: number, layerBase?: number): void => {
+    if (html === '') return
+    const key = layerGroupKey(layerScale, layerBase)
+    if (key === null) {
+      body.push(html)
+      return
+    }
+    const arr = layerGroups.get(key)
+    if (arr) arr.push(html)
+    else layerGroups.set(key, [html])
+  }
+  const flushLayerGroups = (): void => {
+    for (const [key, els] of layerGroups) {
+      const [ks, bs] = key.split('|')
+      body.push(segmentYScaleWrap(els.join('\n'), Number(ks), Number(bs)))
+    }
+    layerGroups.clear()
+  }
+  for (const s of page.slurs) pushEl(renderSlur(s, config.note_size), s.layerScale, s.layerBase)
+  for (const d of page.dynamics) pushEl(renderDynamic(d, config.note_size))
+  renderBeams(computeBeams(page.notes, config.note_size), (html, ls, lb) => pushEl(html, ls, lb))
+  for (const n of page.notes) pushEl(renderNote(n, config), n.layerScale, n.y)
+  // adj294：&zkh/&ykh 独立括号标记——按插位画括号
+  for (const b of page.brackets) pushEl(renderBracket(b, config), b.layerScale, b.layerBase)
+  // adj427：临时段（{bz … } / {dsb … }）叠加层括弧——段内容音符已并入 page.notes 一并绘制
+  for (const sb of page.segmentBrackets ?? []) body.push(renderSegmentBracket(sb, config))
+  for (const b of page.barlines)
+    pushEl(renderBarline(b, config.note_size, noteFont(config.shuzi_font)), b.layerScale, b.layerBase)
+  flushLayerGroups() // 段层的所有元素在此一次性包一层 <g> 压扁
+  // adj625：方框小节序号（「显示小节计数」）——画在小节线下方，数字与方框 = 倚音字号 × 3/4
+  for (const bn of page.barNumbers) body.push(renderBarNumber(bn, config))
+  for (const l of page.lyrics) body.push(renderLyric(l, config))
+  for (const vb of page.voiceBlocks) body.push(renderVoiceBlocks(page, vb, config.note_size))
+  body.push(renderPageNum(page, config, pageCount))
+
+  // 说明文字（adj83：S 行，多行；渲染在简谱主体最末尾——最后一页正文下方、下边距线上方，
+  // adj154：用独立的说明字体字号 notes_font/notes_size（默认沿用描述头）；
+  // adj151/adj153：每段 data-meta="notes_i" 可独立拖拽（metaPos["notes_i"] = 相对左缘基准的偏移）、
+  //   超宽自动换行成子行（data-notes-sub）、内容不越左右边距；
+  // adj630/adj630b（用户要求）：**紧靠边距内的右下角** —— 右对齐到右边距（`text-anchor=end`），
+  //   且**整块自下而上**排（末行贴下边距线、往上逐行），两条边距线一改整块跟着走
+  //   （行基线 = `notesRowBaseline()`，与预览端拖拽基准共用同一个函数）。
+  //   **拖拽过的段落**（有 metaPos["notes_i"]，或旧 metaPos["notes"]）仍按原口径加偏移
+  //   （x：左缘基准 / 页面居中基准，`text-anchor=start`），「恢复默认」清掉 metaPos 后回到右下角。
+  if (page.index === pageCount - 1 && page.meta.notes.length > 0) {
+    const nFont = config.notes_font ?? config.miaoshu_font
+    const nSize = config.notes_size ?? config.miaoshu_size
+    const baseX = config.margin_left
+    // adj630：默认右对齐基准 = 右边距线（`width - margin_right`）
+    const rightX = width - config.margin_right
+    // 可用宽 = 左右边距之间（adj153：文本不超此范围）
+    const availW = Math.max(width - config.margin_left - config.margin_right, 10)
+    // adj630b：先把每段都折好行，才知道整块的**总行数**（末行贴线、往上退，需要总数）
+    const noteSubs = page.meta.notes.map((line) => wrapNotesLine(line, availW, nSize))
+    const totalRows = Math.max(1, noteSubs.reduce((s, subs) => s + subs.length, 0))
+    let row = 0
+    for (let i = 0; i < page.meta.notes.length; i++) {
+      // adj151：新 metaPos["notes_i"] 相对左边距基准；兼容旧 metaPos["notes"]
+      // （adj83 语义：相对页面居中）——旧偏移按居中基准解释，避免位置出页面
+      const p = config.metaPos?.[`notes_${i}`]
+      const pOld = config.metaPos?.['notes']
+      const pinnedX = p ? baseX + p.x : pOld ? width / 2 + pOld.x : null
+      const offY = p ? p.y : pOld ? pOld.y : 0
+      const subs = noteSubs[i]
+      for (let k = 0; k < subs.length; k++) {
+        const sub = subs[k]
+        const subW = metaTextW(sub) * (nSize / 13)
+        const y = notesRowBaseline({ pageH: height, marginBottom: config.margin_bottom, nSize, row, totalRows }) + offY
+        // 默认（贴右边距）：`text-anchor=end` ⇒ 约束是「左缘 = x − 文本宽 ≥ 左边距」；
+        // 万一某子行仍比可用宽还宽（不可断的长串），退回"左缘贴左边距"（与旧实现的退化方式一致）。
+        // 拖拽过的段落：沿用旧口径（左缘基准、`text-anchor=start`、右缘不超右边距）。
+        const x =
+          pinnedX === null
+            ? Math.max(rightX, baseX + subW)
+            : Math.min(Math.max(pinnedX, baseX), Math.max(baseX, rightX - subW))
+        body.push(
+          `<text data-meta="notes_${i}" data-notes-line="${i}" data-notes-sub="${k}" data-notes-row="${row}" data-notes-total="${totalRows}" x="${r1n(x)}" y="${r1n(y)}" text-anchor="${pinnedX === null ? 'end' : 'start'}" font-size="${nSize}" font-family="${nFont}" fill="#1b1b1b">${linkifyText(sub)}</text>`,
+        )
+        row++
+      }
+    }
+  }
+
+  /**
+   * adj965（方案「OVL」）：水印层与背景层。
+   *
+   * 层序 = 拼接顺序（后画的在上）：白底 rect → **背景层** → **水印层** → 曲谱 body
+   * ⇒ 视觉上"曲谱 > 水印 > 背景" ✓ 正是用户要的层级。
+   *
+   * ⚠ 三个都为空串时**一个字节都不插**（`<defs>` 也不插）⇒ 不用这功能的谱，产物与改动前**逐字节相同**。
+   */
+  const ovl = overlayLayers(config, page, opts?.assets)
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
+      (ovl.defs === '' ? '' : `<defs>${ovl.defs}</defs>`) +
+      /**
+       * adj629n：页面白底 rect 带 `data-page-bg` 标记——宿主（预览层）需要把它透明化时
+       * **必须按这个标记选**，不能用 `rect:first-child`：
+       * 段层（`{bz}`/`{dsb}`/`{tp}`）整层被包在一个 `<g>` 里，而那个 `<g>` 的**第一个子元素
+       * 正是该层的第一条减时线 rect** ⇒ `rect:first-child` 会把它一起选中、fill 变透明
+       * （用户报「伴奏里的 `0/ 2/` 预览里下面没有减时线」——同层第二条线却正常）。
+       */
+      `<rect data-page-bg="1" x="0" y="0" width="100%" height="100%" fill="#ffffff"/>` +
+      ovl.bg +
+      ovl.wm +
+      body.join('\n') +
+      `</svg>`
+  )
+}
+
+/** 将排版结果渲染为 SVG 页面数组；opts 提供浏览器实测的 "1 = " 宽与 ♯ 宽（按字体实际宽度摆放角标）与图片资源 */
+export function renderScoreToSvg(layout: ScoreLayout, opts?: RenderOpts): string[] {
+  return layout.pages.map((p) => renderPage(p, layout.config, layout.pages.length, opts))
+}
