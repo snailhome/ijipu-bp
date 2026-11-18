@@ -175,6 +175,12 @@ button.primary {
   background: var(--panel);
 }
 
+/* 扒谱主区：音高×时间的表格，点格子试听（cursor 提示可点） */
+.pane.roll {
+  flex: 1 1 46%;
+  cursor: crosshair;
+}
+
 .pane-head {
   flex: none;
   padding: 5px 12px;

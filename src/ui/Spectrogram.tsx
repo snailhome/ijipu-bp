@@ -89,7 +89,7 @@ export function Spectrogram({ spectrum, durationMs, onSeek, playMs }: Props) {
     <div
       className="pane"
       ref={wrapRef}
-      style={{ flex: '1 1 42%' }}
+      style={{ flex: '1 1 26%' }}
       onClick={(e) => {
         const rect = e.currentTarget.getBoundingClientRect()
         const ratio = (e.clientX - rect.left) / Math.max(1, rect.width)

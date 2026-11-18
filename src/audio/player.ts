@@ -35,6 +35,20 @@ export function setAudioBuffer(b: AudioBuffer | null): void {
   buffer = b
 }
 
+/**
+ * 试听一个音（卷帘上点/拖某一格就响这个音高）。
+ * 和播放共用同一个 AudioContext，但用**独立的 backend 实例**：
+ * 试听时正在播的曲子不该被打断（`synth.stop()` 会停掉正在播的合成音）。
+ */
+let auditionBackend: AudioBackend | null = null
+export async function audition(midi: number, durMs = 320): Promise<void> {
+  const c = audioCtx()
+  await c.resume()
+  if (!auditionBackend) auditionBackend = createBackend('synth')
+  await auditionBackend.ready?.()
+  await auditionBackend.play(midiToName(midi), 0, durMs, 0.5)
+}
+
 /** 把播放头停在某处（拖动进度、点频谱都用它） */
 export function seek(ms: number): void {
   startMs = Math.max(0, ms)

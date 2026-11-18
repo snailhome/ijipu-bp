@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { keyDisplayName } from './analysis/pitchNames'
 import { loadAudioFromPath, pickAndLoadAudio, type LoadedAudio } from './audio/decode'
-import { play, setAudioBuffer, stop, type PlayMode } from './audio/player'
+import { play, setAudioBuffer, stop, audition, type PlayMode } from './audio/player'
 import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
@@ -37,10 +37,12 @@ export default function App() {
   const title = useBp((s) => s.title)
   const jps = useBp((s) => s.jps)
   const grid = useBp((s) => s.grid)
+  const notes = useBp((s) => s.notes)
   const warnings = useBp((s) => s.warnings)
 
   const set = useBp
   const [notice, setNotice] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const workerRef = useRef<Worker | null>(null)
 
   /* ---------- 分析 worker ---------- */
@@ -127,7 +129,7 @@ export default function App() {
   const startPlay = useCallback(async (fromMs: number, mode: PlayMode) => {
     const st = set.getState()
     if (!st.analysis) return
-    await play(fromMs, mode, st.analysis.notes, st.durationMs, {
+    await play(fromMs, mode, st.notes, st.durationMs, {
       onTick: (ms) => set.getState().setCurrentMs(ms),
       onEnd: () => set.getState().setPlaying(false),
     })
@@ -168,6 +170,12 @@ export default function App() {
     },
     [set, startPlay],
   )
+
+  /** 删音符：顺手把选中态清掉（否则 Delete 会去删一个已经不存在的 id） */
+  const removeNote = useCallback((id: string) => {
+    useBp.getState().removeNote(id)
+    setSelectedId((cur) => (cur === id ? null : cur))
+  }, [])
 
   /* ---------- 热键：空格播放/暂停，Tab 切 A/B ---------- */
   useEffect(() => {
@@ -254,6 +262,16 @@ export default function App() {
             {COPY.pitchNumber}
           </button>
         </div>
+        <button
+          onClick={() => {
+            useBp.getState().resetNotes()
+            setSelectedId(null)
+          }}
+          disabled={!analysis}
+          title="丢掉手工改动，回到分析出来的初稿"
+        >
+          回到初稿
+        </button>
         <button onClick={() => void exportJps()} disabled={!jps}>
           {COPY.exportJps}
         </button>
@@ -263,7 +281,7 @@ export default function App() {
         <div className="main">
           <Spectrogram spectrum={analysis?.spectrum ?? null} durationMs={durationMs} onSeek={seek} playMs={currentMs} />
           <NoteRoll
-            notes={analysis?.notes ?? []}
+            notes={notes}
             grid={grid}
             bpm={bpm}
             beatsPerBar={beatsPerBar}
@@ -271,7 +289,13 @@ export default function App() {
             durationMs={durationMs}
             pitchMode={pitchMode}
             tonic={tonic}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
             onSeek={seek}
+            onAudition={(midi) => void audition(midi)}
+            onAdd={(n) => void useBp.getState().addNote(n)}
+            onPatch={(id, patch) => useBp.getState().patchNote(id, patch)}
+            onRemove={removeNote}
             playMs={currentMs}
           />
           <JpsPreview jps={jps} />
@@ -368,7 +392,7 @@ export default function App() {
       <div className="status">
         <span>{fileName ?? COPY.empty}</span>
         <span>{durationMs ? `${(durationMs / 1000).toFixed(1)}s` : ''}</span>
-        <span>{analysis ? `${analysis.notes.length} 个音` : ''}</span>
+        <span>{analysis ? `${notes.length} 个音` : ''}</span>
         <span>{busy ?? ''}</span>
         <span className="spacer" />
         {error && <span className="err">{error}</span>}

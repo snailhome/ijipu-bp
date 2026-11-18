@@ -18,6 +18,7 @@ import { guessKeys } from '../src/analysis/key'
 import { midiToNumber, midiToName } from '../src/analysis/pitchNames'
 import { quantize } from '../src/jps/quantize'
 import { toJps } from '../src/jps/toJps'
+import { useBp } from '../src/model/store'
 import type { RawNote } from '../src/model/types'
 
 const SR = 44100
@@ -226,6 +227,37 @@ const melody = concat([
   check("端到端生成 Q: 1 3 5 1'", qLine === "Q: 1 3 5 1'", qLine)
   const errors = parseJps(jps).errors.map((e) => (typeof e === 'string' ? e : (e.message ?? '')))
   check('端到端 jps 引擎解析 0 错误', errors.length === 0, errors.join('；'))
+}
+
+/* ---------------- 11.7 手工编辑：加 / 改 / 删 / 回初稿 都重算 jps ---------------- */
+{
+  const parts = [tone(261.63, 500), tone(329.63, 500), silence(300)]
+  const r = analyzeSamples(concat(parts), SR)
+  const st = useBp.getState()
+  st.setAnalysis(r)
+  const before = useBp.getState().jps.split('\n').find((l) => l.startsWith('Q: ')) ?? ''
+
+  // 加一个高八度的 C5 在第 3 拍（1200ms 起）
+  useBp.getState().addNote({ midi: 72, startMs: 1100, endMs: 1500 })
+  const afterAdd = useBp.getState().jps.split('\n').find((l) => l.startsWith('Q: ')) ?? ''
+  check('手工加音后 jps 里多出 1̇', afterAdd.includes("1'"), `${before} → ${afterAdd}`)
+
+  // 把这个音往上挪半音 → 变成 #1̇
+  const added = useBp.getState().notes.find((n) => n.midi === 72)
+  check('加的音进了音符表', added !== undefined, `${useBp.getState().notes.length} 个音`)
+  if (added) useBp.getState().patchNote(added.id, { midi: 73 })
+  const afterPatch = useBp.getState().jps.split('\n').find((l) => l.startsWith('Q: ')) ?? ''
+  check('改音高后 jps 跟着变', afterPatch !== afterAdd, afterPatch)
+
+  // 删掉它
+  if (added) useBp.getState().removeNote(added.id)
+  const afterRemove = useBp.getState().jps.split('\n').find((l) => l.startsWith('Q: ')) ?? ''
+  check('删音后回到原来的谱', afterRemove === before, afterRemove)
+
+  // 回到初稿：音符数回到分析结果的数量
+  useBp.getState().addNote({ midi: 60, startMs: 0, endMs: 400 })
+  useBp.getState().resetNotes()
+  check('回到初稿 = 分析出来的音符数', useBp.getState().notes.length === r.notes.length, `${useBp.getState().notes.length}/${r.notes.length}`)
 }
 
 /* ---------------- 12. 界面能挂载（SSR 渲染一次，抓初始渲染的崩溃） ---------------- */

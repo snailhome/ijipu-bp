@@ -52,6 +52,12 @@ npm run smoke
 - 只在本文件之外读 `window.__TAURI__` 的**唯一入口**是 `src/brand/env.ts`。
 - 播放头由 `AudioContext.currentTime` 推算，**不要用 rAF 累加时间**（会漂）。
 - 版本号三处一致：`package.json`、`src-tauri/tauri.conf.json`、`src/brand/version.ts`。
+- **扒谱主界面是 `src/ui/NoteRoll.tsx` 的"音高 × 时间"表格**（用户 2026-11-18 明确要求：
+  不要带状波形，要 noteDigger 那种左侧钢琴键盘 + 横向时间轴 + 纵向音名，点格子能试听）。
+  改这个组件就是改产品的主交互，动手前先想清楚"扒谱要反复核对：听原音频 → 定音高/时值 →
+  听合成音 → 改"这条闭环是否仍然成立；改完同步更新 `README.md` 的交互清单与本文件。
+- 音符**以 `store.notes`（秒轴、可编辑）为准**，`analysis.notes` 只是初稿；
+  别把 `analysis.notes` 直接画到界面或喂给播放（否则人工改动白做）。
 
 ## 五、提交
 
