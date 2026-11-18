@@ -230,11 +230,27 @@ button.primary {
 
 .pane-head {
   flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
   padding: 5px 12px;
   font-size: 11px;
   color: var(--fg-dim);
   border-bottom: 1px solid var(--line);
   background: var(--panel-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pane-head > span:first-child {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.pane-head .dim {
+  color: var(--fg-dim);
+  opacity: 0.85;
 }
 
 .playhead {

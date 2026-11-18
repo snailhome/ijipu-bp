@@ -207,7 +207,13 @@ export default function App() {
       return
     }
     if (!st.analysis) return
-    void startPlay(st.currentMs >= st.durationMs ? 0 : st.currentMs, st.playMode)
+    /* 圈了播放区间就从区间开头放（用户：画完区间按播放，应该在区间里循环听，而不是从头放） */
+    let from = st.currentMs >= st.durationMs ? 0 : st.currentMs
+    if (st.loopOn && st.loop) {
+      const inside = from >= st.loop.startMs - 5 && from < st.loop.endMs - 5
+      if (!inside) from = st.loop.startMs
+    }
+    void startPlay(from, st.playMode)
   }, [set, startPlay])
 
   const switchMode = useCallback(
@@ -276,8 +282,14 @@ export default function App() {
   /* ---------- 热键 ---------- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      const el = e.target as HTMLElement | null
+      const tag = el?.tagName
+      /* 只有"要打字"的控件才吞掉热键；滑条/复选框/按钮上的空格照样能启停播放 */
+      const typing =
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        (tag === 'INPUT' && !['range', 'checkbox', 'radio', 'button', 'submit'].includes((el as HTMLInputElement).type))
+      if (typing) return
       const st = set.getState()
       if (e.code === 'Space') {
         e.preventDefault()

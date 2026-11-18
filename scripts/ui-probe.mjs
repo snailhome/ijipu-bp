@@ -118,6 +118,27 @@ class Cdp {
     })
     await sleep(120)
   }
+
+  /** 按一下某个键（code 用 DOM 的 code，比如 Space / Backquote） */
+  async pressKey(code, key = code, vk = 0) {
+    const base = { code, key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk }
+    await this.send('Input.dispatchKeyEvent', { type: 'keyDown', ...base })
+    await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
+    await sleep(120)
+  }
+
+  /** 在某个坐标上滚一下（modifiers: 1=Alt 2=Ctrl 4=Meta 8=Shift，跟 CDP 一致） */
+  async wheelAt(x, y, deltaY, modifiers = 0) {
+    await this.send('Input.dispatchMouseEvent', {
+      type: 'mouseWheel',
+      x,
+      y,
+      deltaX: 0,
+      deltaY,
+      modifiers,
+    })
+    await sleep(120)
+  }
 }
 
 const results = []
@@ -430,6 +451,55 @@ try {
   const highC = await sampleHeat()
   check('对比滑条真能改变热力图曲线', lowC !== highC, `${lowC} vs ${highC}`)
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setGain(1); s.setContrast(1.4) })()`)
+
+  /* ── 空格启停 ── 之前焦点落在滑条上时被"输入框不响应热键"挡掉，现在只有真typing才挡 */
+  const rollBox = await cdp.eval(`(() => {
+    const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+    return { x: r.x + r.width * 0.6, y: r.y + r.height * 0.5 }
+  })()`)
+  await cdp.eval(`window.__bp.getState().setLoop(null)`)
+  await cdp.eval(`document.querySelector('.side input[type=range]')?.focus()`)
+  await cdp.pressKey('Space', ' ', 32)
+  await sleep(300)
+  const playingAfterSpace = await cdp.eval(`window.__bp.getState().playing`)
+  check('焦点在滑条上时，空格也能开始播放', playingAfterSpace === true, String(playingAfterSpace))
+  await cdp.pressKey('Space', ' ', 32)
+  await sleep(250)
+  const stoppedAfterSpace = await cdp.eval(`window.__bp.getState().playing`)
+  check('再按空格能停下', stoppedAfterSpace === false, String(stoppedAfterSpace))
+
+  /* ── 圈了区间，按播放要从区间开头放（不是从头） ── */
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setLoop({ startMs: 800, endMs: 2000 }); s.setLoopOn(true); s.setCurrentMs(0) })()`)
+  await sleep(150)
+  await cdp.pressKey('Space', ' ', 32)
+  await sleep(500)
+  const loopStartMs = await cdp.eval(`window.__bp.getState().currentMs`)
+  check('画了播放区间后按空格，从区间开头放', loopStartMs >= 780, `currentMs=${Math.round(loopStartMs)}`)
+  await cdp.pressKey('Space', ' ', 32)
+  await sleep(200)
+
+  /* ── 滚轮不用先点画布：Shift+Alt 悬停就能缩放 ── */
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setView({ zoom: 1, panMs: 0 }); s.setLoop(null) })()`)
+  await sleep(150)
+  await cdp.wheelAt(rollBox.x, rollBox.y, -120, 8 | 1)
+  await sleep(250)
+  const zoomAfterWheel = await cdp.eval(`window.__bp.getState().view.zoom`)
+  check('鼠标悬停直接滚（Shift+Alt）就能缩放', zoomAfterWheel > 1, `zoom=${zoomAfterWheel}`)
+
+  /* ── 时间尺上不显示悬浮信息牌 ── */
+  const rulerPoint = await cdp.eval(`(() => {
+    const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+    return { x: r.x + r.width * 0.5, y: r.y + 8 }
+  })()`)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: rulerPoint.x,
+    y: rulerPoint.y,
+    button: 'none',
+  })
+  await sleep(200)
+  const badgeOnRuler = await cdp.eval(`!!document.querySelector('.row-badge')`)
+  check('时间尺区域不显示"音名·简谱"信息牌', badgeOnRuler === false, String(badgeOnRuler))
 
   const errs = await cdp.eval(`window.__bpErrors || 0`)
   check('页面没有运行时错误', !errs, errs ? String(errs) : '')

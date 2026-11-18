@@ -127,6 +127,8 @@ export function NoteRoll(props: Props) {
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [center, setCenter] = useState(76)
   const [hoverMidi, setHoverMidi] = useState<number | null>(null)
+  /* 鼠标在画布里的 y（用来判断要不要显示悬浮信息；时间尺上不显示） */
+  const [hoverY, setHoverY] = useState<number | null>(null)
   const drag = useRef<Drag | null>(null)
 
   /* 尺寸跟随容器 */
@@ -492,8 +494,11 @@ export function NoteRoll(props: Props) {
    *  Shift       = 左右平移（"移动波形"）
    *  Shift + Alt = 横向缩放（时值比率；Ctrl+滚轮 也保留，方便戴鼠标惯用 Ctrl 的人） */
   useEffect(() => {
+    /* 挂在整块面板上而不是 canvas 上：鼠标在画布边缘/占位文字/滚动条上方滚动也算数，
+     * 不用先点一下才生效 */
     const cv = canvasRef.current
-    if (!cv) return
+    const host = wrapRef.current
+    if (!cv || !host) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
       const wantZoom = (e.shiftKey && e.altKey) || e.ctrlKey || e.metaKey
@@ -518,8 +523,8 @@ export function NoteRoll(props: Props) {
       }
       setCenter((c) => Math.max(MIDI_LOW, Math.min(MIDI_HIGH, c - Math.sign(e.deltaY) * 2)))
     }
-    cv.addEventListener('wheel', onWheel, { passive: false })
-    return () => cv.removeEventListener('wheel', onWheel)
+    host.addEventListener('wheel', onWheel, { passive: false })
+    return () => host.removeEventListener('wheel', onWheel)
   }, [durationMs, msAt, props, view])
 
   /* ── 指针交互 ── */
@@ -629,6 +634,7 @@ export function NoteRoll(props: Props) {
       const rect = e.currentTarget.getBoundingClientRect()
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
+      setHoverY(y)
       setHoverMidi(y >= RULER_H ? midiAt(y) : null)
 
       const d = drag.current
@@ -721,9 +727,11 @@ export function NoteRoll(props: Props) {
 
   return (
     <div className="pane roll" ref={wrapRef}>
-      <span className="pane-label">
-        音符表（{hint}）
-      </span>
+      {/* 说明放画布上方一条窄头里，不压时间尺（时间尺上只留刻度和第几小节） */}
+      <div className="pane-head">
+        <span>音符表</span>
+        <span className="dim">{hint}</span>
+      </div>
       <canvas
         ref={canvasRef}
         style={{
@@ -734,10 +742,14 @@ export function NoteRoll(props: Props) {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerLeave={() => setHoverMidi(null)}
+        onPointerLeave={() => {
+          setHoverMidi(null)
+          setHoverY(null)
+        }}
         onContextMenu={onContext}
       />
-      {hoverMidi !== null && (
+      {/* 悬浮信息：跟着鼠标走，但只在音符格区域显示（时间尺上不显示） */}
+      {hoverMidi !== null && hoverY !== null && hoverY >= RULER_H && (
         <div className="row-badge">
           {midiToName(hoverMidi)} · {midiToNumber(hoverMidi, props.tonic).text}
           <span className="dim">（点一下试听）</span>
