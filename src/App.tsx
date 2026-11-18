@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { keyDisplayName } from './analysis/pitchNames'
-import { pickAndLoadAudio } from './audio/decode'
+import { loadAudioFromPath, pickAndLoadAudio, type LoadedAudio } from './audio/decode'
 import { play, setAudioBuffer, stop, type PlayMode } from './audio/player'
 import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
@@ -65,6 +65,24 @@ export default function App() {
   }, [set])
 
   /* ---------- 打开音频 ---------- */
+  /** 装载 + 起分析：选文件和"启动参数带文件"都走这一条，避免两套逻辑 */
+  const applyLoaded = useCallback(
+    (loaded: LoadedAudio) => {
+      const st = set.getState()
+      stop()
+      st.setPlaying(false)
+      st.setLoaded({ fileName: loaded.name, filePath: loaded.path, durationMs: loaded.durationMs })
+      setAudioBuffer(loaded.buffer)
+      st.setBusy(COPY.analyzing)
+      const w = workerRef.current
+      if (!w) throw new Error('分析线程没起来')
+      w.postMessage({ samples: loaded.samples, sampleRate: loaded.sampleRate }, [
+        loaded.samples.buffer as ArrayBuffer,
+      ])
+    },
+    [set],
+  )
+
   const openAudio = useCallback(async () => {
     const st = set.getState()
     st.setError(null)
@@ -76,21 +94,34 @@ export default function App() {
         st.setBusy(null)
         return
       }
-      stop()
-      st.setPlaying(false)
-      st.setLoaded({ fileName: loaded.name, filePath: loaded.path, durationMs: loaded.durationMs })
-      setAudioBuffer(loaded.buffer)
-      st.setBusy(COPY.analyzing)
-      const w = workerRef.current
-      if (!w) throw new Error('分析线程没起来')
-      w.postMessage({ samples: loaded.samples, sampleRate: loaded.sampleRate }, [
-        loaded.samples.buffer as ArrayBuffer,
-      ])
+      applyLoaded(loaded)
     } catch (e) {
       st.setError(e instanceof Error ? e.message : String(e))
       st.setBusy(null)
     }
-  }, [set])
+  }, [applyLoaded, set])
+
+  /* ---------- 启动参数里的音频（桌面壳：双击 / 命令行） ---------- */
+  useEffect(() => {
+    if (!isTauriShell()) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const path = (await invoke<string | null>('bp_initial_audio')) ?? null
+        if (!path || cancelled) return
+        const loaded = await loadAudioFromPath(path)
+        if (!loaded || cancelled) return
+        set.getState().setError(null)
+        applyLoaded(loaded)
+      } catch (e) {
+        set.getState().setError(e instanceof Error ? e.message : String(e))
+        set.getState().setBusy(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [applyLoaded, set])
 
   /* ---------- 播放 ---------- */
   const startPlay = useCallback(async (fromMs: number, mode: PlayMode) => {
@@ -246,7 +277,6 @@ export default function App() {
           <div>
             <h3>{COPY.keyPanelTitle}</h3>
             <div className="keys">
-              {candidates.length === 0 && <div className="hint">{COPY.keyPanelHint}</div>}
               {candidates.map((c) => (
                 <div
                   key={c.tonic}

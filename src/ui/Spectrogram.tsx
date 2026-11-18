@@ -71,9 +71,11 @@ export function Spectrogram({ spectrum, durationMs, onSeek, playMs }: Props) {
           ctx.fillText(midiToName(MIDI_LOW + b), 3, y - 2)
         }
       } else {
-        ctx.fillStyle = '#9aa7bb'
+        ctx.fillStyle = '#5d6b80'
         ctx.font = '13px "Segoe UI", sans-serif'
-        ctx.fillText('打开音频后这里显示频谱', 12, 28)
+        ctx.textAlign = 'center'
+        ctx.fillText('打开音频后这里显示频谱', w / 2, h / 2)
+        ctx.textAlign = 'left'
       }
     }
 

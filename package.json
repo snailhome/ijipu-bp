@@ -10,6 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "smoke": "vite build --config vite.smoke.config.ts && node dist-smoke/smoke.cjs",
+    "inspect": "vite build --config vite.inspect.config.ts && node dist-inspect/inspect.cjs",
+    "fixture": "node scripts/make-fixture-wav.mjs .tmp-melody.wav",
     "sync:engine": "node scripts/sync-engine.mjs",
     "check:engine": "node scripts/sync-engine.mjs --check",
     "tauri": "tauri",

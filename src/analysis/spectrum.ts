@@ -30,7 +30,14 @@ export function computeSpectrum(
   const fftSize = opts.fftSize ?? 8192
   const fps = opts.fps ?? 20
   const hop = Math.max(1, Math.round(sampleRate / fps))
-  const frames = Math.max(1, Math.floor((samples.length - fftSize) / hop) + 1)
+  /**
+   * 第 f 帧的**中心**对准 f*hop（不是窗口起点）。
+   * 为什么：一个音在 500ms 处换掉时，只有"包含 500ms 的窗口"才该判成新音；
+   * 若按窗口起点计时，换音会提前约半个窗长（8192 点 ≈ 93ms）出现在结果里 ——
+   * 表现就是首音短一截、末音长一截，量化后变成 `1/` 这种怪时值。
+   */
+  const half = fftSize >> 1
+  const frames = Math.max(1, Math.floor(samples.length / hop) + 1)
   const fft = new FFT(fftSize)
   const win = windowOf(fftSize)
   const logMap = buildLogMap(sampleRate, fftSize)
@@ -41,10 +48,11 @@ export function computeSpectrum(
   const frameRms = new Float32Array(frames)
 
   for (let f = 0; f < frames; f++) {
-    const offset = f * hop
+    const start = f * hop - half
     let sumSq = 0
     for (let i = 0; i < fftSize; i++) {
-      const s = offset + i < samples.length ? samples[offset + i] : 0
+      const idx = start + i
+      const s = idx >= 0 && idx < samples.length ? samples[idx] : 0
       sumSq += s * s
       re[i] = s * win[i]
       im[i] = 0

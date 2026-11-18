@@ -197,6 +197,37 @@ const melody = concat([
   check('静音输入 → 0 个音、无异常', r.notes.length === 0 && Number.isFinite(r.bpm), `${r.notes.length} 个音`)
 }
 
+/* ---------------- 11.5 帧的时刻对准帧中心（换音不能提前半个窗） ----------------
+ * adj 背景：曾经用"窗口起点"当帧时刻，8192 点窗 ≈ 93ms，导致
+ * 500ms 处换音被记成 400ms，量化成 0.75 拍。这条守住"不早于换音时刻"。 */
+{
+  const parts = [tone(261.63, 500), tone(329.63, 500), tone(392.0, 500), silence(300)]
+  const r = analyzeSamples(concat(parts), SR)
+  const starts = r.notes.map((n) => Math.round(n.startMs))
+  check('4 个音的起点约为 0/500/1000ms', starts.length >= 3 && Math.abs(starts[0]) <= 30 && Math.abs(starts[1] - 500) <= 60 && Math.abs(starts[2] - 1000) <= 60, starts.join(','))
+  const durs = r.notes.map((n) => Math.round(n.endMs - n.startMs))
+  check(
+    '三个音的时长都在 1 拍上下（400–600ms）',
+    durs.slice(0, 3).every((d) => d >= 400 && d <= 600),
+    durs.join(','),
+  )
+  const q = quantize(r.notes, { bpm: 120, beatsPerBar: 4, firstBeatMs: r.firstBeatMs })
+  const ticks = q.notes.map((n) => n.ticks).join(',')
+  check('三音量化后都是 4 tick（一拍）', q.notes.length >= 3 && q.notes.slice(0, 3).every((n) => n.ticks === 4), ticks)
+}
+
+/* ---------------- 11.6 端到端：合成的 1 3 5 1' → jps 文本 ---------------- */
+{
+  const parts = [tone(261.63, 500), tone(329.63, 500), tone(392.0, 500), tone(523.25, 500), silence(300)]
+  const r = analyzeSamples(concat(parts), SR)
+  const q = quantize(r.notes, { bpm: 120, beatsPerBar: 4, firstBeatMs: r.firstBeatMs })
+  const jps = toJps(q.notes, { bpm: 120, beatsPerBar: 4, firstBeatMs: r.firstBeatMs, tonic: 0, title: '冒烟旋律' })
+  const qLine = jps.split('\n').find((l) => l.startsWith('Q: ')) ?? ''
+  check("端到端生成 Q: 1 3 5 1'", qLine === "Q: 1 3 5 1'", qLine)
+  const errors = parseJps(jps).errors.map((e) => (typeof e === 'string' ? e : (e.message ?? '')))
+  check('端到端 jps 引擎解析 0 错误', errors.length === 0, errors.join('；'))
+}
+
 /* ---------------- 12. 界面能挂载（SSR 渲染一次，抓初始渲染的崩溃） ---------------- */
 {
   const html = renderToString(createElement(App))

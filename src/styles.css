@@ -140,13 +140,31 @@ button.primary {
 
 .pane-label {
   position: absolute;
-  left: 10px;
+  left: 8px;
   top: 6px;
   font-size: 11px;
-  color: var(--fg-dim);
+  color: #cfe0f5;
   pointer-events: none;
-  text-shadow: 0 1px 2px #000;
   z-index: 3;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(14, 17, 22, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.pane.preview {
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+}
+
+.pane-head {
+  flex: none;
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
 }
 
 .playhead {
@@ -228,8 +246,10 @@ button.primary {
   min-height: 120px;
   overflow: auto;
   background: #f7f7f4;
-  border-radius: var(--radius);
-  padding: 6px;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 8px 10px 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 
 .jps svg {

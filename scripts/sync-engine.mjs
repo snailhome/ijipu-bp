@@ -64,6 +64,14 @@ if (!existsSync(SRC)) {
 
 const src = hashOf(SRC)
 
+/** 上一次的快照（同步时用来判断"引擎真的变了吗"） */
+let previous = null
+try {
+  previous = JSON.parse(readFileSync(SNAPSHOT, 'utf8'))
+} catch {
+  previous = null
+}
+
 if (CHECK) {
   if (!existsSync(VENDOR)) {
     console.error('vendor/engine 不存在，先跑一次 npm run sync:engine')
@@ -96,10 +104,12 @@ writeFileSync(
     {
       note: '本目录由 scripts/sync-engine.mjs 从 ijipu/packages/ijipu-engine/src/engine 逐字节同步，勿手改。',
       source: 'ijipu/packages/ijipu-engine/src/engine',
-      commit: gitHead(),
+      // 引擎没变时保持旧值：否则 iJipu 那边每提交一次文档，这里就多一条噪声改动。
+      // 判断以 hash 为准（commit 只是"方便人看"的注脚）。
+      commit: previous?.hash === after.hash ? previous.commit : gitHead(),
       files: after.files,
       hash: after.hash,
-      syncedAt: new Date().toISOString(),
+      syncedAt: previous?.hash === after.hash ? previous.syncedAt : new Date().toISOString(),
     },
     null,
     2,

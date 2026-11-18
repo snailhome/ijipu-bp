@@ -12,9 +12,9 @@ export function JpsPreview({ jps }: { jps: string }) {
   const { pages, errors } = useMemo(() => jpsToSvgPages(jps), [jps])
 
   return (
-    <div className="pane" style={{ flex: '1 1 auto', minHeight: 140, display: 'flex', flexDirection: 'column' }}>
-      <span className="pane-label">{COPY.previewTitle}</span>
-      <div className="jps" style={{ margin: 6 }}>
+    <div className="pane preview" style={{ flex: '1 1 auto', minHeight: 140 }}>
+      <div className="pane-head">{COPY.previewTitle}</div>
+      <div className="jps">
         {pages.length > 0 ? (
           <div dangerouslySetInnerHTML={{ __html: pages[0] }} />
         ) : (

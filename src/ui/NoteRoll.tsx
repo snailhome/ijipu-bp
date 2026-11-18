@@ -46,9 +46,11 @@ export function NoteRoll(props: Props) {
       ctx.fillRect(0, 0, w, h)
 
       if (notes.length === 0) {
-        ctx.fillStyle = '#9aa7bb'
+        ctx.fillStyle = '#5d6b80'
         ctx.font = '13px "Segoe UI", sans-serif'
-        ctx.fillText('没检测到音符', 12, 26)
+        ctx.textAlign = 'center'
+        ctx.fillText('还没有音符：先打开一段音频', w / 2, h / 2)
+        ctx.textAlign = 'left'
         return
       }
 

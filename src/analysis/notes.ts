@@ -85,20 +85,37 @@ export function trackMonophonic(spec: Spectrum, opts: TrackOptions = {}): RawNot
     }
   }
 
-  // 5) 出 RawNote（力度 = 该段中间三帧的对数谱均值，归一化到 0..1）
-  return merged.map((seg, i) => {
-    const mid = Math.floor((seg.from + seg.to) / 2)
-    let level = 0
-    for (let f = Math.max(seg.from, mid - 1); f <= Math.min(seg.to, mid + 1); f++) {
-      level += data[f * BIN_COUNT + seg.bin]
+  // 4.5) 掐掉两头看不出来的一截
+  //      为什么需要：帧窗长 186ms，音尾的衰减会被"还包含它"的那几帧拖住，
+  //      末音因此长约 100ms → 量化成 1.25 拍、还要和后面那个音做连音线。
+  //      判据用"该段自身的中位数音量"而不是全局阈值：每段自己的响度不同。
+  //      尾部比头部更狠（0.55 vs 0.35）：起音快、收音慢，拖尾主要在后面。
+  for (const seg of merged) {
+    let sum = 0
+    for (let f = seg.from; f <= seg.to; f++) sum += frameRms[f]
+    const mid = sum / Math.max(1, seg.to - seg.from + 1)
+    let from = seg.from
+    let to = seg.to
+    while (from < to && frameRms[from] < mid * 0.35) from++
+    while (to > from && frameRms[to] < mid * 0.55) to--
+    // 至少留 2 帧，否则短音符会被掐没
+    if (to - from + 1 >= 2) {
+      seg.from = from
+      seg.to = to
     }
-    level /= Math.max(1, Math.min(seg.to, mid + 1) - Math.max(seg.from, mid - 1) + 1)
+  }
+
+  // 5) 出 RawNote（力度 = 该段时域 RMS 相对于全曲最响帧，0.2..1）
+  return merged.map((seg, i) => {
+    let rms = 0
+    for (let f = seg.from; f <= seg.to; f++) rms += frameRms[f]
+    rms /= Math.max(1, seg.to - seg.from + 1)
     return {
       id: `n${i + 1}`,
       midi: MIDI_LOW + seg.bin,
       startMs: seg.from * hopMs,
       endMs: (seg.to + 1) * hopMs,
-      velocity: Math.min(1, level / 4),
+      velocity: Math.min(1, Math.max(0.2, rms / maxRms)),
     }
   })
 }

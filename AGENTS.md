@@ -37,9 +37,11 @@ npm run smoke
 
 **负向判据**（只跑通不算过）：
 
-- `smoke` 输出必须是 `19/19 通过`（数字随用例增加而变，但**不许有 ✗**）；
+- `smoke` 输出必须是 `24/24 通过`（数字随用例增加而变，但**不许有 ✗**）；
 - `check:engine` 必须是"哈希一致"，出现差异说明 vendor 被改过；
-- `jps` 用例里 `parseJps` 的错误数必须是 0（不是"能渲染就行"）。
+- `jps` 用例里 `parseJps` 的错误数必须是 0（不是"能渲染就行"）；
+- 生成物里**不许出现连音线包出来的碎时值**（例如本该 1 拍却写成 `( 1 1/ )`）：
+  出现就说明帧时刻/掐边有问题，先跑 `npm run inspect` 看原始音符。
 
 ## 四、代码约定
 
@@ -56,11 +58,35 @@ npm run smoke
 - 小步、中文提交信息；**不 push、不打 tag**（除非用户明说）。
 - 提交前：`npm run typecheck` + `npm run smoke`；动过 vendor 加 `npm run check:engine`。
 
-## 六、Windows 完整性提醒
+## 六、Windows 完整性提醒（本机已实测踩过）
 
-如果 portable exe 出现"只能写自己的 `out`、写别处报 `拒绝访问 (os error 5)`"，
-先查完整性级别再怀疑杀软：
+如果 exe 出现"只能写自己的 `out`、写别处报 `拒绝访问 (os error 5)`"，先查完整性级别再怀疑杀软：
 
 ```powershell
 icacls ".\src-tauri\target\release\ijipu-bp.exe" | findstr /i "Mandatory"   # 应为 Medium
 ```
+
+本机工作区目录带 **Low** 标签，编出来的 exe 会继承 Low，**一启动就崩**：
+
+```text
+Failed to setup app: 拒绝访问。 (os error 5)
+```
+
+一次性修法（要管理员 PowerShell，普通权限改不了标签）：
+
+```powershell
+icacls "D:\Coding\JianpuScript" /setintegritylevel M /T
+```
+
+不想提权时的临时办法：把 `ijipu-bp.exe` 与 `WebView2Loader.dll` 一起拷到
+`%LOCALAPPDATA%` 下（新文件继承 Medium）再运行。
+
+## 七、诊断工具
+
+```powershell
+npm run fixture               # 造一段已知旋律的 wav（C4 E4 G4 C5 各 500ms）
+npm run inspect               # 打印"原始音符 / 量化 / jps / 逐帧峰值"
+npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM wav）
+```
+
+分析结果不对时**先跑 inspect**：时值怪、音高错、BPM 离谱，都能在那四段里看出是哪一步。

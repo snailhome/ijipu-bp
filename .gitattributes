@@ -1,0 +1,10 @@
+# 工作区约定：源码与快照一律用 LF 落盘
+#
+# 为什么：本机 git 的 core.autocrlf=true，检出时会把文本换成 CRLF，
+# 而同步脚本（scripts/sync-engine.mjs）写出来的是 LF ⇒ 每次同步都白多一条
+# "改了 ENGINE-SNAPSHOT.json"的假改动，真正的引擎变化反而被噪声埋住。
+* text=auto eol=lf
+# 二进制产物别去转换
+*.png binary
+*.ico binary
+*.wav binary

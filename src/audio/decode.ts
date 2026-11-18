@@ -39,6 +39,17 @@ export async function pickAndLoadAudio(): Promise<LoadedAudio | null> {
   return decodeBytes(bytes, file.name, null)
 }
 
+/**
+ * 按磁盘路径读并解码（桌面上用于"启动参数带文件"和以后的"最近打开"）。
+ * 浏览器里没有这个能力，调用方要先判 `isTauriShell()`。
+ */
+export async function loadAudioFromPath(path: string): Promise<LoadedAudio | null> {
+  const bytes = await invoke<ArrayBuffer>('bp_read_audio', { path })
+  if (!bytes) throw new Error('读不到音频文件：' + path)
+  const name = path.split(/[\\/]/).pop() ?? path
+  return decodeBytes(bytes, name, path)
+}
+
 function pickFileInBrowser(): Promise<File | null> {
   return new Promise((resolve) => {
     const input = document.createElement('input')

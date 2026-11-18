@@ -14,6 +14,7 @@
 - 卷帘下面一行**简谱预览**，直接用 iJipu 引擎渲染 SVG —— 看到的就是交出去的谱。
 - 播放：**原音频 / 合成音**一键互换（Tab 热键），播放中切换从当前毫秒续上，用来比对扒得准不准。
 - 导出 `.jps`（桌面壳走"另存为 + 写后回读校验"；浏览器直接下载）。
+- 桌面壳支持**命令行带文件**：`ijipu-bp.exe 某曲.mp3` 直接打开（也是自动化验证的入口）。
 
 还没做：手动增删/拖动音符、多声部、噪声与打击乐处理、AI 转录（basic-pitch）、SF2 音色库试听。
 
@@ -25,9 +26,19 @@ npm install --cache "D:/Coding/JianpuScript/.npm-cache"
 npm run sync:engine     # 从 ../ijipu 同步引擎（vendor/engine，逐字节）
 npm run dev             # 浏览器调试：http://localhost:5174
 npm run smoke           # Node 冒烟：FFT/频谱/音高/量化/jps→引擎解析→排版→界面渲染
+npm run fixture         # 造一段已知旋律的 wav（.tmp-melody.wav）
+npm run inspect         # 诊断：原始音符 / 量化 / jps / 逐帧峰值
 npm run build           # tsc --noEmit + vite build
-npm run tauri:build     # 桌面安装包（需要本机有 Rust 工具链）
+. .\scripts\tauri-env.ps1   # 桌面构建前先设 Rust 环境（本机工具链在工作区，见下）
+npm run tauri:build     # 桌面安装包（本机用 --no-bundle 只出 exe，见"踩过的坑"）
 ```
+
+桌面构建的环境说明：这台机器**没有 MSVC**，用的是 Rust 的 **GNU 工具链**
+（`stable-x86_64-pc-windows-gnu` + winlibs MinGW64 的 gcc），并且
+`CARGO_HOME` / `RUSTUP_HOME` 指向工作区里的 `.cargo` / `.rustup`，不在默认的 `~\.cargo`。
+`scripts\tauri-env.ps1` 会按脚本位置推导工作区、把这三处设进当前会话；
+**不 dot-source 就会出现"cargo 找不到 / 链接器找不到"**。
+你自己的机器若有 MSVC（VS Build Tools）+ 默认 rustup，可以完全跳过这一步。
 
 ## 目录
 
@@ -56,5 +67,29 @@ scripts/        引擎同步、冒烟
 
 - 只做单声部；和弦会被压成一个音。
 - 三连音写不进 jps（简谱时值只有 2 的幂 + 附点），量化时按"就近"并给出告警。
-- 桌面壳的 Rust 代码在本机**没有编译验证**（这台机器没装 Rust 工具链）；Web 侧
-  `typecheck` / `smoke` / `build` 都过了。
+- 真曲的参数还没调过：BPM / 首拍 / 静音阈值目前是合成信号上试出来的经验值。
+- 桌面壳已在本机编译通过（2026-11-18，GNU 工具链 2m15s / 增量 24s），
+  但**安装包没出**：本机 exe 继承工作区的 Low 完整性标签，一启动就崩（见"踩过的坑"）。
+
+## 踩过的坑
+
+**1. 帧时刻要取"窗口中心"。** 8192 点窗长 186ms，若按窗口起点计时，500ms 处换音会被记成
+400ms，量化出 `0.75 拍`、末音还要做连音线。现在 `computeSpectrum` 的窗口以帧时刻为中心，
+谱上 500ms 换音就是 500ms（`scripts/smoke.ts` 有一条专门守它）。
+
+**2. Low 完整性级别。** 本机 `D:\Coding\JianpuScript` 带 Low 标签，编出来的
+`ijipu-bp.exe` 继承 Low，运行时 `Failed to setup app: 拒绝访问。 (os error 5)`（WebView2
+建不了用户数据目录）。一次性修（管理员 PowerShell）：
+
+```powershell
+icacls "D:\Coding\JianpuScript" /setintegritylevel M /T
+```
+
+不提权的临时办法：把 `ijipu-bp.exe` + `WebView2Loader.dll` 拷到 `%LOCALAPPDATA%` 下再跑
+（新文件继承 Medium；已实测能开窗、能扒谱）。
+
+**3. GNU 链接器的 `.rsrc merge failure` 警告**（`multiple non-default manifests`）不影响产物，
+是 MinGW 嵌资源的老毛病；MSVC 工具链不会出。
+
+**4. 不要用 shell 改含中文的文件。** 工作区规矩：中文文件只用编辑器工具改，`Get-Content | Set-Content`
+会把编码改坏。

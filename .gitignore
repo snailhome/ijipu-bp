@@ -1,7 +1,10 @@
 node_modules/
 dist/
 dist-smoke/
+dist-inspect/
 src-tauri/target/
+# tauri 生成的能力/权限 schema，每次 build 会重写
+src-tauri/gen/schemas/
 *.local
 .DS_Store
 .tmp-*

@@ -42,6 +42,17 @@ fn bp_read_audio(path: String) -> Result<Response, String> {
     Ok(Response::new(bytes))
 }
 
+/// 启动参数里带的音频（`ijipu-bp.exe 某曲.mp3`）：给"双击关联"和自动化验证用。
+/// 只认后缀在 AUDIO_EXTS 里、而且**文件真的存在**的参数，其余忽略。
+#[tauri::command]
+fn bp_initial_audio() -> Option<String> {
+    std::env::args().skip(1).find(|arg| {
+        let lower = arg.to_lowercase();
+        AUDIO_EXTS.iter().any(|ext| lower.ends_with(&format!(".{ext}")))
+            && std::path::Path::new(arg).is_file()
+    })
+}
+
 /// 另存为 .jps，写完**立刻回读比对**（防止半截文件被当成导出成功）。
 #[tauri::command]
 async fn bp_save_jps(
@@ -77,6 +88,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             bp_pick_audio,
             bp_read_audio,
+            bp_initial_audio,
             bp_save_jps
         ])
         .run(tauri::generate_context!())
