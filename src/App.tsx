@@ -47,6 +47,8 @@ export default function App() {
   const loop = useBp((s) => s.loop)
   const loopOn = useBp((s) => s.loopOn)
   const autoPage = useBp((s) => s.autoPage)
+  const gain = useBp((s) => s.gain)
+  const contrast = useBp((s) => s.contrast)
   const tonic = useBp((s) => s.tonic)
   const bpm = useBp((s) => s.bpm)
   const beatsPerBar = useBp((s) => s.beatsPerBar)
@@ -410,6 +412,8 @@ export default function App() {
             view={view}
             loop={loop}
             loopOn={loopOn}
+            gain={gain}
+            contrast={contrast}
             selectedId={selectedId}
             onSelect={setSelectedId}
             onSeek={seek}
@@ -502,6 +506,43 @@ export default function App() {
                 ms
               </label>
               <div className="hint">改哪一项都只重算"拍轴"，原始秒轴不动。</div>
+            </div>
+          </div>
+
+          <div>
+            <h3>显示</h3>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <label className="field">
+                倍率
+                <input
+                  type="range"
+                  min={0.2}
+                  max={5}
+                  step={0.1}
+                  value={gain}
+                  onChange={(e) => useBp.getState().setGain(Number(e.target.value))}
+                  style={{ width: 140 }}
+                />
+                <span className="hint" style={{ width: 30, textAlign: 'right' }}>
+                  {gain.toFixed(1)}
+                </span>
+              </label>
+              <label className="field">
+                对比
+                <input
+                  type="range"
+                  min={0.3}
+                  max={3}
+                  step={0.05}
+                  value={contrast}
+                  onChange={(e) => useBp.getState().setContrast(Number(e.target.value))}
+                  style={{ width: 140 }}
+                />
+                <span className="hint" style={{ width: 30, textAlign: 'right' }}>
+                  {contrast.toFixed(2)}
+                </span>
+              </label>
+              <div className="hint">口径同 noteDigger：颜色深度 = 值 ^ 对比 × 倍率。</div>
             </div>
           </div>
 

@@ -3,7 +3,7 @@
  *
  * 三档（对照 noteDigger 的"吸附模式"）：
  *  · off  —— 不吸附，毫秒原样
- *  · grid —— 吸到 1/4 拍（十六分音符格点）
+ *  · grid —— 吸到 1/6 拍（界面最小绘制格就是一个 1/6 拍 × 一个半音）
  *  · beat —— 吸到拍
  *  · bar  —— 吸到小节线
  *
@@ -26,7 +26,7 @@ export function snapStepMs(opt: GridOptions, mode: SnapMode): number {
     case 'beat':
       return beat
     case 'grid':
-      return beat / 4
+      return beat / 6
     default:
       return 0
   }

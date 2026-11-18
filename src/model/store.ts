@@ -53,6 +53,10 @@ interface State {
   loopOn: boolean
   /** 播放时自动把视野推到播放头（自动翻页） */
   autoPage: boolean
+  /** 热力图显示倍率 */
+  gain: number
+  /** 热力图对比（指数） */
+  contrast: number
   /* 显示与量化参数 */
   pitchMode: PitchMode
   /** 表格点击模式：draw=画音/确认，select=只试听 */
@@ -85,6 +89,8 @@ interface State {
   setLoop: (r: LoopRange | null) => void
   setLoopOn: (b: boolean) => void
   setAutoPage: (b: boolean) => void
+  setGain: (g: number) => void
+  setContrast: (c: number) => void
   setTonic: (t: number) => void
   setBpm: (b: number) => void
   setBeatsPerBar: (b: number) => void
@@ -169,6 +175,8 @@ export const useBp = create<State>((set, get) => ({
   loop: null,
   loopOn: false,
   autoPage: true,
+  gain: 0.85,
+  contrast: 1.2,
   pitchMode: 'name',
   mode: 'draw',
   snap: 'beat',
@@ -228,6 +236,8 @@ export const useBp = create<State>((set, get) => ({
   setLoop: (r) => set({ loop: r }),
   setLoopOn: (b) => set({ loopOn: b }),
   setAutoPage: (b) => set({ autoPage: b }),
+  setGain: (g) => set({ gain: Math.max(0.1, Math.min(6, g)) }),
+  setContrast: (c) => set({ contrast: Math.max(0.2, Math.min(4, c)) }),
   setTonic: (t) => {
     set({ tonic: t, autoTonic: false })
     applyDerived(set, get)

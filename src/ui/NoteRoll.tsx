@@ -34,6 +34,10 @@ interface Props {
   view: View
   loop: LoopRange | null
   loopOn: boolean
+  /** 热力图显示倍率（1 = 原样，越大越亮） */
+  gain: number
+  /** 热力图对比（指数，越大反差越强） */
+  contrast: number
   selectedId: string | null
   playMs: number
   onSelect: (id: string | null) => void
@@ -66,6 +70,12 @@ const STOPS: Array<[number, [number, number, number]]> = [
   [1.0, [255, 255, 255]],
 ]
 
+/** 倍率 × 对比：把 0..1 的显示值映射成颜色深度（口径同 noteDigger：pow(v, contrast) * multiple） */
+function shade(v: number, gain: number, contrast: number): number {
+  return Math.max(0, Math.min(1, Math.pow(Math.max(0, v), contrast) * gain))
+}
+
+/** 颜色表：暗蓝 → 紫 → 橙 → 白 */
 function heatColor(v: number): [number, number, number] {
   const t = Math.max(0, Math.min(1, v))
   for (let i = 1; i < STOPS.length; i++) {
@@ -81,31 +91,6 @@ function heatColor(v: number): [number, number, number] {
     }
   }
   return STOPS[STOPS.length - 1][1]
-}
-
-/** 频谱 → 一张 帧×88 的小图（之后靠 drawImage 缩放，比逐格 fillRect 快几十倍） */
-function buildHeat(spec: Spectrum): HTMLCanvasElement {
-  const cv = document.createElement('canvas')
-  cv.width = Math.max(1, spec.frames)
-  cv.height = BIN_COUNT
-  const g = cv.getContext('2d')
-  if (!g) return cv
-  const img = g.createImageData(cv.width, BIN_COUNT)
-  for (let f = 0; f < cv.width; f++) {
-    for (let y = 0; y < BIN_COUNT; y++) {
-      const midi = MIDI_HIGH - y
-      const bin = midi - MIDI_LOW
-      const v = bin >= 0 && bin < BIN_COUNT ? displayValue(spec.data[f * BIN_COUNT + bin]) : 0
-      const [r, gg, b] = heatColor(v)
-      const p = (y * cv.width + f) * 4
-      img.data[p] = r
-      img.data[p + 1] = gg
-      img.data[p + 2] = b
-      img.data[p + 3] = 255
-    }
-  }
-  g.putImageData(img, 0, 0)
-  return cv
 }
 
 interface Metrics {
@@ -159,7 +144,6 @@ export function NoteRoll(props: Props) {
     return { w: size.w, h: size.h, left: KEY_W, width: Math.max(80, size.w - KEY_W), top, rows }
   }, [size, center])
 
-  const heat = useMemo(() => (spectrum ? buildHeat(spectrum) : null), [spectrum])
 
   const rowTop = useCallback(
     (midi: number) => RULER_H + (metrics.top - midi) * ROW_H,
@@ -205,28 +189,45 @@ export function NoteRoll(props: Props) {
     const bottomMidi = metrics.top - metrics.rows + 1
     const beat = beatMs(props.bpm)
 
-    /* 1) 频谱热力图（只铺网格区域，纵向按可见音区裁） */
-    if (heat && spectrum) {
-      const srcY = Math.max(0, MIDI_HIGH - metrics.top)
-      const srcH = Math.min(BIN_COUNT - srcY, metrics.rows)
-      const sx = (view.panMs / 1000) / (spectrum.hopMs / 1000)
-      const sw = spanMs(view, durationMs) / spectrum.hopMs
-      g.globalAlpha = 0.92
-      g.drawImage(
-        heat,
-        Math.max(0, sx),
-        srcY,
-        Math.max(1, Math.min(heat.width - Math.max(0, sx), sw)),
-        srcH,
-        metrics.left,
-        RULER_H,
-        metrics.width,
-        srcH * ROW_H,
-      )
-      g.globalAlpha = 1
+    /* 1) 频谱热力图：以"最小绘制格"（1/6 拍 × 一个半音）为单位
+     *   —— 一格之内同一种颜色（阶梯式，不做线性插值），格子里取该格覆盖帧的最大值。 */
+    if (spectrum && props.bpm > 0) {
+      const cellMs = beat / 6
+      const firstAt = props.firstBeatMs
+      const cellW = Math.max(1, xAt(firstAt + cellMs) - xAt(firstAt))
+      const k0 = Math.floor((view.panMs - firstAt) / cellMs) - 1
+      const k1 = Math.ceil((view.panMs + spanMs(view, durationMs) - firstAt) / cellMs) + 1
+      const hop = spectrum.hopMs
+      const frames = spectrum.frames
+      for (let k = k0; k <= k1; k++) {
+        const ms0 = firstAt + k * cellMs
+        if (ms0 < 0 || ms0 > durationMs) continue
+        const x = xAt(ms0)
+        if (x + cellW < metrics.left || x > metrics.w) continue
+        const f0 = Math.max(0, Math.floor(ms0 / hop))
+        const f1 = Math.min(frames, Math.max(f0 + 1, Math.ceil((ms0 + cellMs) / hop)))
+        for (let r = 0; r < metrics.rows; r++) {
+          const midi = metrics.top - r
+          if (midi < MIDI_LOW) break
+          const bin = midi - MIDI_LOW
+          let v = 0
+          for (let f = f0; f < f1; f++) {
+            const s = spectrum.data[f * BIN_COUNT + bin]
+            if (s > v) v = s
+          }
+          const t = shade(displayValue(v), props.gain, props.contrast)
+          if (t <= 0.02) continue
+          const [cr, cg, cb] = heatColor(t)
+          g.fillStyle = `rgb(${cr},${cg},${cb})`
+          const x0 = Math.max(metrics.left, x)
+          const x1 = Math.min(metrics.w, x + cellW)
+          if (x1 <= x0) continue
+          g.fillRect(x0, RULER_H + r * ROW_H, x1 - x0, ROW_H)
+        }
+      }
     }
 
-    /* 2) 行底色：黑键行压暗、C 行亮线 */
+    /* 2) 行底色：黑键行压暗；每八度（C 音）一条实线横线 */
     for (let r = 0; r < metrics.rows; r++) {
       const midi = metrics.top - r
       if (midi < MIDI_LOW) break
@@ -235,30 +236,63 @@ export function NoteRoll(props: Props) {
         g.fillStyle = 'rgba(0,0,0,0.30)'
         g.fillRect(metrics.left, y, metrics.width, ROW_H)
       }
-      if (midi % 12 === 0) {
-        g.fillStyle = 'rgba(120,180,255,0.16)'
-        g.fillRect(metrics.left, y + ROW_H - 1, metrics.width, 1)
-      }
-      g.fillStyle = 'rgba(255,255,255,0.035)'
-      g.fillRect(metrics.left, y + ROW_H - 1, metrics.width, 1)
+    }
+    /* 八度线（C 行）：实线，比拍线细一点、偏蓝 */
+    for (let r = 0; r <= metrics.rows; r++) {
+      const midi = metrics.top - r
+      if (midi < MIDI_LOW - 1) break
+      if (((midi % 12) + 12) % 12 !== 0) continue
+      const y = RULER_H + r * ROW_H - 0.5
+      g.strokeStyle = 'rgba(120,180,255,0.30)'
+      g.lineWidth = 1
+      g.beginPath()
+      g.moveTo(metrics.left, y)
+      g.lineTo(metrics.w, y)
+      g.stroke()
     }
 
-    /* 3) 拍线与小节线 */
+    /* 3) 时间格：小节线实线最亮、拍线实线、1/4 拍虚线 */
     if (props.bpm > 0) {
       const first = props.firstBeatMs
-      const t0 = Math.max(0, Math.floor((view.panMs - first) / beat))
-      const count = Math.ceil(spanMs(view, durationMs) / beat) + 2
-      for (let i = t0; i <= t0 + count; i++) {
-        const ms = first + i * beat
+      const perBar = beat * Math.max(1, props.beatsPerBar)
+      const span = spanMs(view, durationMs)
+      /* 3a) 1/4 拍虚线 */
+      const quarter = beat / 4
+      g.setLineDash([2, 3])
+      g.strokeStyle = 'rgba(180,205,235,0.16)'
+      g.lineWidth = 1
+      const q0 = Math.floor((view.panMs - first) / quarter)
+      const q1 = Math.ceil((view.panMs + span - first) / quarter)
+      for (let i = q0; i <= q1; i++) {
+        const ms = first + i * quarter
         if (ms < 0 || ms > durationMs) continue
+        if (i % 4 === 0) continue
         const x = Math.round(xAt(ms)) + 0.5
-        const isBar = ((i % Math.max(1, props.beatsPerBar)) + props.beatsPerBar) % props.beatsPerBar === 0
-        g.strokeStyle = isBar ? 'rgba(150,200,255,0.34)' : 'rgba(255,255,255,0.10)'
+        if (x < metrics.left || x > metrics.w) continue
         g.beginPath()
         g.moveTo(x, RULER_H)
         g.lineTo(x, metrics.h)
         g.stroke()
       }
+      g.setLineDash([])
+      /* 3b) 拍线（实线）与小节线（更亮） */
+      const t0 = Math.max(0, Math.floor((view.panMs - first) / beat))
+      const count = Math.ceil(span / beat) + 2
+      for (let i = t0; i <= t0 + count; i++) {
+        const ms = first + i * beat
+        if (ms < 0 || ms > durationMs) continue
+        const x = Math.round(xAt(ms)) + 0.5
+        if (x < metrics.left || x > metrics.w) continue
+        const isBar = ((i % Math.max(1, props.beatsPerBar)) + props.beatsPerBar) % props.beatsPerBar === 0
+        g.strokeStyle = isBar ? 'rgba(150,200,255,0.50)' : 'rgba(255,255,255,0.16)'
+        g.lineWidth = isBar ? 1.5 : 1
+        g.beginPath()
+        g.moveTo(x, isBar ? 0 : RULER_H)
+        g.lineTo(x, metrics.h)
+        g.stroke()
+      }
+      g.lineWidth = 1
+      void perBar
     }
 
     /* 4) 重复区间：琥珀色半透明块 + 两端握柄（可以拖着改长短）
@@ -367,46 +401,49 @@ export function NoteRoll(props: Props) {
       }
     }
 
-    /* 8) 左侧钢琴键盘（真实键形）
-     * 白键要连成一片：先把整列铺白，再在白键之间画分隔线，最后把黑键压上去。
-     * 上一版按行画白键，黑键所在的那一行就露出底色，看着像一架梯子。 */
-    g.fillStyle = '#f2f5f8'
+    /* 8) 左侧钢琴键盘（noteDigger 的画法左右翻转：黑键靠右 = 琴键后端）
+     *  · 整列先铺白：黑键的左边露出来的是两侧白键的侧面，所以必须是白的
+     *  · 白键与白键之间一条细线
+     *  · 黑键：右端一段圆角黑块，上下各留 1.5px 白，看着才是一格一格的键 */
+    g.fillStyle = '#eef2f7'
     g.fillRect(0, RULER_H, KEY_W, metrics.h - RULER_H)
     for (let r = 0; r < metrics.rows; r++) {
       const midi = metrics.top - r
       if (midi < MIDI_LOW) break
       const y = RULER_H + r * ROW_H
       const cls = ((midi % 12) + 12) % 12
-      /* 每个半音格都画一条边界线（用户要看得出"一格一格"），
-       * 白键与白键之间再描重一点，黑键所在行的横线由黑键自己盖住。 */
-      const whiteRow = !BLACK.has(cls)
-      const whiteAbove = !BLACK.has(((cls + 1) % 12))
-      g.fillStyle = whiteRow && whiteAbove ? 'rgba(20,32,48,0.55)' : 'rgba(20,32,48,0.30)'
-      g.fillRect(0, y + ROW_H - 1, KEY_W - 1, 1)
+      const isBlack = BLACK.has(cls)
+      if (!isBlack && !BLACK.has(((cls + 1) % 12 + 12) % 12)) {
+        g.fillStyle = 'rgba(20,32,48,0.50)'
+        g.fillRect(0, y + ROW_H - 1, KEY_W, 1)
+      }
+      if (isBlack) {
+        const kw = Math.round(KEY_W * 0.60)
+        g.fillStyle = '#0e1218'
+        g.beginPath()
+        g.roundRect(KEY_W - kw, y + 1.5, kw, ROW_H - 3, [2, 0, 0, 2])
+        g.fill()
+        g.strokeStyle = 'rgba(255,255,255,0.14)'
+        g.lineWidth = 1
+        g.stroke()
+      }
       if (cls === 0 || midi === MIDI_LOW) {
-        g.fillStyle = 'rgba(40,60,80,0.85)'
+        g.fillStyle = 'rgba(40,60,80,0.9)'
         g.font = FONT
         g.textBaseline = 'middle'
-        g.fillText(midiToName(midi), 4, y + ROW_H / 2)
+        g.fillText(midiToName(midi), 6, y + ROW_H / 2)
       }
     }
-    g.fillStyle = 'rgba(20,32,48,0.55)'
+    /* 键面靠左的一点点明暗，给个"键的前沿"错觉 */
+    const grad = g.createLinearGradient(0, 0, KEY_W, 0)
+    grad.addColorStop(0, 'rgba(255,255,255,0.75)')
+    grad.addColorStop(0.35, 'rgba(255,255,255,0)')
+    grad.addColorStop(1, 'rgba(10,18,28,0.18)')
+    g.fillStyle = grad
+    g.fillRect(0, RULER_H, KEY_W, metrics.h - RULER_H)
+    /* 键盘与网格之间的分界 */
+    g.fillStyle = 'rgba(8,12,18,0.9)'
     g.fillRect(KEY_W - 1, RULER_H, 1, metrics.h - RULER_H)
-    /* 黑键：高度与白键格**一样**（每半音一行，14px），只是沿"琴键深度"方向短一截，
-     * 且贴着右边（右 = 琴键后端），左边留出白键的正面。 */
-    for (let r = 0; r < metrics.rows; r++) {
-      const midi = metrics.top - r
-      if (midi < MIDI_LOW) break
-      if (!BLACK.has(((midi % 12) + 12) % 12)) continue
-      const y = RULER_H + r * ROW_H
-      g.fillStyle = '#12161d'
-      g.beginPath()
-      g.roundRect(KEY_W * 0.36, y + 0.5, KEY_W * 0.62, ROW_H - 1, 2)
-      g.fill()
-      g.strokeStyle = 'rgba(255,255,255,0.18)'
-      g.lineWidth = 1
-      g.stroke()
-    }
 
     /* 9) 播放头 */
     const px = xAt(playMs)
@@ -419,7 +456,6 @@ export function NoteRoll(props: Props) {
       g.stroke()
     }
   }, [
-    heat,
     spectrum,
     metrics,
     notes,
