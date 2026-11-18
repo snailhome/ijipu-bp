@@ -6,7 +6,7 @@
  * 直接投递给页面的，不受窗口叠放影响，正好用来验"按钮到底有没有接上事件"。
  *
  * 用法：node scripts/ui-probe.mjs [url]
- *   默认 http://localhost:5174/（先 npm run dev）。
+ *   默认 http://localhost:5175/（先 npm run dev）。
  * 退出码 0 = 全部通过；1 = 有失败（会打印哪一条）。
  */
 import { spawn } from 'node:child_process'
@@ -14,7 +14,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const URL_ = process.argv[2] ?? 'http://localhost:5174/'
+const URL_ = process.argv[2] ?? 'http://localhost:5175/'
 const PORT = 9333
 const CHROME =
   process.env.CHROME_PATH ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'

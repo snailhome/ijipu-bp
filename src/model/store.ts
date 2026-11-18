@@ -211,7 +211,12 @@ export const useBp = create<State>((set, get) => ({
 
   setBusy: (s) => set({ busy: s }),
   setError: (s) => set({ error: s }),
-  setLoaded: (p) =>
+  setLoaded: (p) => {
+    /* 打开就一屏 20 秒（用户 m04107：打开音频文件，只显示前 20 秒）。
+     * 以前这个缩放只在"开始播放"那个 effect 里做，于是刚打开时其实是整曲铺满；
+     * 现在装载时直接把 zoom 算好，比 20 秒短的曲子仍然整首显示。 */
+    const page = Math.max(1, Math.min(p.durationMs || 1, PAGE_MS))
+    const zoom = Math.max(1, (p.durationMs || 1) / page)
     set({
       ...p,
       analysis: null,
@@ -220,10 +225,11 @@ export const useBp = create<State>((set, get) => ({
       jps: '',
       warnings: [],
       currentMs: 0,
-      view: { zoom: 1, panMs: 0 },
+      view: { zoom, panMs: 0 },
       loop: null,
       loopOn: false,
-    }),
+    })
+  },
   setAnalysis: (a) => {
     set({
       analysis: a,

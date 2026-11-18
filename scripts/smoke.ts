@@ -235,6 +235,16 @@ const melody = concat([
 }
 
 /* ---------------- 11.7 手工编辑：加 / 改 / 删 / 回初稿 都重算 jps ---------------- */
+/* ---------------- 11.6.5 装载音频后的默认视野：一屏 20 秒 ---------------- */
+{
+  useBp.getState().setLoaded({ fileName: 'long.wav', filePath: null, durationMs: 60000 })
+  const zoom60 = useBp.getState().view.zoom
+  check('60 秒的歌装进来 → 一屏 20 秒（zoom=3）', Math.abs(zoom60 - 3) < 0.01, String(zoom60))
+
+  useBp.getState().setLoaded({ fileName: 'short.wav', filePath: null, durationMs: 10000 })
+  const zoom10 = useBp.getState().view.zoom
+  check('10 秒的曲子 → 不放大（zoom=1）', Math.abs(zoom10 - 1) < 0.01, String(zoom10))
+}
 {
   const parts = [tone(261.63, 500), tone(329.63, 500), silence(300)]
   const r = analyzeSamples(concat(parts), SR)

@@ -40,7 +40,8 @@
   **自动翻页**（播放头贴到右边缘就推一屏）、
   **全选 / 全不选**、右侧栏可收起（工具条最右的图标，用的就是「爱出片」那张
   `public/icons/右侧边栏.svg`，不自己画）。
-- **默认视野一屏 20 秒**（不是整曲铺满）；比 20 秒短的曲子仍整首显示。要看更宽就 Shift+Alt+滚轮缩小。
+- **打开音频就直接一屏 20 秒**（0–20s，看后面靠横向滚动条或 Shift+滚轮）；比 20 秒短的曲子仍整首显示。
+  要一次看全曲：Shift+Alt+滚轮往外缩。
 - **键格**：白键连续，黑键右侧贴边、占 62%、整行高、左端 2px 圆角；横向分隔线只画在两白键交界处
   （有黑键的行画在该行中线、止于黑键左缘；E|F、B|C 是通栏线）。
 - **鼠标**：滚轮 = 上下换音区；**Shift+滚轮 = 左右平移**；**Shift+Alt+滚轮 = 横向缩放**（时值比率，
@@ -66,7 +67,7 @@ AI 转录（basic-pitch）、SF2 音色库试听、`.jps.sync.json` 边车。
 cd D:\Coding\JianpuScript\ijipu-bp
 npm install --cache "D:/Coding/JianpuScript/.npm-cache"
 npm run sync:engine     # 从 ../ijipu 同步引擎（vendor/engine，逐字节）
-npm run dev             # 浏览器调试：http://localhost:5174
+npm run dev             # 浏览器调试：http://localhost:5175
 npm run smoke           # Node 冒烟：FFT/频谱/音高/量化/jps→引擎解析→排版→界面渲染
 npm run fixture         # 造一段已知旋律的 wav（.tmp-melody.wav）
 npm run inspect         # 诊断：原始音符 / 量化 / jps / 逐帧峰值
@@ -78,7 +79,7 @@ npm run tauri:build     # 桌面安装包（本机用 --no-bundle 只出 exe，�
 
 **只想调界面/逻辑**：`tauri-dev.bat` 双击就跑（等价于设好三处环境后 `npm run tauri:dev`），
 带热更新、改前端不用重编译 Rust；`tauri-dev.bat --check` 只体检环境不启动。
-**只想在浏览器里看**：`npm run dev` 后开 http://localhost:5174 —— 浏览器模式下"打开音频"走文件选择框、
+**只想在浏览器里看**：`npm run dev` 后开 http://localhost:5175 —— 浏览器模式下"打开音频"走文件选择框、
 导出走 Blob 下载，其余（频谱/卷帘/简谱/播放）与桌面端同一套代码。
 
 桌面构建的环境说明：这台机器**没有 MSVC**，用的是 Rust 的 **GNU 工具链**
@@ -90,13 +91,13 @@ npm run tauri:build     # 桌面安装包（本机用 --no-bundle 只出 exe，�
 
 ## 验界面：`npm run probe`
 
-`scripts/ui-probe.mjs` 用 Chrome 的调试协议（CDP）打开 `http://localhost:5174/`，**真的点按钮、点画布**，
+`scripts/ui-probe.mjs` 用 Chrome 的调试协议（CDP）打开 `http://localhost:5175/`，**真的点按钮、点画布**，
 再读状态仓库核对结果 —— 因为 `npm run smoke` 只能验纯函数，验不了"这个按钮到底接没接上"。
 
 ```powershell
-npm run dev          # 另开一个终端，先把 5174 起起来
+npm run dev          # 另开一个终端，先把 5175 起起来
 npm run probe        # 20 条断言
-npm run probe -- http://localhost:5174/ --shot .tmp-ui.png   # 顺便截一张图
+npm run probe -- http://localhost:5175/ --shot .tmp-ui.png   # 顺便截一张图
 ```
 
 它现在验的：界面挂载、绘制/选择模式切换、吸附下拉、自动翻页开关、重复区间在没画区间时是灰的、
