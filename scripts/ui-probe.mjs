@@ -65,7 +65,11 @@ class Cdp {
       returnByValue: true,
       awaitPromise: true,
     })
-    if (r.exceptionDetails) throw new Error(r.exceptionDetails.text)
+    if (r.exceptionDetails) {
+      const d = r.exceptionDetails
+      const detail = d.exception?.description || d.exception?.value || ''
+      throw new Error('[页面抛错] ' + (d.text || 'Uncaught') + ' | ' + detail + ' | expr=' + expression.slice(0, 90))
+    }
     return r.result.value
   }
 
@@ -390,15 +394,18 @@ try {
     JSON.stringify(draggedLoop),
   )
 
-  // ── 右侧栏开关 ──
+  // ── 右侧栏开关（收起时主区要真正占满，别留 280px 空白）──
   const sideOn = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
+  const rollWOn = await cdp.eval(`document.querySelector('.pane.roll').getBoundingClientRect().width`)
   await cdp.eval(`document.querySelector('.icon-btn').click()`)
-  await sleep(150)
+  await sleep(200)
   const sideOff = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !el || el.classList.contains('off') })()`)
+  const rollWOff = await cdp.eval(`document.querySelector('.pane.roll').getBoundingClientRect().width`)
   await cdp.eval(`document.querySelector('.icon-btn').click()`)
-  await sleep(150)
+  await sleep(200)
   const sideBack = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
   check('右侧栏默认展开、点图标能收起、再点能展开', sideOn && sideOff && sideBack)
+  check('收起右侧栏后主区变宽', rollWOff > rollWOn + 100, `${Math.round(rollWOn)} → ${Math.round(rollWOff)}`)
 
   // ── 横向滚动条：一直在，放大后 thumb 变窄 ──
   const barWidth = await cdp.eval(`(() => {
@@ -501,26 +508,134 @@ try {
   const badgeOnRuler = await cdp.eval(`!!document.querySelector('.row-badge')`)
   check('时间尺区域不显示"音名·简谱"信息牌', badgeOnRuler === false, String(badgeOnRuler))
 
+  /* ── 时点线要跟着当前时点走 ──
+   * 注意：headless Chrome 没有音频设备，按空格虽然 playing 变 true，
+   * currentTime 却不动（实测 0 → 0）。所以这里不去驱动真实播放，
+   * 而是按"每帧 tick 会写 currentMs"的口径直接写时点，验画布上的红线跟不跟。 */
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setLoop(null); s.setLoopOn(false); s.setView({ zoom: 1, panMs: 0 }); window.__bp.setState({ playing: false }); s.setCurrentMs(0) })()`)
+  await sleep(400)
+  /* 不要"扫整行找第一个红色" —— 热力图里红色是最热的一格，会抢在播放头前面。
+     改成按当前时点算出期望列，再看那一列上下两处是不是红的（播放头是整条竖线）。 */
+  const playheadAt = `(() => {
+    const s = window.__bp.getState()
+    const m = window.__bpRoll
+    const cv = document.querySelector('.pane.roll canvas')
+    if (!cv || !m) return { err: 'no canvas/metrics' }
+    const g = cv.getContext('2d')
+    const dpr = cv.width / parseFloat(cv.style.width || String(cv.width)) || 1
+    const span = s.durationMs / s.view.zoom
+    const px = m.left + ((s.currentMs - s.view.panMs) / span) * (m.w - m.left)
+    const col = Math.max(0, Math.min(cv.width - 1, Math.round(px * dpr)))
+    /* 线宽 1.5px，落在像素边界上会被抗锯齿摊到相邻两列，所以 ±1 列都算 */
+    const reddish = (rowFrac) => {
+      const y = Math.round(cv.height * rowFrac)
+      const d = g.getImageData(Math.max(0, col - 1), y, 3, 1).data
+      for (let k = 0; k < 3; k++) {
+        const r = d[k * 4], gg = d[k * 4 + 1], b = d[k * 4 + 2]
+        if (r > 140 && gg < 150 && b < 170) return true
+      }
+      return false
+    }
+    return { px: Math.round(px), hitTop: reddish(0.2), hitBottom: reddish(0.8), ms: Math.round(s.currentMs) }
+  })()`
+
+  await cdp.eval(`window.__bp.getState().setCurrentMs(window.__bp.getState().durationMs * 0.2)`)
+  await sleep(350)
+  const line1 = await cdp.eval(playheadAt)
+  await cdp.eval(`window.__bp.getState().setCurrentMs(window.__bp.getState().durationMs * 0.6)`)
+  await sleep(350)
+  const line2 = await cdp.eval(playheadAt)
+  check('当前时点变，红线跟着走', line1.hitTop && line1.hitBottom && line2.hitTop && line2.hitBottom && line2.px > line1.px + 20,
+    `x ${line1.px}→${line2.px}（${line1.ms}ms→${line2.ms}ms，红=${line1.hitTop}/${line1.hitBottom}→${line2.hitTop}/${line2.hitBottom}）`)
+  await cdp.eval(`window.__bp.getState().setCurrentMs(0)`)
+  await sleep(150)
+
+  /* ── 自动翻页：时点线碰到右边缘才翻 ──
+   * 翻页逻辑要求整首比一屏（20 秒）长，所以先把时长临时摆成 60 秒；
+   * 用 store 直接设 playing + currentMs，不去等真实播放。 */
+  await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    s.setLoaded({ fileName: 'probe-long.wav', filePath: null, durationMs: 60000 })
+    s.setAutoPage(true)
+    s.setView({ zoom: 2, panMs: 0 })
+    s.setCurrentMs(0)
+    window.__bp.setState({ playing: true })
+  })()`)
+  await sleep(250)
+  await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    s.setCurrentMs(s.durationMs / s.view.zoom * 0.9)   // 还差一截到边：不该翻
+  })()`)
+  await sleep(250)
+  const panMid = await cdp.eval(`window.__bp.getState().view.panMs`)
+  check('时点线还没到右边缘时不翻页', Math.abs(panMid) < 1, `panMs=${Math.round(panMid)}`)
+
+  await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    s.setCurrentMs(s.view.panMs + s.durationMs / s.view.zoom - 0.5)   // 贴住右边缘：该翻
+  })()`)
+  await sleep(300)
+  const panEdge = await cdp.eval(`window.__bp.getState().view.panMs`)
+  check('时点线碰到右边缘就翻页', panEdge > 1, `panMs=${Math.round(panEdge)}`)
+  await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    window.__bp.setState({ playing: false })
+    s.setView({ zoom: 1, panMs: 0 })
+    s.setCurrentMs(0)
+    s.setLoaded({ fileName: 'probe.wav', filePath: null, durationMs: 4000 })
+  })()`)
+  await sleep(150)
+
   const errs = await cdp.eval(`window.__bpErrors || 0`)
   check('页面没有运行时错误', !errs, errs ? String(errs) : '')
 
-  /* --shot <path>：把当前界面截一张干净图（顺手把音都确认上，谱面才有内容） */
+  /* --shot <path>：把当前界面截一张干净图
+     （顺手灌回一份假的频谱与两个音、全标确认、圈一段区间，谱面才有内容可看） */
   const shotAt = process.argv.indexOf('--shot')
   if (shotAt > 0 && process.argv[shotAt + 1]) {
     await cdp.eval(`(() => {
-      const s = window.__bp.getState()
+      const st = window.__bp
+      const s = st.getState()
+      s.setLoaded({ fileName: 'probe.wav', filePath: null, durationMs: 4000 })
+      const frames = 200, bins = 88
+      const data = new Float32Array(frames * bins)
+      for (let i = 0; i < frames; i++) {
+        for (let b = 0; b < bins; b++) {
+          /* 造点"有音高线"的样子：每个八度附近亮一些，再加一点噪声 */
+          const near = Math.abs(((b % 12) - 3)) < 1.5 ? 0.8 : 0.15
+          data[i * bins + b] = near * (0.5 + 0.5 * Math.sin(i / 9)) + Math.random() * 0.08
+        }
+      }
+      s.setAnalysis({
+        durationMs: 4000, sampleRate: 44100,
+        spectrum: { frames, hopMs: 20, sampleRate: 44100, data, frameRms: new Float32Array(frames).fill(0.3) },
+        notes: [
+          { id: 'a1', midi: 60, startMs: 200, endMs: 900, velocity: 0.8, confirmed: false },
+          { id: 'a2', midi: 64, startMs: 1000, endMs: 1700, velocity: 0.8, confirmed: false },
+          { id: 'a3', midi: 67, startMs: 1800, endMs: 2600, velocity: 0.8, confirmed: false },
+          { id: 'a4', midi: 72, startMs: 2700, endMs: 3400, velocity: 0.8, confirmed: false },
+        ],
+        bpm: 120, firstBeatMs: 0,
+        keyCandidates: [
+          { tonic: 0, share: 0.24 }, { tonic: 7, share: 0.17 }, { tonic: 5, share: 0.13 },
+          { tonic: 3, share: 0.09 }, { tonic: 8, share: 0.08 }, { tonic: 4, share: 0.07 },
+        ],
+      })
+      st.setState({ tonic: 0 })
+      s.setView({ zoom: 1, panMs: 0 })
+      s.setCurrentMs(800)
       s.setAllConfirmed(true)
       s.setLoop({ startMs: 500, endMs: 2500 })
       s.setLoopOn(true)
     })()`)
-    await sleep(400)
+    await sleep(600)
     const png = await cdp.send('Page.captureScreenshot', { format: 'png' })
     const { writeFile } = await import('node:fs/promises')
     await writeFile(process.argv[shotAt + 1], Buffer.from(png.data, 'base64'))
     check('截图已保存', true, process.argv[shotAt + 1])
   }
 } catch (e) {
-  check('探测过程本身出错', false, e.message)
+  check('探测过程本身出错', false, (e && e.stack) || String(e))
 } finally {
   try {
     cdp?.ws.close()

@@ -510,6 +510,31 @@ a.link {
   cursor: pointer;
 }
 
+/* 右侧栏开关：形状来自 public/icons/右侧边栏.svg（与「爱出片」同一张图），
+   用 mask 上色 —— 展开时用正文色，收起时压暗 */
+.icon-btn.side-toggle {
+  color: var(--fg);
+}
+
+.icon-btn.side-toggle.off {
+  color: var(--fg-dim);
+  opacity: 0.75;
+}
+
+.icon-btn.side-toggle:hover {
+  border-color: var(--line-strong, var(--line));
+  filter: brightness(1.15);
+}
+
+.side-toggle-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: url('/icons/右侧边栏.svg') center / contain no-repeat;
+  mask: url('/icons/右侧边栏.svg') center / contain no-repeat;
+}
+
 .icon-btn:hover {
   color: var(--fg);
   border-color: var(--accent);
@@ -523,6 +548,11 @@ a.link {
 /* 右侧栏关掉时整块不占位 */
 .side.off {
   display: none;
+}
+
+/* 收起右侧栏时把那一列真正让出来，否则 grid 还留着 280px 空白 */
+.body.noside {
+  grid-template-columns: minmax(0, 1fr);
 }
 /* ===== 右侧面板里可折叠的一组（调性分析） ===== */
 .group-head {

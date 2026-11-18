@@ -252,24 +252,34 @@ export default function App() {
     void startPlay(loop.startMs, playMode)
   }, [currentMs, playing, loopOn, loop, playMode, set, startPlay])
 
-  /* ---------- 自动翻页：播放头快出视野就把视野推过去 ----------
-   * 整首都在视野里时（zoom=1）根本没得推，所以开关一打开就先切到一屏 20 秒，
-   * 不然用户点了跟没点一样。关掉时不动视野（用户可能自己缩放过）。 */
+  /* ---------- 自动翻页：播放头碰到右边缘才翻一页 ----------
+   * 用户 2026-11-18 的口径：时点线走到视界边上就翻页（不是提前 82% 就推）。
+   * 整首都在视野里时（zoom=1）根本没得推，所以开关一打开就先切到一屏 20 秒。
+   * 翻页后把播放头放在左边 6% 的位置，前面留出一点"刚过去"的上下文。
+   *
+   * 注意（adj 级教训）：这个 effect 的依赖里有 view，而它自己又会 setView ——
+   * 只要有一次 setView 传进去的值和当前值一样，状态对象仍是新引用、effect 会重跑，
+   * 就变成死循环（React 会报 "Maximum update depth exceeded" 并整页白屏）。
+   * 所以每次 setView 之前先比一遍数，没变化就直接 return；整首比一屏还短时干脆不动。 */
   useEffect(() => {
     if (!playing || !autoPage || !durationMs) return
+    /* 整首比一屏（20 秒）还短：翻页没有意义，也不许在这里 setView（会自激） */
+    if (durationMs <= PAGE_MS) return
     const span = spanMs(view, durationMs)
     if (span >= durationMs - 1) {
       const pageMs = Math.min(durationMs, PAGE_MS)
       const zoom = durationMs / Math.max(1, pageMs)
-      set.getState().setView({
-        zoom,
-        panMs: Math.max(0, Math.min(durationMs - pageMs, currentMs - pageMs * 0.2)),
-      })
+      const panMs = Math.max(0, Math.min(durationMs - pageMs, currentMs - pageMs * 0.2))
+      if (Math.abs(view.zoom - zoom) < 1e-6 && Math.abs(view.panMs - panMs) < 1) return
+      set.getState().setView({ zoom, panMs })
       return
     }
-    const right = view.panMs + span * 0.82
-    if (currentMs > right || currentMs < view.panMs) {
-      set.getState().setView({ zoom: view.zoom, panMs: Math.max(0, currentMs - span * 0.25) })
+    /* 右边缘再留 1 像素的余量：线一贴边就翻，别等它真的画出去 */
+    const rightEdge = view.panMs + span - 1
+    if (currentMs >= rightEdge || currentMs < view.panMs) {
+      const panMs = Math.max(0, currentMs - span * 0.06)
+      if (Math.abs(panMs - view.panMs) < 1) return
+      set.getState().setView({ zoom: view.zoom, panMs })
     }
   }, [currentMs, playing, autoPage, durationMs, view, set])
 
@@ -446,21 +456,19 @@ export default function App() {
         <button onClick={() => void exportJps()} disabled={confirmedCount === 0} title="只导出你确认过的音">
           {COPY.exportJps}
         </button>
+        {/* 右侧栏开关：图标与 iJipu BP 的兄弟项目「爱出片」用同一个
+            （public/icons/右侧边栏.svg，靠 CSS mask 上色，打开=亮、收起=灰） */}
         <button
-          className={showSide ? 'icon-btn on' : 'icon-btn'}
+          className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}
           onClick={() => setShowSide((v) => !v)}
           title={showSide ? '收起右侧栏' : '展开右侧栏'}
           aria-label={showSide ? '收起右侧栏' : '展开右侧栏'}
         >
-          <svg width="16" height="14" viewBox="0 0 16 14" aria-hidden="true">
-            <rect x="0.5" y="0.5" width="15" height="13" rx="2" fill="none" stroke="currentColor" />
-            <line x1="10" y1="1" x2="10" y2="13" stroke="currentColor" />
-            <rect x="10.5" y="1" width="4.5" height="12" fill="currentColor" opacity={showSide ? 0.55 : 0.15} />
-          </svg>
+          <span className="side-toggle-icon" />
         </button>
       </div>
 
-      <div className="body">
+      <div className={showSide ? "body" : "body noside"}>
         <div className="main">
           <NoteRoll
             notes={notes}
