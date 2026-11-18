@@ -84,4 +84,18 @@ export interface AnalyzeResult {
   bpm: number
   firstBeatMs: number
   keyCandidates: KeyCandidate[]
+  /** 节奏分析（拍点 + 重拍 + 可信度） */
+  rhythm?: RhythmSummary
+}
+
+/** 节奏分析摘要（拍点数组不进 store，只留用得上的几个） */
+export interface RhythmSummary {
+  bpm: number
+  firstBeatMs: number
+  /** 0..1，越大越可信 */
+  confidence: number
+  /** 拍到第几拍（相对首拍）算小节第一拍，用来核对拍号 */
+  downbeat: number
+  /** 一共跟到多少个拍点 */
+  beatCount: number
 }

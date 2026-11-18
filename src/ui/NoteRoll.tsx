@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BIN_COUNT, MIDI_HIGH, MIDI_LOW, midiToName, midiToNumber } from '../analysis/pitchNames'
 import { displayValue } from '../analysis/spectrum'
 import { beatMs, snapMs } from '../jps/snap'
+import { COPY } from '../brand/copy'
 import { msToX, pickTickSeconds, spanMs, xToMs } from './timeAxis'
 import type { PitchMode, View } from '../model/store'
 import type { EditMode, LoopRange, RawNote, SnapMode, Spectrum } from '../model/types'
@@ -417,40 +418,30 @@ export function NoteRoll(props: Props) {
       }
     }
 
-    /* 8) 左侧钢琴键盘（noteDigger 的画法左右翻转：黑键靠右 = 琴键后端）
-     *  · 整列先铺白：黑键的左边露出来的是两侧白键的侧面，所以必须是白的
-     *  · 白键与白键之间一条细线
-     *  · 黑键：右端一段圆角黑块，上下各留 1.5px 白，看着才是一格一格的键 */
-    g.fillStyle = '#eef2f7'
+    /* 8) 左侧钢琴键盘（照用户给的参考图：每行都有横线分隔，黑键是贴右的黑块）
+     *  · 整列铺白，然后**每一行**都画一条横线——这样一行行看得清，才是"键格"
+     *  · 黑键：贴住右端、宽度约 63%（国标白键 23.5mm / 黑键 11.5mm 的比值换算到深度）
+     *  · 黑键左端圆角 3px、上下各留 1px，右端与键列右边线齐平 */
+    g.fillStyle = '#f1f5f9'
     g.fillRect(0, RULER_H, KEY_W, metrics.h - RULER_H)
     for (let r = 0; r < metrics.rows; r++) {
       const midi = metrics.top - r
       if (midi < MIDI_LOW) break
       const y = RULER_H + r * ROW_H
       const cls = ((midi % 12) + 12) % 12
-      const isBlack = BLACK.has(cls)
-      if (!isBlack && !BLACK.has(((cls + 1) % 12 + 12) % 12)) {
-        g.fillStyle = 'rgba(20,32,48,0.50)'
-        g.fillRect(0, y + ROW_H - 1, KEY_W, 1)
-      }
-      if (isBlack) {
-        /* 照 GB/T 10159-2023 的比例：白键宽约 23.5mm、黑键宽约 11.5mm、黑键长 95mm / 白键 150mm
-         * ⇒ 旋转 90° 后黑键盖住后端约 63% 的深度；高度仍按半音行（一行一键） */
+      /* 每行一条分隔线（参考图里连黑键行也有一条） */
+      g.fillStyle = 'rgba(30,44,62,0.32)'
+      g.fillRect(0, y + ROW_H - 1, KEY_W, 1)
+      if (BLACK.has(cls)) {
         const kw = Math.round(KEY_W * 0.63)
         const kx = KEY_W - kw
-        /* 投影：黑键压在白键上，左侧留一道暗边 */
-        const sh = g.createLinearGradient(kx - 4, 0, kx, 0)
-        sh.addColorStop(0, 'rgba(8,12,18,0)')
-        sh.addColorStop(1, 'rgba(8,12,18,0.35)')
-        g.fillStyle = sh
-        g.fillRect(kx - 4, y, 4, ROW_H)
-        g.fillStyle = '#0b0f14'
+        g.fillStyle = '#05080c'
         g.beginPath()
-        g.roundRect(kx, y + 2, kw, ROW_H - 4, [2, 0, 0, 2])
+        g.roundRect(kx, y + 1, kw, ROW_H - 2, [3, 0, 0, 3])
         g.fill()
-        /* 键面顶边一道极细高光，看起来有厚度 */
-        g.fillStyle = 'rgba(255,255,255,0.16)'
-        g.fillRect(kx + 1, y + 2, kw - 2, 1)
+        /* 键面一道极细高光，给点厚度 */
+        g.fillStyle = 'rgba(255,255,255,0.14)'
+        g.fillRect(kx + 4, y + 2, kw - 6, 1)
       }
       if (cls === 0 || midi === MIDI_LOW) {
         g.fillStyle = 'rgba(40,60,80,0.9)'
@@ -459,22 +450,9 @@ export function NoteRoll(props: Props) {
         g.fillText(midiToName(midi), 6, y + ROW_H / 2)
       }
     }
-    /* 白键前沿的窄边（真琴键前端是圆角、比键面略低） */
-    g.fillStyle = 'rgba(200,214,228,0.85)'
-    g.fillRect(0, RULER_H, 2, metrics.h - RULER_H)
-    g.fillStyle = 'rgba(255,255,255,0.5)'
-    g.fillRect(2, RULER_H, 1, metrics.h - RULER_H)
-    /* 键面靠左的一点点明暗，给个"键的前沿"错觉 */
-    const grad = g.createLinearGradient(0, 0, KEY_W, 0)
-    grad.addColorStop(0, 'rgba(255,255,255,0.75)')
-    grad.addColorStop(0.35, 'rgba(255,255,255,0)')
-    grad.addColorStop(1, 'rgba(10,18,28,0.18)')
-    g.fillStyle = grad
-    g.fillRect(0, RULER_H, KEY_W, metrics.h - RULER_H)
-    /* 键盘与网格之间的分界 */
+    /* 键列右边线与网格分开 */
     g.fillStyle = 'rgba(8,12,18,0.9)'
     g.fillRect(KEY_W - 1, RULER_H, 1, metrics.h - RULER_H)
-
     /* 9) 播放头 */
     const px = xAt(playMs)
     if (px >= metrics.left) {
@@ -766,6 +744,73 @@ export function NoteRoll(props: Props) {
       {notes.length === 0 && (
         <div className="pane-empty">还没有音符：先打开一段音频，或直接在格子里画</div>
       )}
+      <HScroll
+        durationMs={props.durationMs}
+        view={props.view}
+        onPan={(panMs) => props.onView({ zoom: props.view.zoom, panMs })}
+      />
+    </div>
+  )
+}
+
+/**
+ * 横向滚动条（noteDigger 那条 hscrollbar 的简化版）。
+ *
+ * 只在放大（视野 < 全曲）时才有意义：thumb 的长度 = 视野占比，位置 = 左边缘；
+ * 拖 thumb 平移，点轨道直接跳过去。上面画布用 Shift+滚轮/拖拽也能平移，这条是给鼠标党的。
+ */
+function HScroll(props: {
+  durationMs: number
+  view: View
+  onPan: (panMs: number) => void
+}) {
+  const trackRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<{ x: number; pan: number } | null>(null)
+  const span = spanMs(props.view, props.durationMs)
+  const maxPan = Math.max(0, props.durationMs - span)
+  const visible = props.durationMs > 0 && span < props.durationMs - 1
+  const ratio = props.durationMs > 0 ? Math.min(1, span / props.durationMs) : 1
+  const left = maxPan > 0 ? Math.min(1, props.view.panMs / props.durationMs) : 0
+
+
+  if (!visible) return null
+  return (
+    <div
+      className="hbar"
+      ref={trackRef}
+      title={COPY.hbarTip}
+      onPointerDown={(e) => {
+        const el = trackRef.current
+        if (!el) return
+        const r = el.getBoundingClientRect()
+        const t = (e.clientX - r.left) / Math.max(1, r.width)
+        const thumbStart = props.view.panMs / props.durationMs
+        const thumbSpan = ratio
+        /* 点在 thumb 上 → 拖；点在轨道上 → 让视野中心跳到点击处 */
+        if (t >= thumbStart && t <= thumbStart + thumbSpan) {
+          dragRef.current = { x: e.clientX, pan: props.view.panMs }
+        } else {
+          props.onPan(Math.max(0, Math.min(maxPan, t * props.durationMs - span / 2)))
+        }
+        ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
+      }}
+      onPointerMove={(e) => {
+        const d = dragRef.current
+        const el = trackRef.current
+        if (!d || !el) return
+        const r = el.getBoundingClientRect()
+        const dx = e.clientX - d.x
+        const next = d.pan + (dx / Math.max(1, r.width)) * props.durationMs
+        props.onPan(Math.max(0, Math.min(maxPan, next)))
+      }}
+      onPointerUp={() => {
+        dragRef.current = null
+      }}
+      onPointerCancel={() => {
+        dragRef.current = null
+      }}
+    >
+      <i style={{ left: `${left * 100}%`, width: `${Math.max(4, ratio * 100)}%` }} />
     </div>
   )
 }

@@ -11,7 +11,7 @@
  * 播放两种模式（原音频 / 合成音）共用播放头；Tab 随时切换；空格播放；F2/F3 切点击模式。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { keyDisplayName } from './analysis/pitchNames'
+import { keyColor, keyDisplayName } from './analysis/pitchNames'
 import { loadAudioFromPath, pickAndLoadAudio, type LoadedAudio } from './audio/decode'
 import { play, setAudioBuffer, stop, audition, type PlayMode } from './audio/player'
 import { COPY } from './brand/copy'
@@ -49,6 +49,8 @@ export default function App() {
   const autoPage = useBp((s) => s.autoPage)
   const gain = useBp((s) => s.gain)
   const contrast = useBp((s) => s.contrast)
+  const suppress = useBp((s) => s.suppress)
+  const rhythm = useBp((s) => s.rhythm)
   const tonic = useBp((s) => s.tonic)
   const bpm = useBp((s) => s.bpm)
   const beatsPerBar = useBp((s) => s.beatsPerBar)
@@ -62,6 +64,8 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const workerRef = useRef<Worker | null>(null)
+  /* 分析用过的样本留着：调'去谐波'要把同一段音频重跑一遍，不能重新选文件 */
+  const samplesRef = useRef<{ samples: Float32Array; sampleRate: number } | null>(null)
 
   const confirmedCount = useMemo(() => notes.filter((n) => n.confirmed).length, [notes])
   const warnings = useBp((s) => s.warnings)
@@ -103,9 +107,20 @@ export default function App() {
       st.setBusy(COPY.analyzing)
       const w = workerRef.current
       if (!w) throw new Error('分析线程没起来')
-      w.postMessage({ samples: loaded.samples, sampleRate: loaded.sampleRate }, [
-        loaded.samples.buffer as ArrayBuffer,
-      ])
+      /* 存一份副本：worker 拿走的是 transfer 过去的 buffer，主线程这边就没数据了 */
+      samplesRef.current = {
+        samples: new Float32Array(loaded.samples),
+        sampleRate: loaded.sampleRate,
+      }
+      w.postMessage(
+        {
+          samples: loaded.samples,
+          sampleRate: loaded.sampleRate,
+          suppress: st.suppress,
+          beatsPerBar: st.beatsPerBar,
+        },
+        [loaded.samples.buffer as ArrayBuffer],
+      )
     },
     [set],
   )
@@ -150,6 +165,23 @@ export default function App() {
     }
   }, [applyLoaded, set])
 
+  /* ---------- 去谐波：把同一段音频带着新的强度重跑一遍 ---------- */
+  const applySuppress = useCallback(
+    (v: number) => {
+      const st = set.getState()
+      st.setSuppress(v)
+      const buf = samplesRef.current
+      const w = workerRef.current
+      if (!buf || !w) return
+      st.setBusy(COPY.analyzing)
+      const copy = new Float32Array(buf.samples)
+      w.postMessage(
+        { samples: copy, sampleRate: buf.sampleRate, suppress: v, beatsPerBar: st.beatsPerBar },
+        [copy.buffer as ArrayBuffer],
+      )
+    },
+    [set],
+  )
   /* ---------- 播放 ---------- */
   const startPlay = useCallback(async (fromMs: number, m: PlayMode) => {
     const st = set.getState()
@@ -450,9 +482,10 @@ export default function App() {
                   onClick={() => useBp.getState().setTonic(c.tonic)}
                   title="点一下就把调号定成它"
                 >
-                  <span className="key-name">{keyDisplayName(c.tonic)}</span>
                   <span className="bar">
-                    <i style={{ width: `${Math.round(c.share * 100)}%` }} />
+                    <i style={{ width: `${Math.max(6, Math.round(c.share * 100))}%`, background: keyColor(c.tonic) }}>
+                      <b>{keyDisplayName(c.tonic)}</b>
+                    </i>
                   </span>
                   <span className="key-share">{(c.share * 100).toFixed(0)}%</span>
                 </div>
@@ -460,6 +493,40 @@ export default function App() {
             </div>
             <div className="hint" style={{ marginTop: 6 }}>
               {COPY.keyPanelHint}
+            </div>
+          </div>
+
+          <div>
+            <h3>{COPY.rhythmTitle}</h3>
+            <div className="row-gap">
+              <button onClick={() => useBp.getState().runRhythm()} disabled={!analysis}>
+                {COPY.rhythmBtn}
+              </button>
+              <span className="hint">
+                {rhythm
+                  ? `BPM ${rhythm.bpm} · 拍点 ${rhythm.beatCount} 个 · 可信度 ${(rhythm.confidence * 100).toFixed(0)}%`
+                  : COPY.rhythmHint}
+              </span>
+            </div>
+            <div className="row-gap" style={{ marginTop: 8 }}>
+              <label className="field" style={{ flex: 1 }}>
+                {COPY.harmonicLabel}
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={suppress}
+                  onChange={(e) => useBp.getState().setSuppress(Number(e.target.value))}
+                  onPointerUp={(e) => applySuppress(Number((e.target as HTMLInputElement).value))}
+                  onKeyUp={(e) => applySuppress(Number((e.currentTarget as HTMLInputElement).value))}
+                  style={{ width: 120 }}
+                />
+                <span className="mono">{suppress.toFixed(2)}</span>
+              </label>
+            </div>
+            <div className="hint" style={{ marginTop: 4 }}>
+              {COPY.harmonicHint}
             </div>
           </div>
 

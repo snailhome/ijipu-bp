@@ -14,6 +14,7 @@
  */
 import { create } from 'zustand'
 import { quantize } from '../jps/quantize'
+import { analyzeRhythm } from '../analysis/beat'
 import { toJps } from '../jps/toJps'
 import type { PlayMode } from '../audio/player'
 import type {
@@ -22,6 +23,7 @@ import type {
   GridNote,
   LoopRange,
   RawNote,
+  RhythmSummary,
   SnapMode,
 } from './types'
 
@@ -57,6 +59,10 @@ interface State {
   gain: number
   /** 热力图对比（指数） */
   contrast: number
+  /** 去谐波强度 0..1（0 = 不做） */
+  suppress: number
+  /** 最近一次节奏分析的结果 */
+  rhythm: RhythmSummary | null
   /* 显示与量化参数 */
   pitchMode: PitchMode
   /** 表格点击模式：draw=画音/确认，select=只试听 */
@@ -91,6 +97,9 @@ interface State {
   setAutoPage: (b: boolean) => void
   setGain: (g: number) => void
   setContrast: (c: number) => void
+  setSuppress: (s: number) => void
+  /** 用当前谱再跑一次节奏分析，并把 BPM/首拍/拍号写回去 */
+  runRhythm: () => void
   setTonic: (t: number) => void
   setBpm: (b: number) => void
   setBeatsPerBar: (b: number) => void
@@ -177,6 +186,8 @@ export const useBp = create<State>((set, get) => ({
   autoPage: true,
   gain: 1,
   contrast: 1.4,
+  suppress: 0,
+  rhythm: null,
   pitchMode: 'name',
   mode: 'draw',
   snap: 'beat',
@@ -215,6 +226,7 @@ export const useBp = create<State>((set, get) => ({
       firstBeatMs: a.firstBeatMs,
       tonic: a.keyCandidates[0]?.tonic ?? 0,
       autoTonic: true,
+      rhythm: a.rhythm ?? null,
       durationMs: Math.max(get().durationMs, a.durationMs),
       currentMs: 0,
     })
@@ -237,6 +249,25 @@ export const useBp = create<State>((set, get) => ({
   setLoopOn: (b) => set({ loopOn: b }),
   setAutoPage: (b) => set({ autoPage: b }),
   setGain: (g) => set({ gain: Math.max(0.1, Math.min(6, g)) }),
+  setSuppress: (v) => set({ suppress: Math.max(0, Math.min(1, v)) }),
+  runRhythm: () => {
+    const s = get()
+    const spec = s.analysis?.spectrum
+    if (!spec) return
+    const r = analyzeRhythm(spec, s.beatsPerBar)
+    set({
+      bpm: r.bpm,
+      firstBeatMs: r.firstBeatMs,
+      rhythm: {
+        bpm: r.bpm,
+        firstBeatMs: r.firstBeatMs,
+        confidence: r.confidence,
+        downbeat: r.downbeat,
+        beatCount: r.beats.length,
+      },
+    })
+    applyDerived(set, get)
+  },
   setContrast: (c) => set({ contrast: Math.max(0.2, Math.min(4, c)) }),
   setTonic: (t) => {
     set({ tonic: t, autoTonic: false })

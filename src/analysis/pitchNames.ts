@@ -111,3 +111,16 @@ export function noteLabel(midi: number, tonic: number, mode: 'name' | 'number'):
 export function topKeys(candidates: KeyCandidate[], n = 6): KeyCandidate[] {
   return [...candidates].sort((a, b) => b.share - a.share).slice(0, n)
 }
+
+/**
+ * 调性色条的颜色（照 noteDigger 的做法：每个调一个固定色，色条长度就是百分比）。
+ * 按五度圈排色相，相邻的调颜色差得远，一眼能分开；亮度/SAT 固定，深色底上也清楚。
+ */
+const KEY_HUES = [
+  140, 25, 205, 350, 280, 55, 190, 0, 165, 310, 95, 240,
+]
+
+export function keyColor(tonic: number): string {
+  const hue = KEY_HUES[((tonic % 12) + 12) % 12] ?? 200
+  return `hsl(${hue} 62% 46%)`
+}

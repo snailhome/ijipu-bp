@@ -11,8 +11,10 @@ import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
 import App from '../src/App'
 import { analyzeSamples } from '../src/analysis/analyze'
-import { estimateTempo } from '../src/analysis/beat'
+import { analyzeRhythm, estimateTempo } from '../src/analysis/beat'
 import { buildLogMap } from '../src/analysis/logmap'
+import { suppressHarmonics } from '../src/analysis/harmonics'
+import { computeSpectrum } from '../src/analysis/spectrum'
 import { FFT, hannWindow } from '../src/analysis/fft'
 import { guessKeys } from '../src/analysis/key'
 import { midiToNumber, midiToName } from '../src/analysis/pitchNames'
@@ -322,6 +324,56 @@ const melody = concat([
     html.includes('调性分析') &&
     html.includes('简谱预览')
   check('主界面初始渲染出工具条与三个面板', ok, `${html.length} 字符`)
+}
+
+/* ---------------- 13. 去谐波：泛音被压下去，基频相对留下来 ---------------- */
+{
+  /* A3 = 220Hz，带 2/3/4 次泛音（比基频还响一点点，模拟"泛音很重的音色"） */
+  const n = Math.round(1.2 * SR)
+  const mix = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    const t = i / SR
+    mix[i] =
+      0.5 * Math.sin(2 * Math.PI * 220 * t) +
+      0.42 * Math.sin(2 * Math.PI * 440 * t) +
+      0.3 * Math.sin(2 * Math.PI * 660 * t) +
+      0.18 * Math.sin(2 * Math.PI * 880 * t)
+  }
+  const spec = computeSpectrum(mix, SR, {})
+  const bins = buildLogMap(SR, 8192).bins
+  const binOf = (midi: number) => midi - 21
+  const energy = (s: typeof spec, midi: number) => {
+    let sum = 0
+    for (let f = 0; f < s.frames; f++) sum += s.data[f * bins + binOf(midi)]
+    return sum / Math.max(1, s.frames)
+  }
+  const rawF = energy(spec, 57) // A3
+  const rawH2 = energy(spec, 69) // A4
+  const rawH3 = energy(spec, 76) // E5（3 倍频）
+  const reduced = suppressHarmonics(spec, 0.85)
+  const redF = energy(reduced, 57)
+  const redH2 = energy(reduced, 69)
+  const redH3 = energy(reduced, 76)
+  check('去谐波：2 倍频被明显压下', redH2 / rawH2 < 0.4, `${rawH2.toFixed(3)} → ${redH2.toFixed(3)}`)
+  check('去谐波：3 倍频也被压下', redH3 / rawH3 < 0.6, `${rawH3.toFixed(3)} → ${redH3.toFixed(3)}`)
+  check('去谐波：基频基本不动（至少留一半）', redF / rawF > 0.5, `${rawF.toFixed(3)} → ${redF.toFixed(3)}`)
+}
+
+/* ---------------- 14. 节奏分析：120 BPM 的点击声能跟上 ---------------- */
+{
+  const beat = 500
+  const parts: Float32Array[] = []
+  for (let i = 0; i < 8; i++) {
+    parts.push(tone(1200, 60, 0.8))
+    parts.push(silence(beat - 60))
+  }
+  const clicks = concat(parts)
+  const spec = computeSpectrum(clicks, SR, {})
+  const r = analyzeRhythm(spec, 4)
+  check('节奏分析：BPM 落在 120 附近', Math.abs(r.bpm - 120) <= 8, String(r.bpm))
+  check('节奏分析：跟到足够多的拍点', r.beats.length >= 6, `${r.beats.length} 个`)
+  check('节奏分析：可信度不为 0', r.confidence > 0.15, String(r.confidence))
+  check('节奏分析：首拍在小节第一拍（<半拍）', r.firstBeatMs % beat < beat / 2, `${r.firstBeatMs}ms`)
 }
 
 const failed = results.filter((r) => !r.ok)

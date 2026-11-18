@@ -5,7 +5,8 @@
  * 只吃 Float32Array，不碰 DOM / AudioContext：这样 Node 冒烟能用合成信号夹起来验
  * （scripts/smoke.ts 就是干这个的）。
  */
-import { estimateTempo } from './beat'
+import { analyzeRhythm, estimateTempo } from './beat'
+import { suppressHarmonics } from './harmonics'
 import { guessKeys } from './key'
 import { trackMonophonic } from './notes'
 import { computeSpectrum, type SpectrumOptions } from './spectrum'
@@ -14,6 +15,10 @@ import type { AnalyzeResult } from '../model/types'
 export interface AnalyzeOptions extends SpectrumOptions {
   /** 最短音符（毫秒） */
   minNoteMs?: number
+  /** 去谐波强度 0..1（0 = 不做） */
+  suppress?: number
+  /** 拍号（节奏分析挑重拍时要） */
+  beatsPerBar?: number
 }
 
 export function analyzeSamples(
@@ -21,9 +26,11 @@ export function analyzeSamples(
   sampleRate: number,
   opts: AnalyzeOptions = {},
 ): AnalyzeResult {
-  const spectrum = computeSpectrum(samples, sampleRate, opts)
+  const raw = computeSpectrum(samples, sampleRate, opts)
+  const spectrum = opts.suppress && opts.suppress > 0 ? suppressHarmonics(raw, opts.suppress) : raw
   const notes = trackMonophonic(spectrum, { minMs: opts.minNoteMs ?? 60 })
   const tempo = estimateTempo(spectrum)
+  const rhythm = analyzeRhythm(spectrum, opts.beatsPerBar ?? 4)
   const keyCandidates = guessKeys(spectrum)
   const analyzedEnd = (spectrum.frames + 1) * spectrum.hopMs
   return {
@@ -34,6 +41,13 @@ export function analyzeSamples(
     bpm: tempo.bpm,
     firstBeatMs: tempo.firstBeatMs,
     keyCandidates,
+    rhythm: {
+      bpm: rhythm.bpm,
+      firstBeatMs: rhythm.firstBeatMs,
+      confidence: rhythm.confidence,
+      downbeat: rhythm.downbeat,
+      beatCount: rhythm.beats.length,
+    },
   }
 }
 

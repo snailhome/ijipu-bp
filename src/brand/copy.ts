@@ -47,4 +47,12 @@ export const COPY = {
   resetDraft: '回到初稿',
   resetDraftTip: '丢掉所有手工改动与确认，回到分析结果',
   stripTitle: '简谱预览（流线谱：横轴即时间，改音立刻反映）',
+  /* 节奏分析与去谐波（对照 noteDigger 的「节奏分析」「去除谐波」） */
+  rhythmTitle: '节奏与谐波',
+  rhythmBtn: '节奏分析',
+  rhythmHint: '点一下：按当前谱子重新找拍点与重拍，写回 BPM / 首拍',
+  rhythmConfTip: '可信度低说明拍点不明显（或曲子变速），BPM 与首拍最好手动核一遍',
+  harmonicLabel: '去谐波',
+  harmonicHint: '把泛音从谱里减掉（0 = 不动，1 = 全减）；松手后会用同一段音频重跑一遍',
+  hbarTip: '拖这条横向滚动条（或 Shift+滚轮）来回换时间位置',
 } as const
