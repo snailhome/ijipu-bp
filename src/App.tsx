@@ -306,7 +306,11 @@ export default function App() {
       if (typing) return
       const st = set.getState()
       if (e.code === 'Space') {
+        /* 关键：按钮/滑条上有焦点时，空格还会触发它们自己的激活（按钮 = 再来一次 click），
+         * 结果一次空格切换两遍 —— 用户看到的"空格好像跳跃播放"就是这么来的。
+         * 用捕获阶段 + stopPropagation 把事件截在窗口这一层，控件收不到。 */
         e.preventDefault()
+        e.stopPropagation()
         togglePlay()
       } else if (e.code === 'Tab') {
         e.preventDefault()
@@ -327,8 +331,8 @@ export default function App() {
         st.setAllConfirmed(true)
       }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true) // 捕获阶段：先于控件自己的默认行为
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [removeNote, selectedId, set, switchMode, togglePlay])
 
   /* ---------- 导出 ---------- */

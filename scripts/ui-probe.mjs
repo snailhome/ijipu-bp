@@ -475,6 +475,32 @@ try {
   const stoppedAfterSpace = await cdp.eval(`window.__bp.getState().playing`)
   check('再按空格能停下', stoppedAfterSpace === false, String(stoppedAfterSpace))
 
+  /* ── 焦点在「播放」按钮上按空格：只能切换一次 ──
+   * 之前只 preventDefault，按钮自己的空格激活仍会再 click 一次 ⇒ 一次空格切两遍，
+   * 用户看到的就是"空格好像跳跃播放"。改成捕获阶段 + stopPropagation 后才对。 */
+  await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    s.setLoop(null)
+    s.setLoopOn(false)
+    if (s.playing) s.setPlaying(false)
+  })()`)
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('.toolbar button')].find((b) => /播放|暂停/.test(b.textContent || ''))
+    btn?.focus()
+    return document.activeElement?.tagName + ':' + (document.activeElement?.textContent || '')
+  })()`)
+  await cdp.pressKey('Space', ' ', 32)
+  await sleep(320)
+  const toggledOnce = await cdp.eval(`window.__bp.getState().playing`)
+  await sleep(420)
+  const stillPlaying = await cdp.eval(`window.__bp.getState().playing`)
+  check('焦点在播放按钮上时，一次空格只切换一次', toggledOnce === true && stillPlaying === true,
+    `playing=${toggledOnce}→${stillPlaying}`)
+  await cdp.pressKey('Space', ' ', 32)
+  await sleep(250)
+  const stoppedAgain = await cdp.eval(`window.__bp.getState().playing`)
+  check('焦点在播放按钮上时，再按一次能停', stoppedAgain === false, String(stoppedAgain))
+
   /* ── 圈了区间，按播放要从区间开头放（不是从头） ── */
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setLoop({ startMs: 800, endMs: 2000 }); s.setLoopOn(true); s.setCurrentMs(0) })()`)
   await sleep(150)
