@@ -26,7 +26,7 @@ export function snapStepMs(opt: GridOptions, mode: SnapMode): number {
     case 'beat':
       return beat
     case 'grid':
-      return beat / 4 /* 最小绘制格 = 十六分音符（4/4 里 1/4 拍，用户 m04380） */
+      return beat / 16 /* 最小绘制格 = 1/16 拍（虚线里再四分，用户 m04517） */
     default:
       return 0
   }

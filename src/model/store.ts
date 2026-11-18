@@ -307,7 +307,8 @@ export const useBp = create<State>((set, get) => ({
 
   addNote: (n) => {
     const startMs = Math.max(0, Math.min(n.startMs, n.endMs))
-    const endMs = Math.max(startMs + 40, Math.max(n.startMs, n.endMs))
+    /* 最短 20ms：只是防 0 长度，不再卡 40ms —— 最小绘制格是 1/16 拍（120bpm 下 31ms） */
+    const endMs = Math.max(startMs + 20, Math.max(n.startMs, n.endMs))
     const note: RawNote = {
       id: nextId(),
       midi: Math.max(21, Math.min(108, Math.round(n.midi))),

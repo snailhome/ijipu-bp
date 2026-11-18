@@ -750,7 +750,7 @@ try {
     const last = n[n.length - 1]
     return { grew: n.length === ${countBefore} + 1, len: Math.round(last.endMs - last.startMs) }
   })()`)
-  check('新画的音只有最小格那么长（十六分音符 = 125ms @120bpm）', madeNote.grew && Math.abs(madeNote.len - 125) <= 8,
+  check('新画的音只有最小格那么长（1/16 拍 = 31ms @120bpm）', madeNote.grew && Math.abs(madeNote.len - 31) <= 6,
     `长度 ${madeNote.len}ms，个数${countBefore}→${madeNote.grew ? '多一个' : '没变'}`)
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setMode('select') })()`)
   await sleep(150)

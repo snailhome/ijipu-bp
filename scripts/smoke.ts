@@ -307,7 +307,8 @@ const melody = concat([
   check('吸附关：原样返回', snapMs(1234, opt, 'off') === 1234, String(snapMs(1234, opt, 'off')))
   check('吸附拍：1234 → 1000', snapMs(1234, opt, 'beat') === 1000, String(snapMs(1234, opt, 'beat')))
   check('吸附小节：1234 → 最近的小节线 2000', snapMs(1234, opt, 'bar') === 2000, String(snapMs(1234, opt, 'bar')))
-  check('吸附格点（1/4 拍）：1234 → 1250', snapMs(1234, opt, 'grid') === 1250, String(snapMs(1234, opt, 'grid')))
+  check('吸附格点（1/16 拍 = 31.25ms）：1234 → 1218.75', snapMs(1234, opt, 'grid') === 1218.75, String(snapMs(1234, opt, 'grid')))
+  check('吸附格点：正好落在格上就不动（1250）', snapMs(1250, opt, 'grid') === 1250, String(snapMs(1250, opt, 'grid')))
 
   const m = (t: number) => { const x = marks(t); return `${x.under}/${x.dash}/${x.dots}` }
   check('4 tick = 一拍：无减时线无增时线', m(4) === '0/0/0', m(4))

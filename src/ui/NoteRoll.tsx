@@ -223,10 +223,15 @@ export function NoteRoll(props: Props) {
     const bottomMidi = metrics.top - metrics.rows + 1
     const beat = beatMs(props.bpm)
 
-    /* 1) 频谱热力图：以"最小绘制格"（十六分音符（1/4 拍） × 一个半音）为单位
-     *   —— 一格之内同一种颜色（阶梯式，不做线性插值），格子里取该格覆盖帧的最大值。 */
+    /* 1) 频谱热力图：以"最小绘制格"（1/16 拍 × 一个半音，用户 m04517）为单位
+     *   —— 一格之内同一种颜色（阶梯式，不做线性插值），格子里取该格覆盖帧的最大值。
+     *   一格不足 1 像素时才按整数倍合并（否则整曲铺满要画十几万个方块），
+     *   平时就老老实实按 1/16 拍一格画，跟音符的最小格对齐。 */
     if (spectrum && props.bpm > 0) {
-      const cellMs = beat / 4 /* 与最小绘制格一致（十六分音符） */
+      const cellMin = beat / 16 /* 与最小绘制格一致：1/16 拍 */
+      const w0 = xAt(props.firstBeatMs + cellMin) - xAt(props.firstBeatMs)
+      const merge = Math.max(1, Math.ceil(1 / Math.max(0.01, w0)))
+      const cellMs = cellMin * merge
       const firstAt = props.firstBeatMs
       const cellW = Math.max(1, xAt(firstAt + cellMs) - xAt(firstAt))
       const k0 = Math.floor((view.panMs - firstAt) / cellMs) - 1
@@ -672,7 +677,7 @@ export function NoteRoll(props: Props) {
       const id = props.onAdd({
         midi: midiAt(y),
         startMs,
-        endMs: startMs + beatMs(props.bpm) / 4, /* 新画的音先给最小格（十六分音符），要长就往右拖 */
+        endMs: startMs + beatMs(props.bpm) / 16, /* 新画的音先给最小格（1/16 拍），要长就往右拖 */
       })
       drag.current = { kind: 'create', id, startMs, moved: false }
     },
