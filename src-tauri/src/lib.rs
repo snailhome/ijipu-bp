@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 
 use tauri::ipc::Response;
+use tauri::Manager;
 use tauri_plugin_dialog::DialogExt;
 
 const AUDIO_EXTS: &[&str] = &["mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus", "webm"];
@@ -91,6 +92,20 @@ pub fn run() {
             bp_initial_audio,
             bp_save_jps
         ])
+        .setup(|app| {
+            // 窗口图标（标题栏左上角 + 任务栏）= 品牌图，与 public/icons、src-tauri/icons
+            // 是同一张 png。exe 文件图标走 bundle.icon 的 icon.ico（编译期由 tauri-build 嵌入），
+            // 安装包快捷方式沿用 exe 图标，所以三处保持一致。
+            // 取不到窗口就跳过：图标不是功能，不该拦住启动。
+            if let Some(win) = app.get_webview_window("main") {
+                if let Ok(icon) =
+                    tauri::image::Image::from_bytes(include_bytes!("../../public/icons/Logo-bp.png"))
+                {
+                    let _ = win.set_icon(icon);
+                }
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("爱扒谱启动失败");
 }

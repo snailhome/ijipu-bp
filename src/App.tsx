@@ -210,10 +210,14 @@ export default function App() {
     <div className="app">
       <div className="toolbar">
         <span className="brand">
-          {COPY.appName}
-          <small>
-            {COPY.appNameEn} {APP_VERSION}
-          </small>
+          {/* 顶栏图标 = 品牌图标（Logo-bp.png；窗口/任务栏图标由 src-tauri/icons 决定） */}
+          <img className="brand-logo" src="/icons/Logo-bp.png" alt={COPY.appName} />
+          <span className="brand-text">
+            {COPY.appName}
+            <small>
+              {COPY.appNameEn} {APP_VERSION}
+            </small>
+          </span>
         </span>
         <button className="primary" onClick={() => void openAudio()} disabled={!!busy}>
           {COPY.openAudio}

@@ -77,9 +77,26 @@ button.primary {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-weight: 700;
   letter-spacing: 0.5px;
   margin-right: 6px;
+}
+
+/* 品牌图标：和窗口图标同一张图（public/icons/Logo-bp.png） */
+.brand-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.brand-text {
+  display: inline-flex;
+  align-items: baseline;
 }
 
 .brand small {

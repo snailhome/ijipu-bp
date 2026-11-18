@@ -33,6 +33,11 @@ npm run build           # tsc --noEmit + vite build
 npm run tauri:build     # 桌面安装包（本机用 --no-bundle 只出 exe，见"踩过的坑"）
 ```
 
+**只想调界面/逻辑**：`tauri-dev.bat` 双击就跑（等价于设好三处环境后 `npm run tauri:dev`），
+带热更新、改前端不用重编译 Rust；`tauri-dev.bat --check` 只体检环境不启动。
+**只想在浏览器里看**：`npm run dev` 后开 http://localhost:5174 —— 浏览器模式下"打开音频"走文件选择框、
+导出走 Blob 下载，其余（频谱/卷帘/简谱/播放）与桌面端同一套代码。
+
 桌面构建的环境说明：这台机器**没有 MSVC**，用的是 Rust 的 **GNU 工具链**
 （`stable-x86_64-pc-windows-gnu` + winlibs MinGW64 的 gcc），并且
 `CARGO_HOME` / `RUSTUP_HOME` 指向工作区里的 `.cargo` / `.rustup`，不在默认的 `~\.cargo`。
@@ -63,6 +68,26 @@ scripts/        引擎同步、冒烟
   所以 Node 里能用合成正弦当夹具跑断言（见 `scripts/smoke.ts`）。
 - **秒轴与拍轴分开**：分析结果存秒（贴着音频），量化后才变成 tick。改 BPM 不动分析结果。
 
+## 图标（标题栏 / 窗口 / exe / 快捷方式 / 界面里，都是同一张）
+
+源图在 `D:\Coding\JianpuScript\矢量图\Logo-bp.png`（"123" 青绿 + "BP" 黄）。四处来源一致：
+
+| 用在哪儿 | 由什么决定 |
+|---|---|
+| 窗口标题栏、任务栏 | `src-tauri/src/lib.rs` 的 `.setup()` 里 `win.set_icon(...)`，读 `public/icons/Logo-bp.png` |
+| 顶栏品牌 | `src/App.tsx` 的 `<img className="brand-logo" src="/icons/Logo-bp.png">` |
+| exe 文件图标 | `src-tauri/icons/icon.ico`（编译期由 tauri-build 嵌进 exe） |
+| 安装包快捷方式 | 沿用 exe 图标，无需另设 |
+| 浏览器标签页 | `index.html` 的 `<link rel="icon">` |
+
+换图流程（两处都要跑，否则会出现"exe 换了、标题栏没换"）：
+
+```powershell
+npm run tauri -- icon "D:\Coding\JianpuScript\矢量图\Logo-bp.png" --fit contain   # 生成 src-tauri/icons/*
+Copy-Item "D:\Coding\JianpuScript\矢量图\Logo-bp.png" public\icons\Logo-bp.png -Force
+npm run tauri:build -- --no-bundle   # 重编后 exe 图标才变
+```
+
 ## 已知限制
 
 - 只做单声部；和弦会被压成一个音。
@@ -91,5 +116,24 @@ icacls "D:\Coding\JianpuScript" /setintegritylevel M /T
 **3. GNU 链接器的 `.rsrc merge failure` 警告**（`multiple non-default manifests`）不影响产物，
 是 MinGW 嵌资源的老毛病；MSVC 工具链不会出。
 
-**4. 不要用 shell 改含中文的文件。** 工作区规矩：中文文件只用编辑器工具改，`Get-Content | Set-Content`
+**4. `tauri::Builder::icon()` 在 tauri 2.12 里没有这个方法。** 想换窗口/任务栏图标不能链在
+builder 上（编译报 `no method named 'icon'`），要在 `.setup()` 里拿窗口再设：
+
+```rust
+if let Some(win) = app.get_webview_window("main") {
+    if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../public/icons/Logo-bp.png")) {
+        let _ = win.set_icon(icon);
+    }
+}
+```
+
+需要 `use tauri::Manager;`，并在 `Cargo.toml` 打开 `tauri = { version = "2", features = ["image-png"] }`
+（不开这个 feature 解不了 png）。
+
+**5. `tauri icon` 要求正方形图。** `Logo-bp.png` 是 1673×1669，差 4 像素会被拒：
+```powershell
+npm run tauri -- icon "D:\Coding\JianpuScript\矢量图\Logo-bp.png" --fit contain
+```
+
+**6. 不要用 shell 改含中文的文件。** 工作区规矩：中文文件只用编辑器工具改，`Get-Content | Set-Content`
 会把编码改坏。

@@ -81,12 +81,24 @@ icacls "D:\Coding\JianpuScript" /setintegritylevel M /T
 不想提权时的临时办法：把 `ijipu-bp.exe` 与 `WebView2Loader.dll` 一起拷到
 `%LOCALAPPDATA%` 下（新文件继承 Medium）再运行。
 
-## 七、诊断工具
+## 七、诊断工具与两种调试方式
 
 ```powershell
 npm run fixture               # 造一段已知旋律的 wav（C4 E4 G4 C5 各 500ms）
 npm run inspect               # 打印"原始音符 / 量化 / jps / 逐帧峰值"
 npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM wav）
+.\tauri-dev.bat               # 桌面壳热更新调试（自动设好 CARGO_HOME/RUSTUP_HOME/PATH）
+.\tauri-dev.bat --check       # 只体检环境（cargo/npm 版本 + cargo metadata），不启动
 ```
 
 分析结果不对时**先跑 inspect**：时值怪、音高错、BPM 离谱，都能在那四段里看出是哪一步。
+
+改界面时优先 `npm run dev`（浏览器，秒级）；只有"要系统对话框 / 要真 exe / 要窗口图标"时才用
+`tauri-dev.bat`——Rust 侧一次冷编译约 2 分钟，改了前端不会重编 Rust。
+
+## 八、图标（一处源图，四处生效）
+
+源图 `D:\Coding\JianpuScript\矢量图\Logo-bp.png`。窗口/任务栏图标在 `src-tauri/src/lib.rs`
+的 `.setup()` 里 `win.set_icon(...)`（注意：tauri 2.12 **没有** `Builder::icon`，且 `Cargo.toml`
+要开 `features = ["image-png"]`）；exe 图标来自 `src-tauri/icons/icon.ico`（`tauri icon` 生成）；
+界面里是 `public/icons/Logo-bp.png`。换图要**两处都更新**再重编，否则会出现"exe 换了、标题栏没换"。
