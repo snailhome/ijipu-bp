@@ -694,11 +694,10 @@ export function NoteRoll(props: Props) {
 
       const d = drag.current
       if (!d) {
-        /* 没在拖的时候：握柄上是左右箭头；格子里一律是"手指/十字"，不再出现抓手
-         * （区间已经不能整段拖了，再显示 grab 会骗人） */
+        /* 没在拖的时候：握柄上是左右箭头；其余一律箭头/手指（用户 m04626：绘制模式也用普通箭头，
+         * 不要十字；区间已经不能整段拖了，再显示 grab 会骗人） */
         const lh = loopHit(x)
-        e.currentTarget.style.cursor =
-          lh === 'l' || lh === 'r' ? 'ew-resize' : mode === 'draw' ? 'crosshair' : 'pointer'
+        e.currentTarget.style.cursor = lh === 'l' || lh === 'r' ? 'ew-resize' : 'default'
         return
       }
       const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, firstBeatMs: props.firstBeatMs }
@@ -797,7 +796,8 @@ export function NoteRoll(props: Props) {
         style={{
           width: metrics.w,
           height: metrics.h,
-          cursor: mode === 'draw' ? 'crosshair' : 'pointer',
+          /* 默认箭头（用户 m04626）；握柄上的左右箭头由 pointermove 动态改 */
+          cursor: 'default',
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

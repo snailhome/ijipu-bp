@@ -425,6 +425,17 @@ try {
   })
   check('时间尺上按住划动时，光标是左右箭头', cursorDuringDrag === 'ew-resize', cursorDuringDrag)
 
+  // ── 绘制模式下光标也是普通箭头（用户 m04626），不再用十字 ──
+  await cdp.eval(`window.__bp.getState().setMode('draw')`)
+  await sleep(150)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved', x: ruler.ox + ruler.x1 + 40, y: ruler.y + 120, button: 'none', buttons: 0,
+  })
+  await sleep(150)
+  const cursorDraw = await cdp.eval(`document.querySelector('.pane.roll canvas').style.cursor`)
+  check('绘制模式下鼠标是普通箭头', cursorDraw === 'default', cursorDraw || '(空)')
+  await cdp.eval(`window.__bp.getState().setMode('select')`)
+  await sleep(100)
   // ── 绘制模式下，新音的起点必须是"光标所在那一格"（不是最近的格点，否则偏右一格）──
   const cellBox = await cdp.eval(`(() => {
     const c = document.querySelector('.pane.roll canvas')
