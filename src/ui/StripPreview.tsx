@@ -107,31 +107,48 @@ export function StripPreview(props: Props) {
       g.stroke()
     }
 
-    /* 音符 */
+    /* 谱面元素：音符 + 空隙补休止（一拍一个 `0`），长音用增时线/附点/连音线
+     * 口径同 `toJps`：增时线不能跨小节，跨小节要写连音线，所以这里按小节切段。 */
+    type Tok = { tick: number; kind: 'note' | 'rest'; midi?: number; ticks: number }
+    const toks: Tok[] = []
+    {
+      const sorted = [...props.grid].sort((a, b) => a.startTick - b.startTick)
+      const beatTicks = 4
+      let cursor = 0
+      for (const n of sorted) {
+        for (let t = cursor; t + beatTicks <= n.startTick; t += beatTicks) {
+          toks.push({ tick: t, kind: 'rest', ticks: beatTicks })
+        }
+        toks.push({ tick: n.startTick, kind: 'note', midi: n.midi, ticks: n.ticks })
+        cursor = Math.max(cursor, n.startTick + n.ticks)
+      }
+    }
+
     g.textBaseline = 'alphabetic'
-    for (const n of props.grid) {
-      const startMs = props.firstBeatMs + n.startTick * tickMs
-      const endMs = startMs + n.ticks * tickMs
+    g.font = `${FONT_SIZE}px "Noto Serif SC", "Songti SC", serif`
+    for (const tk of toks) {
+      const startMs = props.firstBeatMs + tk.tick * tickMs
       const x = xAt(startMs)
       if (x < -40 || x > size.w + 40) continue
-      const num = midiToNumber(n.midi, props.tonic)
-      const text = `${num.digit}${num.accidental}`
-      const m = marks(n.ticks)
       const y = LINE_Y
+      const m = marks(tk.ticks)
+      const num = tk.kind === 'note' && tk.midi !== undefined ? midiToNumber(tk.midi, props.tonic) : null
+      const text = num ? `${num.digit}${num.accidental}` : '0'
 
-      g.fillStyle = '#1b1b1b'
-      g.font = `${FONT_SIZE}px "Noto Serif SC", "Songti SC", serif`
+      g.fillStyle = num ? '#1b1b1b' : 'rgba(70,70,70,0.72)'
       g.fillText(text, x + 1, y)
       const tw = g.measureText(text).width
 
       /* 八度点 */
-      const dotR = 1.9
-      const dots = Math.abs(num.dots)
-      for (let i = 0; i < Math.min(3, dots); i++) {
-        g.beginPath()
-        const cy = num.dots > 0 ? y - FONT_SIZE - 3 - i * 6 : y + 5 + i * 6
-        g.arc(x + tw / 2, cy, dotR, 0, Math.PI * 2)
-        g.fill()
+      if (num) {
+        const dotR = 1.9
+        const dots = Math.abs(num.dots)
+        for (let i = 0; i < Math.min(3, dots); i++) {
+          g.beginPath()
+          const cy = num.dots > 0 ? y - FONT_SIZE - 3 - i * 6 : y + 5 + i * 6
+          g.arc(x + tw / 2, cy, dotR, 0, Math.PI * 2)
+          g.fill()
+        }
       }
 
       /* 减时线（写在数字下面） */
@@ -140,10 +157,30 @@ export function StripPreview(props: Props) {
         g.fillRect(x - 1, ly, Math.max(6, tw + 2), 1.4)
       }
 
-      /* 增时线：从数字右边一直拉到这个音的时间终点 */
+      /* 增时线：按小节切段，跨小节处画连音弧（对应 jps 的 `( … )`） */
       if (m.dash > 0) {
-        const endX = xAt(endMs)
-        g.fillRect(x + tw + 3, y - 8, Math.max(4, endX - x - tw - 5), 1.6)
+        const endTick = tk.tick + tk.ticks
+        let segStart = tk.tick
+        let firstSeg = true
+        while (segStart < endTick) {
+          const barEnd = (Math.floor(segStart / barTicks) + 1) * barTicks
+          const segEnd = Math.min(endTick, barEnd)
+          const sx = firstSeg ? x + tw + 3 : xAt(props.firstBeatMs + segStart * tickMs) + 2
+          const ex = xAt(props.firstBeatMs + segEnd * tickMs)
+          g.fillStyle = 'rgba(27,27,27,0.9)'
+          g.fillRect(sx, y - 8, Math.max(4, ex - sx - 2), 1.6)
+          if (segEnd < endTick) {
+            const cx = xAt(props.firstBeatMs + segEnd * tickMs)
+            g.strokeStyle = '#1b1b1b'
+            g.lineWidth = 1.2
+            g.beginPath()
+            g.moveTo(cx - 11, y - 9)
+            g.quadraticCurveTo(cx, y - 21, cx + 11, y - 9)
+            g.stroke()
+          }
+          firstSeg = false
+          segStart = segEnd
+        }
       }
 
       /* 附点 */

@@ -61,13 +61,16 @@ const FONT = '10px ui-monospace, Consolas, monospace'
 const BLACK = new Set([1, 3, 6, 8, 10])
 
 /* ── 热力图配色：暗蓝 → 紫 → 橙 → 白 ── */
+/* 冷热：低=蓝，高=红（用户 2026-11-18 指定"红最高、蓝最低"） */
 const STOPS: Array<[number, [number, number, number]]> = [
-  [0.0, [11, 15, 22]],
-  [0.18, [38, 24, 74]],
-  [0.42, [124, 45, 106]],
-  [0.66, [214, 116, 47]],
-  [0.85, [250, 210, 140]],
-  [1.0, [255, 255, 255]],
+  [0.0, [5, 12, 40]],
+  [0.35, [18, 60, 140]],
+  [0.55, [26, 120, 190]],
+  [0.7, [90, 190, 180]],
+  [0.82, [220, 200, 80]],
+  [0.9, [245, 150, 50]],
+  [0.96, [240, 80, 50]],
+  [1.0, [235, 40, 40]],
 ]
 
 /** 倍率 × 对比：把 0..1 的显示值映射成颜色深度（口径同 noteDigger：pow(v, contrast) * multiple） */
@@ -137,6 +140,19 @@ export function NoteRoll(props: Props) {
     return () => ro.disconnect()
   }, [])
 
+  /* 频谱归一化：中位数当"噪底"（压到最蓝），99.5 分位当"满格"（最红）。
+   * 这样底噪不会糊成一片中间色，倍率/对比才有可调空间。 */
+  const norm = useMemo(() => {
+    if (!spectrum || spectrum.data.length === 0) return { lo: 0, span: 1 }
+    const vals: number[] = []
+    const step = Math.max(1, Math.floor(spectrum.data.length / 4096))
+    for (let i = 0; i < spectrum.data.length; i += step) vals.push(displayValue(spectrum.data[i]))
+    vals.sort((a, b) => a - b)
+    const mid = vals[Math.floor(vals.length * 0.5)] ?? 0
+    const hi = vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.995))] ?? 1
+    const lo = mid * 0.85
+    return { lo, span: hi - lo > 1e-6 ? hi - lo : 1 }
+  }, [spectrum])
   const metrics = useMemo<Metrics>(() => {
     const rows = Math.max(8, Math.floor((size.h - RULER_H) / ROW_H))
     let top = Math.min(MIDI_HIGH, Math.round(center + Math.floor(rows / 2)))
@@ -215,7 +231,7 @@ export function NoteRoll(props: Props) {
             const s = spectrum.data[f * BIN_COUNT + bin]
             if (s > v) v = s
           }
-          const t = shade(displayValue(v), props.gain, props.contrast)
+          const t = shade((displayValue(v) - norm.lo) / norm.span, props.gain, props.contrast)
           if (t <= 0.02) continue
           const [cr, cg, cb] = heatColor(t)
           g.fillStyle = `rgb(${cr},${cg},${cb})`
@@ -418,14 +434,23 @@ export function NoteRoll(props: Props) {
         g.fillRect(0, y + ROW_H - 1, KEY_W, 1)
       }
       if (isBlack) {
-        const kw = Math.round(KEY_W * 0.60)
-        g.fillStyle = '#0e1218'
+        /* 照 GB/T 10159-2023 的比例：白键宽约 23.5mm、黑键宽约 11.5mm、黑键长 95mm / 白键 150mm
+         * ⇒ 旋转 90° 后黑键盖住后端约 63% 的深度；高度仍按半音行（一行一键） */
+        const kw = Math.round(KEY_W * 0.63)
+        const kx = KEY_W - kw
+        /* 投影：黑键压在白键上，左侧留一道暗边 */
+        const sh = g.createLinearGradient(kx - 4, 0, kx, 0)
+        sh.addColorStop(0, 'rgba(8,12,18,0)')
+        sh.addColorStop(1, 'rgba(8,12,18,0.35)')
+        g.fillStyle = sh
+        g.fillRect(kx - 4, y, 4, ROW_H)
+        g.fillStyle = '#0b0f14'
         g.beginPath()
-        g.roundRect(KEY_W - kw, y + 1.5, kw, ROW_H - 3, [2, 0, 0, 2])
+        g.roundRect(kx, y + 2, kw, ROW_H - 4, [2, 0, 0, 2])
         g.fill()
-        g.strokeStyle = 'rgba(255,255,255,0.14)'
-        g.lineWidth = 1
-        g.stroke()
+        /* 键面顶边一道极细高光，看起来有厚度 */
+        g.fillStyle = 'rgba(255,255,255,0.16)'
+        g.fillRect(kx + 1, y + 2, kw - 2, 1)
       }
       if (cls === 0 || midi === MIDI_LOW) {
         g.fillStyle = 'rgba(40,60,80,0.9)'
@@ -434,6 +459,11 @@ export function NoteRoll(props: Props) {
         g.fillText(midiToName(midi), 6, y + ROW_H / 2)
       }
     }
+    /* 白键前沿的窄边（真琴键前端是圆角、比键面略低） */
+    g.fillStyle = 'rgba(200,214,228,0.85)'
+    g.fillRect(0, RULER_H, 2, metrics.h - RULER_H)
+    g.fillStyle = 'rgba(255,255,255,0.5)'
+    g.fillRect(2, RULER_H, 1, metrics.h - RULER_H)
     /* 键面靠左的一点点明暗，给个"键的前沿"错觉 */
     const grad = g.createLinearGradient(0, 0, KEY_W, 0)
     grad.addColorStop(0, 'rgba(255,255,255,0.75)')
@@ -460,6 +490,8 @@ export function NoteRoll(props: Props) {
     metrics,
     notes,
     props.bpm,
+    props.gain,
+    props.contrast,
     props.beatsPerBar,
     props.firstBeatMs,
     props.loop,

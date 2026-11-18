@@ -349,6 +349,41 @@ try {
   )
   check('流线谱画布在', stripHint)
 
+  /* ── 倍率/对比真有作用：同一块画布取样，调滑条后颜色必须变 ──
+   * 这两个滑条一开始"看着没效果"，因为绘制 effect 的依赖漏了它们（不会重绘）。 */
+  const sampleHeat = async () =>
+    cdp.eval(`(() => {
+      const cv = [...document.querySelectorAll('canvas')].find((c) => c.width > 600 && c.height > 300)
+      if (!cv) return -1
+      const g = cv.getContext('2d')
+      let sum = 0
+      let n = 0
+      for (let i = 1; i < 12; i++) {
+        for (let j = 1; j < 8; j++) {
+          const d = g.getImageData(Math.round((cv.width * i) / 12), Math.round((cv.height * j) / 8), 1, 1).data
+          sum += d[0] + d[1] + d[2]
+          n++
+        }
+      }
+      return Math.round(sum / n)
+    })()`)
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setGain(0.25); s.setContrast(1) })()`)
+  await sleep(250)
+  const dim = await sampleHeat()
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setGain(3); s.setContrast(1) })()`)
+  await sleep(250)
+  const bright = await sampleHeat()
+  check('倍率滑条真能改变热力图深浅', bright > dim + 30, `${dim}→${bright}`)
+
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setGain(1.2); s.setContrast(0.3) })()`)
+  await sleep(250)
+  const lowC = await sampleHeat()
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setGain(1.2); s.setContrast(3) })()`)
+  await sleep(250)
+  const highC = await sampleHeat()
+  check('对比滑条真能改变热力图曲线', lowC !== highC, `${lowC} vs ${highC}`)
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setGain(1); s.setContrast(1.4) })()`)
+
   const errs = await cdp.eval(`window.__bpErrors || 0`)
   check('页面没有运行时错误', !errs, errs ? String(errs) : '')
 
