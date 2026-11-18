@@ -124,6 +124,8 @@ type Drag =
   | { kind: 'move'; id: string; grabMs: number; startMs: number; endMs: number; moved: boolean }
   | { kind: 'resize'; id: string; startMs: number }
   | { kind: 'create'; id: string; startMs: number; moved: boolean }
+  /** 按在钢琴键上（只用来做高亮，松手就清） */
+  | { kind: 'key'; midi: number }
 
 export function NoteRoll(props: Props) {
   const { notes, spectrum, durationMs, view, playMs, mode } = props
@@ -132,6 +134,8 @@ export function NoteRoll(props: Props) {
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [center, setCenter] = useState(76)
   const [hoverMidi, setHoverMidi] = useState<number | null>(null)
+  /* 按下未松的琴键：整格高亮成黄色（用户 m04380） */
+  const [pressMidi, setPressMidi] = useState<number | null>(null)
   /* 鼠标在画布里的 y（用来判断要不要显示悬浮信息；时间尺上不显示） */
   const [hoverY, setHoverY] = useState<number | null>(null)
   const drag = useRef<Drag | null>(null)
@@ -219,10 +223,10 @@ export function NoteRoll(props: Props) {
     const bottomMidi = metrics.top - metrics.rows + 1
     const beat = beatMs(props.bpm)
 
-    /* 1) 频谱热力图：以"最小绘制格"（1/6 拍 × 一个半音）为单位
+    /* 1) 频谱热力图：以"最小绘制格"（十六分音符（1/4 拍） × 一个半音）为单位
      *   —— 一格之内同一种颜色（阶梯式，不做线性插值），格子里取该格覆盖帧的最大值。 */
     if (spectrum && props.bpm > 0) {
-      const cellMs = beat / 6
+      const cellMs = beat / 4 /* 与最小绘制格一致（十六分音符） */
       const firstAt = props.firstBeatMs
       const cellW = Math.max(1, xAt(firstAt + cellMs) - xAt(firstAt))
       const k0 = Math.floor((view.panMs - firstAt) / cellMs) - 1
@@ -470,6 +474,11 @@ export function NoteRoll(props: Props) {
         g.roundRect(KEY_BLACK_X, y, KEY_BLACK_W, ROW_H, [2, 0, 0, 2])
         g.fill()
       }
+      /* 按下的那一格整格压黄（用户 m04380：按下高亮，松手灭） */
+      if (pressMidi === midi) {
+        g.fillStyle = 'rgba(255,206,64,0.85)'
+        g.fillRect(0, y, KEY_W, ROW_H)
+      }
       /* 键上文字：音名模式只标 C（和以前一样）；数字模式按当前调式标音级 */
       const num = midiToNumber(midi, props.tonic)
       const showNum = props.pitchMode === 'number' && num.accidental === ''
@@ -516,6 +525,7 @@ export function NoteRoll(props: Props) {
     durationMs,
     playMs,
     hoverMidi,
+    pressMidi,
     label,
     rowTop,
     xAt,
@@ -607,7 +617,12 @@ export function NoteRoll(props: Props) {
 
       if (x < KEY_W) {
         const midi = midiAt(y)
-        if (midi >= MIDI_LOW && midi <= MIDI_HIGH) props.onAudition(midi)
+        if (midi >= MIDI_LOW && midi <= MIDI_HIGH) {
+          props.onAudition(midi)
+          /* 按下时这一格高亮成黄色，松手/移出就灭（用户 m04380） */
+          setPressMidi(midi)
+          drag.current = { kind: 'key', midi }
+        }
         return
       }
 
@@ -657,7 +672,7 @@ export function NoteRoll(props: Props) {
       const id = props.onAdd({
         midi: midiAt(y),
         startMs,
-        endMs: startMs + beatMs(props.bpm),
+        endMs: startMs + beatMs(props.bpm) / 4, /* 新画的音先给最小格（十六分音符），要长就往右拖 */
       })
       drag.current = { kind: 'create', id, startMs, moved: false }
     },
@@ -741,6 +756,7 @@ export function NoteRoll(props: Props) {
   const onPointerUp = useCallback(() => {
     const d = drag.current
     drag.current = null
+    setPressMidi(null)
 
     // 时间尺上"点一下不拖" = 取消播放时段（用户 m03936：单纯点击时间轴取消时段）
     if (d?.kind === 'loop' && !d.moved) props.onLoop(null)

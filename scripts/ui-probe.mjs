@@ -701,6 +701,60 @@ try {
   })()`)
   await sleep(150)
 
+  /* ── 按钢琴键：按下那一格要高亮成黄（用户 m04380） ── */
+  const keyPt = await cdp.eval(`(() => {
+    const m = window.__bpRoll || {}
+    const cv = document.querySelector('.pane.roll canvas')
+    const r = cv.getBoundingClientRect()
+    const ROW_H = 14, KEY_W = 66
+    const rulerH = typeof m.rulerH === 'number' ? m.rulerH : 36
+    /* 挑中间那一行，避开时间尺 */
+    const row = Math.floor((m.rows || 20) / 2)
+    return { x: r.x + KEY_W * 0.35, y: r.y + rulerH + row * ROW_H + ROW_H / 2, wx: KEY_W * 0.35, wy: rulerH + row * ROW_H + ROW_H / 2 }
+  })()`)
+  const keyPixel = `(() => {
+    const cv = document.querySelector('.pane.roll canvas')
+    const g = cv.getContext('2d')
+    const sx = cv.width / parseFloat(cv.style.width || String(cv.width))
+    const sy = cv.height / parseFloat(cv.style.height || String(cv.height))
+    const d = g.getImageData(Math.round(${keyPt.wx} * sx), Math.round(${keyPt.wy} * sy), 1, 1).data
+    return [d[0], d[1], d[2]]
+  })()`
+  const beforeKey = await cdp.eval(keyPixel)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: keyPt.x, y: keyPt.y, button: 'left', buttons: 1, clickCount: 1 })
+  await sleep(250)
+  const duringKey = await cdp.eval(keyPixel)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: keyPt.x, y: keyPt.y, button: 'left', buttons: 0, clickCount: 1 })
+  await sleep(250)
+  const afterKey = await cdp.eval(keyPixel)
+  const yellowish = (c) => c[0] > 190 && c[1] > 140 && c[2] < 140
+  check('按下钢琴键时该格高亮成黄色，松手恢复',
+    !yellowish(beforeKey) && yellowish(duringKey) && !yellowish(afterKey),
+    `${beforeKey} → ${duringKey} → ${afterKey}`)
+
+  /* ── 新画的音 = 最小绘制格（十六分音符 = 1/4 拍，用户 m04380） ── */
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setMode('draw'); s.setLoop(null); s.setLoopOn(false); s.setBpm(120); s.setView({ zoom: 1, panMs: 0 }) })()`)
+  await sleep(200)
+  const gridPt = await cdp.eval(`(() => {
+    const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+    const m = window.__bpRoll || {}
+    const rulerH = typeof m.rulerH === 'number' ? m.rulerH : 36
+    const ROW_H = 14
+    return { x: r.x + r.width * 0.55, y: r.y + rulerH + Math.floor((m.rows || 20) * 0.3) * ROW_H + ROW_H / 2 }
+  })()`)
+  const countBefore = await cdp.eval(`window.__bp.getState().notes.length`)
+  await cdp.clickAt(gridPt.x, gridPt.y)
+  await sleep(250)
+  const madeNote = await cdp.eval(`(() => {
+    const n = window.__bp.getState().notes
+    const last = n[n.length - 1]
+    return { grew: n.length === ${countBefore} + 1, len: Math.round(last.endMs - last.startMs) }
+  })()`)
+  check('新画的音只有最小格那么长（十六分音符 = 125ms @120bpm）', madeNote.grew && Math.abs(madeNote.len - 125) <= 8,
+    `长度 ${madeNote.len}ms，个数${countBefore}→${madeNote.grew ? '多一个' : '没变'}`)
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setMode('select') })()`)
+  await sleep(150)
+
   const errs = await cdp.eval(`window.__bpErrors || 0`)
   check('页面没有运行时错误', !errs, errs ? String(errs) : '')
 
