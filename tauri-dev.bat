@@ -39,6 +39,17 @@ if errorlevel 1 (
 
 if /i "%~1"=="--check" goto :check
 
+rem vite runs with strictPort on 5174; a leftover dev server from last time makes
+rem tauri's beforeDevCommand fail with "Port 5174 is already in use".
+rem So: if something is listening there, kill it first (it can only be our own vite).
+set "BUSY="
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /r /c:"TCP.*:5174 .*LISTENING"') do set "BUSY=%%P"
+if defined BUSY (
+  echo [iJipuBP] port 5174 is taken by pid %BUSY% - killing it ^(leftover vite^)
+  taskkill /f /pid %BUSY% >nul 2>nul
+  timeout /t 1 /nobreak >nul
+)
+
 echo [iJipuBP] starting tauri dev ...
 call npm run tauri:dev
 set "CODE=%ERRORLEVEL%"
