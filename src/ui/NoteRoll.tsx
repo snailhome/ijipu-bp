@@ -475,15 +475,20 @@ export function NoteRoll(props: Props) {
     xAt,
   ])
 
-  /* ── 滚轮：普通=换音区，shift=平移，ctrl=缩放 ── */
+  /* ── 滚轮（用户 2026-11-18 指定）──
+   *  普通        = 上下换音区
+   *  Shift       = 左右平移（"移动波形"）
+   *  Shift + Alt = 横向缩放（时值比率；Ctrl+滚轮 也保留，方便戴鼠标惯用 Ctrl 的人） */
   useEffect(() => {
     const cv = canvasRef.current
     if (!cv) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      if (e.ctrlKey || e.metaKey) {
+      const wantZoom = (e.shiftKey && e.altKey) || e.ctrlKey || e.metaKey
+      if (wantZoom) {
         const rect = cv.getBoundingClientRect()
         const anchorMs = msAt(e.clientX - rect.left)
+        /* 以光标下的时刻为锚点缩放：光标指着的那一拍不动，两边伸缩 */
         const factor = e.deltaY > 0 ? 0.8 : 1.25
         const zoom = Math.max(1, Math.min(64, view.zoom * factor))
         const span = durationMs / Math.max(1, zoom)
@@ -492,8 +497,11 @@ export function NoteRoll(props: Props) {
         return
       }
       if (e.shiftKey) {
+        /* 平移：一次挪视野宽度的 12%，滚得快就挪得多 */
         const span = spanMs(view, durationMs)
-        props.onView({ zoom: view.zoom, panMs: view.panMs + (e.deltaY > 0 ? span : -span) * 0.12 })
+        const maxPan = Math.max(0, durationMs - span)
+        const panMs = Math.max(0, Math.min(maxPan, view.panMs + (e.deltaY > 0 ? span : -span) * 0.12))
+        props.onView({ zoom: view.zoom, panMs })
         return
       }
       setCenter((c) => Math.max(MIDI_LOW, Math.min(MIDI_HIGH, c - Math.sign(e.deltaY) * 2)))

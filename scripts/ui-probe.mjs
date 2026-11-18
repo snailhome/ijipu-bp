@@ -313,6 +313,37 @@ try {
   const loopNow = await cdp.eval(`window.__bp.getState().loop.endMs`)
   check('拖右握柄能把重复区间拉长', loopNow > 2600, String(Math.round(loopNow)))
 
+  // ── Shift+滚轮 = 左右平移；Shift+Alt+滚轮 = 横向缩放 ──
+  const rollCenter = await cdp.eval(`(() => {
+    const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+    return { x: r.x + r.width * 0.6, y: r.y + r.height * 0.5 }
+  })()`)
+  const wheel = (modifiers, deltaY) =>
+    cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseWheel',
+      x: rollCenter.x,
+      y: rollCenter.y,
+      deltaX: 0,
+      deltaY,
+      modifiers,
+    })
+  const SHIFT = 8
+  const ALT = 1
+  const beforePan = await cdp.eval(`({ ...window.__bp.getState().view })`)
+  await wheel(SHIFT | ALT, -120)
+  await sleep(150)
+  const afterZoom = await cdp.eval(`({ ...window.__bp.getState().view })`)
+  check('Shift+Alt+滚轮 = 横向放大', afterZoom.zoom > beforePan.zoom, `zoom ${beforePan.zoom}→${afterZoom.zoom}`)
+  /* 先放大才有的平移：zoom=1 时整首都在视野里，pan 只能是 0 */
+  await wheel(SHIFT, 120)
+  await sleep(150)
+  const afterPan = await cdp.eval(`({ ...window.__bp.getState().view })`)
+  check(
+    'Shift+滚轮 = 左右平移（zoom 不变、pan 变大）',
+    afterPan.panMs > afterZoom.panMs && afterPan.zoom === afterZoom.zoom,
+    `pan ${Math.round(afterZoom.panMs)}→${Math.round(afterPan.panMs)} zoom ${afterPan.zoom}`,
+  )
+
   const stripHint = await cdp.eval(
     `(() => { const c = document.querySelector('.pane.strip canvas'); return c ? c.width > 0 : false })()`,
   )

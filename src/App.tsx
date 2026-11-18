@@ -574,7 +574,7 @@ export default function App() {
         <span className="spacer" />
         {error && <span className="err">{error}</span>}
         {notice && <span className="hint">{notice}</span>}
-        <span className="hint">空格播放 · Tab 原音/合成 · F2 绘制 · F3 选择 · L 循环 · Ctrl+滚轮缩放</span>
+        <span className="hint">空格播放 · Tab 原音/合成 · F2 绘制 · F3 选择 · L 循环 · Shift+滚轮平移 · Shift+Alt+滚轮缩放</span>
       </div>
     </div>
   )
