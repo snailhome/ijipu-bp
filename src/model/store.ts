@@ -196,7 +196,7 @@ export const useBp = create<State>((set, get) => ({
   rhythm: null,
   pitchMode: 'number',
   mode: 'select',
-  snap: 'beat',
+  snap: 'grid', /* 默认吸到最小格（1/16 拍）—— 点哪一格就画哪一格，用户 m04674 */
   view: { zoom: 1, panMs: 0 },
   tonic: 0,
   autoTonic: true,

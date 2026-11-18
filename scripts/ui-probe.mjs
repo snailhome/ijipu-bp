@@ -763,6 +763,61 @@ try {
   })()`)
   check('新画的音只有最小格那么长（1/16 拍 = 31ms @120bpm）', madeNote.grew && Math.abs(madeNote.len - 31) <= 6,
     `长度 ${madeNote.len}ms，个数${countBefore}→${madeNote.grew ? '多一个' : '没变'}`)
+
+  /* ── 点哪一格就画哪一格（用户 m04674）：起点要落在鼠标所在的最小格里 ── */
+  const cellProbe = await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    const m = window.__bpRoll
+    const cv = document.querySelector('.pane.roll canvas')
+    const r = cv.getBoundingClientRect()
+    const RULER_H = typeof m.rulerH === 'number' ? m.rulerH : 36
+    const ROW_H = 14
+    const x = r.x + r.width * 0.62
+    const want = s.view.panMs + ((x - r.x - m.left) / (m.w - m.left)) * (s.durationMs / s.view.zoom)
+    return { x, y: r.y + RULER_H + Math.floor((m.rows || 20) * 0.55) * ROW_H + ROW_H / 2, want, cell: 60000 / s.bpm / 16 }
+  })()`)
+  const nBefore2 = await cdp.eval(`window.__bp.getState().notes.length`)
+  await cdp.clickAt(cellProbe.x, cellProbe.y)
+  await sleep(250)
+  const cellOut = await cdp.eval(`(() => {
+    const n = window.__bp.getState().notes
+    const last = n[n.length - 1]
+    return { grew: n.length === ${nBefore2} + 1, start: last.startMs }
+  })()`)
+  const cellOff = Math.abs(cellOut.start - cellProbe.want)
+  check('新音的起点落在鼠标所在的那一格', cellOut.grew && cellOff <= cellProbe.cell,
+    `鼠标 ${Math.round(cellProbe.want)}ms、音符起点 ${Math.round(cellOut.start)}ms、差 ${Math.round(cellOff)}ms（一格 ${cellProbe.cell.toFixed(1)}ms）`)
+
+  /* ── 按住横向拖 = 同一个音延长，不是画出一串音（用户 m04674） ── */
+  /* 先把音符清空，免得按在已有音符上变成"移动" */
+  await cdp.eval(`window.__bp.setState({ notes: [] })`)
+  await sleep(150)
+  const dragBox = await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    const m = window.__bpRoll
+    const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+    const RULER_H = typeof m.rulerH === 'number' ? m.rulerH : 36
+    const ROW_H = 14
+    const y = r.y + RULER_H + Math.floor((m.rows || 20) * 0.7) * ROW_H + ROW_H / 2
+    return { x1: r.x + r.width * 0.3, x2: r.x + r.width * 0.45, y, before: s.notes.length }
+  })()`)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: dragBox.x1, y: dragBox.y, button: 'left', buttons: 1, clickCount: 1 })
+  await sleep(90)
+  for (let i = 1; i <= 5; i++) {
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: dragBox.x1 + ((dragBox.x2 - dragBox.x1) * i) / 5, y: dragBox.y, button: 'left', buttons: 1,
+    })
+    await sleep(60)
+  }
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: dragBox.x2, y: dragBox.y, button: 'left', buttons: 0, clickCount: 1 })
+  await sleep(250)
+  const dragOut = await cdp.eval(`(() => {
+    const n = window.__bp.getState().notes
+    const last = n[n.length - 1]
+    return { grew: n.length === ${dragBox.before} + 1, len: Math.round(last.endMs - last.startMs) }
+  })()`)
+  check('按住横拖只出一个音，长度跟着拖', dragOut.grew && dragOut.len > 300,
+    `个数 ${dragBox.before}→${dragOut.grew ? '多一个' : '没对'}，长度 ${dragOut.len}ms`)
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setMode('select') })()`)
   await sleep(150)
 
