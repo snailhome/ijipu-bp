@@ -356,8 +356,11 @@ export default function App() {
   const candidates = analysis?.keyCandidates.slice(0, 6) ?? []
   const setLoop = useCallback(
     (r: LoopRange | null) => {
-      set.getState().setLoop(r)
-      if (r) set.getState().setLoopOn(true)
+      const s = set.getState()
+      s.setLoop(r)
+      /* 划出区间就自动开循环；取消区间（时间尺上点一下）顺手把循环关掉，
+       * 否则一个空区间会一直挡着播放（用户 m03936 第 4 条）。 */
+      s.setLoopOn(!!r)
     },
     [set],
   )

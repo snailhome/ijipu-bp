@@ -280,12 +280,13 @@ try {
   // 精确点一个已知音符：行高/顶行直接从页面里的 __bpRoll 拿（自己估过一次，差一行就点歪）
   const clickNote = async (id) => {
     const box = await cdp.eval(`(() => {
-      const ROW_H = 14, RULER_H = 24, KEY_W = 66
+      const ROW_H = 14, KEY_W = 66
       const s = window.__bp.getState()
       const n = s.notes.find((x) => x.id === ${JSON.stringify(id)})
       const c = document.querySelector('.pane.roll canvas')
       const r = c.getBoundingClientRect()
       const m = window.__bpRoll || {}
+      const RULER_H = typeof m.rulerH === 'number' ? m.rulerH : 36
       const top = typeof m.top === 'number' ? m.top : 76
       const span = s.durationMs / s.view.zoom
       const ms = (n.startMs + n.endMs) / 2
@@ -393,6 +394,67 @@ try {
     !!draggedLoop && draggedLoop.endMs - draggedLoop.startMs > 800 && draggedOn,
     JSON.stringify(draggedLoop),
   )
+
+  // ── 只点一下时间尺 = 取消区间 + 把播放头挪过去（用户 m03936 第 4 条）──
+  await cdp.eval('window.__bp.getState().setCurrentMs(0)')
+  await cdp.clickAt(ruler.ox + ruler.x1, ruler.y)
+  await sleep(200)
+  const cleared = await cdp.eval(`(() => { const s = window.__bp.getState(); return { loop: s.loop, on: s.loopOn, ms: s.currentMs } })()`)
+  check('点一下时间尺 → 取消播放区间', cleared.loop === null && cleared.on === false, JSON.stringify(cleared.loop))
+  check('点一下时间尺 → 播放头挪到点击处', Math.abs(cleared.ms - 800) < 60, String(Math.round(cleared.ms)))
+
+  // ── 时间尺变高了（1.5 倍，方便点）──
+  const rulerH = await cdp.eval(`window.__bpRoll?.rulerH ?? 0`)
+  check('时间尺高度已是 36', rulerH === 36, String(rulerH))
+
+  // ── 拖时间尺时光标变左右箭头（按下不松，读一下光标，再松开）──
+  await cdp.eval('window.__bp.getState().setLoop(null)')
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x: ruler.ox + ruler.x1, y: ruler.y, button: 'left', clickCount: 1, buttons: 1,
+  })
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved', x: ruler.ox + ruler.x1 + 40, y: ruler.y, button: 'left', buttons: 1,
+  })
+  await sleep(120)
+  const cursorDuringDrag = await cdp.eval(`(() => {
+    const c = document.querySelector('.pane.roll canvas')
+    return c.style.cursor || getComputedStyle(c).cursor
+  })()`)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: ruler.ox + ruler.x1 + 40, y: ruler.y, button: 'left', clickCount: 1,
+  })
+  check('时间尺上按住划动时，光标是左右箭头', cursorDuringDrag === 'ew-resize', cursorDuringDrag)
+
+  // ── 绘制模式下，新音的起点必须是"光标所在那一格"（不是最近的格点，否则偏右一格）──
+  const cellBox = await cdp.eval(`(() => {
+    const c = document.querySelector('.pane.roll canvas')
+    const r = c.getBoundingClientRect()
+    const s = window.__bp.getState()
+    const KEY_W = 66, RULER_H = 36, ROW_H = 14
+    const m = window.__bpRoll
+    const span = s.durationMs / s.view.zoom
+    const beat = 60000 / s.bpm
+    const xOf = (ms) => KEY_W + ((ms - s.view.panMs) / span) * (r.width - KEY_W)
+    /* 点在某个 1 拍格子的 70% 处：如果按"最近格点"会跑到下一格，按"所在格"应留在本格 */
+    const ms = s.firstBeatMs + beat * 1.7
+    return { ox: r.x, oy: r.y, x: xOf(ms), y: RULER_H + (m.top - 60) * ROW_H + ROW_H / 2, ms, beat }
+  })()`)
+  await cdp.eval('window.__bp.getState().setMode("draw")')
+  const beforeIds = await cdp.eval(`window.__bp.getState().notes.map((n) => n.id)`)
+  await cdp.clickAt(cellBox.ox + cellBox.x, cellBox.oy + cellBox.y)
+  await sleep(220)
+  const created = await cdp.eval(`(() => {
+    const list = window.__bp.getState().notes
+    const before = ${JSON.stringify(beforeIds)}
+    const fresh = list.filter((n) => !before.includes(n.id))
+    return fresh.length ? { midi: fresh[0].midi, startMs: fresh[0].startMs } : null
+  })()`)
+  check(
+    '绘制模式下新音落在光标所在的那一格（不是偏右一格）',
+    !!created && created.midi === 60 && created.startMs <= cellBox.ms + 1 && created.startMs > cellBox.ms - cellBox.beat - 1,
+    JSON.stringify(created),
+  )
+  await cdp.eval('window.__bp.getState().setMode("select")')
 
   // ── 右侧栏开关（收起时主区要真正占满，别留 280px 空白）──
   const sideOn = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)

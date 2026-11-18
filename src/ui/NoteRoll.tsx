@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BIN_COUNT, MIDI_HIGH, MIDI_LOW, midiToName, midiToNumber } from '../analysis/pitchNames'
 import { displayValue } from '../analysis/spectrum'
-import { beatMs, snapMs } from '../jps/snap'
+import { beatMs, snapMs, snapStepMs } from '../jps/snap'
 import { COPY } from '../brand/copy'
 import { msToX, pickTickSeconds, spanMs, xToMs } from './timeAxis'
 import type { PitchMode, View } from '../model/store'
@@ -53,7 +53,7 @@ interface Props {
 }
 
 const KEY_W = 66
-const RULER_H = 24
+const RULER_H = 36
 const ROW_H = 14
 const EDGE_PX = 8
 const FONT = '10px ui-monospace, Consolas, monospace'
@@ -166,7 +166,7 @@ export function NoteRoll(props: Props) {
   /* dev-only：把行高/顶行暴露出去，`npm run probe` 才能算出某个音的像素位置 */
   useEffect(() => {
     if (import.meta.env.DEV) {
-      ;(window as unknown as { __bpRoll?: unknown }).__bpRoll = metrics
+      ;(window as unknown as { __bpRoll?: unknown }).__bpRoll = { ...metrics, rulerH: RULER_H }
     }
   }, [metrics])
 
@@ -381,6 +381,15 @@ export function NoteRoll(props: Props) {
         g.textBaseline = 'middle'
         g.fillText(text, x1 + 4, y + h / 2 + 0.5, w - 6)
       }
+    }
+
+    /* 5.5) 框了播放区间时，区间外面压暗（用户 m03936：外侧波形变暗变灰） */
+    if (props.loop && props.loopOn) {
+      const x1 = Math.max(metrics.left, xAt(props.loop.startMs))
+      const x2 = Math.min(metrics.w, xAt(props.loop.endMs))
+      g.fillStyle = 'rgba(6,8,12,0.55)'
+      if (x1 > metrics.left) g.fillRect(metrics.left, RULER_H, x1 - metrics.left, metrics.h - RULER_H)
+      if (x2 < metrics.w) g.fillRect(x2, RULER_H, metrics.w - x2, metrics.h - RULER_H)
     }
 
     /* 6) 悬停行高亮 + 右上角信息 */
@@ -620,7 +629,13 @@ export function NoteRoll(props: Props) {
       props.onSeek(rawMs)
       if (mode !== 'draw') return
       const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, firstBeatMs: props.firstBeatMs }
-      const startMs = snapMs(rawMs, opt, props.snap)
+      /* 起点取"光标所在的那一格"（向下取整），不是最近的格点 ——
+       * 否则点在格子后半段时，新音会跑到十字准星右边一格，用户看到的就是"偏右上角"。 */
+      const step = snapStepMs(opt, props.snap)
+      const startMs =
+        step > 0
+          ? Math.max(0, props.firstBeatMs + Math.floor((rawMs - props.firstBeatMs) / step) * step)
+          : rawMs
       const id = props.onAdd({
         midi: midiAt(y),
         startMs,
@@ -641,10 +656,11 @@ export function NoteRoll(props: Props) {
 
       const d = drag.current
       if (!d) {
-        /* 没在拖的时候，鼠标落在握柄上就换成左右箭头，告诉用户这里能拖 */
+        /* 没在拖的时候：握柄上是左右箭头；格子里一律是"手指/十字"，不再出现抓手
+         * （区间已经不能整段拖了，再显示 grab 会骗人） */
         const lh = loopHit(x)
         e.currentTarget.style.cursor =
-          lh === 'l' || lh === 'r' ? 'ew-resize' : lh === 'body' ? 'grab' : mode === 'draw' ? 'crosshair' : 'pointer'
+          lh === 'l' || lh === 'r' ? 'ew-resize' : mode === 'draw' ? 'crosshair' : 'pointer'
         return
       }
       const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, firstBeatMs: props.firstBeatMs }
@@ -657,6 +673,7 @@ export function NoteRoll(props: Props) {
         /* 拖过一像素才算"圈区间"，否则松手就是单纯点了下时间线 */
         if (!d.moved && Math.abs(ms - d.anchorMs) < 20) return
         d.moved = true
+        e.currentTarget.style.cursor = 'ew-resize'
         props.onLoop({ startMs: Math.max(0, Math.min(d.anchorMs, ms)), endMs: Math.max(d.anchorMs, ms) })
         return
       }
@@ -707,6 +724,8 @@ export function NoteRoll(props: Props) {
     const d = drag.current
     drag.current = null
 
+    // 时间尺上"点一下不拖" = 取消播放时段（用户 m03936：单纯点击时间轴取消时段）
+    if (d?.kind === 'loop' && !d.moved) props.onLoop(null)
     // 绘制模式下"点一下不拖"= 确认/取消确认
     if (d?.kind === 'move' && !d.moved) props.onToggleConfirmed(d.id)
   }, [props])
