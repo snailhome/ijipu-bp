@@ -58,6 +58,11 @@ npm run smoke
   听合成音 → 改"这条闭环是否仍然成立；改完同步更新 `README.md` 的交互清单与本文件。
 - 音符**以 `store.notes`（秒轴、可编辑）为准**，`analysis.notes` 只是初稿；
   别把 `analysis.notes` 直接画到界面或喂给播放（否则人工改动白做）。
+- 音符有 `confirmed` 一栏：**只有确认过的音**才进 `grid`/`jps`/预览（用户口径"输出以绘制所选的音为准"）。
+  新增任何"导出/预览"路径都要经过 `derive()` 里的 `confirmed` 过滤，别绕过它。
+- **流线谱（`src/ui/StripPreview.tsx`）不用引擎的分页排版**：`layoutScore`+`renderScoreToSvg`
+  的小节宽度由排版算法决定，跟时间格对不齐。它按 `ui/timeAxis.ts` 的同一映射自己画，
+  左边留 66px（与音符表键盘列同宽）。要改宽度映射就**两处一起改**。
 
 ## 五、提交
 
@@ -101,6 +106,12 @@ npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM 
 
 改界面时优先 `npm run dev`（浏览器，秒级）；只有"要系统对话框 / 要真 exe / 要窗口图标"时才用
 `tauri-dev.bat`——Rust 侧一次冷编译约 2 分钟，改了前端不会重编 Rust。
+
+**动过工具条/画布交互，必须再跑 `npm run probe`**（另开终端先 `npm run dev`）：
+它用 Chrome 调试协议真的点按钮、点画布，再读 `window.__bp` 核对状态。
+`smoke` 只能盖纯函数，盖不到"事件挂错地方"这类错（iJipu 那边 adj959 就栽在这上面）。
+`src/main.tsx` 里 `if (import.meta.env.DEV) window.__bp = useBp` 是给它的后门，**只在 dev 生效**，
+不要为了测试把它带到生产，也不要在别处再挂第二个全局。
 
 ## 八、图标（一处源图，四处生效）
 

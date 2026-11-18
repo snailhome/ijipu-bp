@@ -8,3 +8,6 @@
 *.png binary
 *.ico binary
 *.wav binary
+
+# vendor 是逐字节快照：禁止 git 做换行转换，否则新克隆下来 check:engine 会与源码不一致
+vendor/engine/** -text

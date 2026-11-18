@@ -146,5 +146,7 @@ export function toJps(notes: GridNote[], opt: JpsOptions): string {
     `P: ${opt.beatsPerBar}/4`,
     `J: ${Math.round(opt.bpm)}`,
   ]
+  // 一个音都没确认时只留头部：让"导出"按钮灰着，也别输出一整行休止符让人误会
+  if (notes.length === 0) return header.join('\n')
   return [...header, ...lines.map((l) => `Q: ${l}`)].join('\n')
 }

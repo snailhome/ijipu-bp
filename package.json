@@ -12,6 +12,7 @@
     "smoke": "vite build --config vite.smoke.config.ts && node dist-smoke/smoke.cjs",
     "inspect": "vite build --config vite.inspect.config.ts && node dist-inspect/inspect.cjs",
     "fixture": "node scripts/make-fixture-wav.mjs .tmp-melody.wav",
+    "probe": "node scripts/ui-probe.mjs",
     "sync:engine": "node scripts/sync-engine.mjs",
     "check:engine": "node scripts/sync-engine.mjs --check",
     "tauri": "tauri",

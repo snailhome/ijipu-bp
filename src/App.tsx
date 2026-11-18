@@ -1,11 +1,16 @@
 /**
  * App.tsx — 爱扒谱的主界面
  *
- * 布局：上面工具条；中间左「频谱 / 音符 / 简谱预览」三块，右「调性 + 生成参数」。
+ * 布局（用户 m01788 之后的形态）：上面工具条；中间左边「音符表 + 简谱流线谱」占满，
+ * 右边「调性 + 生成参数 + jps 源码」。
+ *
+ * 独立的频谱面板已经撤掉 —— 频谱能量直接铺在音符表的格子里当热力图，
+ * 把纵向空间全让给"音高 × 时间"的表格（对照 noteDigger 的信息密度）。
+ *
  * 数据流：打开音频 → worker 分析 → store 出 grid/jps → 画布与预览都读 store。
- * 播放两种模式（原音频 / 合成音）共用播放头；Tab 键随时切换（用户要求）。
+ * 播放两种模式（原音频 / 合成音）共用播放头；Tab 随时切换；空格播放；F2/F3 切点击模式。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keyDisplayName } from './analysis/pitchNames'
 import { loadAudioFromPath, pickAndLoadAudio, type LoadedAudio } from './audio/decode'
 import { play, setAudioBuffer, stop, audition, type PlayMode } from './audio/player'
@@ -13,12 +18,18 @@ import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
 import { useBp } from './model/store'
-import type { AnalyzeResult } from './model/types'
-import { JpsPreview } from './ui/JpsPreview'
+import { spanMs } from './ui/timeAxis'
+import type { AnalyzeResult, LoopRange, SnapMode } from './model/types'
 import { NoteRoll } from './ui/NoteRoll'
-import { Spectrogram } from './ui/Spectrogram'
+import { StripPreview } from './ui/StripPreview'
 
 const KEY_CHOICES = Array.from({ length: 12 }, (_, i) => i)
+const SNAP_CHOICES: Array<{ v: SnapMode; label: string }> = [
+  { v: 'off', label: COPY.snapOff },
+  { v: 'grid', label: COPY.snapGrid },
+  { v: 'beat', label: COPY.snapBeat },
+  { v: 'bar', label: COPY.snapBar },
+]
 
 export default function App() {
   const fileName = useBp((s) => s.fileName)
@@ -30,6 +41,12 @@ export default function App() {
   const currentMs = useBp((s) => s.currentMs)
   const playMode = useBp((s) => s.playMode)
   const pitchMode = useBp((s) => s.pitchMode)
+  const mode = useBp((s) => s.mode)
+  const snap = useBp((s) => s.snap)
+  const view = useBp((s) => s.view)
+  const loop = useBp((s) => s.loop)
+  const loopOn = useBp((s) => s.loopOn)
+  const autoPage = useBp((s) => s.autoPage)
   const tonic = useBp((s) => s.tonic)
   const bpm = useBp((s) => s.bpm)
   const beatsPerBar = useBp((s) => s.beatsPerBar)
@@ -38,12 +55,14 @@ export default function App() {
   const jps = useBp((s) => s.jps)
   const grid = useBp((s) => s.grid)
   const notes = useBp((s) => s.notes)
-  const warnings = useBp((s) => s.warnings)
 
   const set = useBp
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const workerRef = useRef<Worker | null>(null)
+
+  const confirmedCount = useMemo(() => notes.filter((n) => n.confirmed).length, [notes])
+  const warnings = useBp((s) => s.warnings)
 
   /* ---------- 分析 worker ---------- */
   useEffect(() => {
@@ -58,6 +77,10 @@ export default function App() {
         set.getState().setError(msg.error ?? '分析失败')
         set.getState().setBusy(null)
       }
+    }
+    w.onerror = () => {
+      set.getState().setError('分析线程出错')
+      set.getState().setBusy(null)
     }
     workerRef.current = w
     return () => {
@@ -126,10 +149,10 @@ export default function App() {
   }, [applyLoaded, set])
 
   /* ---------- 播放 ---------- */
-  const startPlay = useCallback(async (fromMs: number, mode: PlayMode) => {
+  const startPlay = useCallback(async (fromMs: number, m: PlayMode) => {
     const st = set.getState()
     if (!st.analysis) return
-    await play(fromMs, mode, st.notes, st.durationMs, {
+    await play(fromMs, m, st.notes, st.durationMs, {
       onTick: (ms) => set.getState().setCurrentMs(ms),
       onEnd: () => set.getState().setPlaying(false),
     })
@@ -171,28 +194,64 @@ export default function App() {
     [set, startPlay],
   )
 
+  /* ---------- 重复区间：播放到区间末尾就跳回区间开头 ---------- */
+  useEffect(() => {
+    if (!playing || !loopOn || !loop) return
+    if (currentMs < loop.endMs - 12) return
+    stop()
+    set.getState().setCurrentMs(loop.startMs)
+    void startPlay(loop.startMs, playMode)
+  }, [currentMs, playing, loopOn, loop, playMode, set, startPlay])
+
+  /* ---------- 自动翻页：播放头快出视野就把视野推过去 ---------- */
+  useEffect(() => {
+    if (!playing || !autoPage || !durationMs) return
+    const span = spanMs(view, durationMs)
+    const right = view.panMs + span * 0.82
+    if (currentMs > right || currentMs < view.panMs) {
+      set.getState().setView({ zoom: view.zoom, panMs: Math.max(0, currentMs - span * 0.25) })
+    }
+  }, [currentMs, playing, autoPage, durationMs, view, set])
+
   /** 删音符：顺手把选中态清掉（否则 Delete 会去删一个已经不存在的 id） */
   const removeNote = useCallback((id: string) => {
     useBp.getState().removeNote(id)
     setSelectedId((cur) => (cur === id ? null : cur))
   }, [])
 
-  /* ---------- 热键：空格播放/暂停，Tab 切 A/B ---------- */
+  /* ---------- 热键 ---------- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      const st = set.getState()
       if (e.code === 'Space') {
         e.preventDefault()
         togglePlay()
       } else if (e.code === 'Tab') {
         e.preventDefault()
-        switchMode(set.getState().playMode === 'audio' ? 'synth' : 'audio')
+        switchMode(st.playMode === 'audio' ? 'synth' : 'audio')
+      } else if (e.code === 'F2') {
+        e.preventDefault()
+        st.setMode('draw')
+      } else if (e.code === 'F3') {
+        e.preventDefault()
+        st.setMode('select')
+      } else if (e.code === 'KeyL') {
+        st.setLoopOn(!st.loopOn)
+      } else if (e.code === 'Delete' || e.code === 'Backspace') {
+        if (selectedId) {
+          e.preventDefault()
+          removeNote(selectedId)
+        }
+      } else if (e.code === 'KeyA' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        st.setAllConfirmed(true)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [set, switchMode, togglePlay])
+  }, [removeNote, selectedId, set, switchMode, togglePlay])
 
   /* ---------- 导出 ---------- */
   const exportJps = useCallback(async () => {
@@ -213,6 +272,13 @@ export default function App() {
   }, [set])
 
   const candidates = analysis?.keyCandidates.slice(0, 6) ?? []
+  const setLoop = useCallback(
+    (r: LoopRange | null) => {
+      set.getState().setLoop(r)
+      if (r) set.getState().setLoopOn(true)
+    },
+    [set],
+  )
 
   return (
     <div className="app">
@@ -242,6 +308,48 @@ export default function App() {
           </button>
         </div>
 
+        <div className="seg" title={mode === 'draw' ? COPY.modeDrawTip : COPY.modeSelectTip}>
+          <button
+            className={mode === 'draw' ? 'on' : ''}
+            onClick={() => useBp.getState().setMode('draw')}
+          >
+            {COPY.modeDraw} F2
+          </button>
+          <button
+            className={mode === 'select' ? 'on' : ''}
+            onClick={() => useBp.getState().setMode('select')}
+          >
+            {COPY.modeSelect} F3
+          </button>
+        </div>
+
+        <label className="field" title="画音/拖音时吸附到哪一格">
+          {COPY.snapLabel}
+          <select value={snap} onChange={(e) => useBp.getState().setSnap(e.target.value as SnapMode)}>
+            {SNAP_CHOICES.map((c) => (
+              <option key={c.v} value={c.v}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          className={loopOn ? 'on' : ''}
+          onClick={() => useBp.getState().setLoopOn(!loopOn)}
+          title={COPY.loopTip}
+          disabled={!loop}
+        >
+          {COPY.loop}
+        </button>
+        <button
+          className={autoPage ? 'on' : ''}
+          onClick={() => useBp.getState().setAutoPage(!autoPage)}
+          title={COPY.autoPageTip}
+        >
+          {COPY.autoPage}
+        </button>
+
         <div className="spacer" />
 
         <label className="field">
@@ -254,51 +362,77 @@ export default function App() {
             ))}
           </select>
         </label>
-        <div className="seg" title="卷帘上写字用音名还是简谱数字（换调号数字跟着变）">
+        <div className="seg" title="表格里写字用音名还是简谱数字（换调号数字跟着变）">
           <button className={pitchMode === 'name' ? 'on' : ''} onClick={() => useBp.getState().setPitchMode('name')}>
             {COPY.pitchName}
           </button>
-          <button className={pitchMode === 'number' ? 'on' : ''} onClick={() => useBp.getState().setPitchMode('number')}>
+          <button
+            className={pitchMode === 'number' ? 'on' : ''}
+            onClick={() => useBp.getState().setPitchMode('number')}
+          >
             {COPY.pitchNumber}
           </button>
         </div>
+        <button onClick={() => useBp.getState().setAllConfirmed(true)} disabled={!notes.length} title={COPY.confirmAllTip}>
+          {COPY.confirmAll}
+        </button>
+        <button onClick={() => useBp.getState().setAllConfirmed(false)} disabled={!notes.length}>
+          {COPY.clearAll}
+        </button>
         <button
           onClick={() => {
             useBp.getState().resetNotes()
             setSelectedId(null)
           }}
           disabled={!analysis}
-          title="丢掉手工改动，回到分析出来的初稿"
+          title={COPY.resetDraftTip}
         >
-          回到初稿
+          {COPY.resetDraft}
         </button>
-        <button onClick={() => void exportJps()} disabled={!jps}>
+        <button onClick={() => void exportJps()} disabled={confirmedCount === 0} title="只导出你确认过的音">
           {COPY.exportJps}
         </button>
       </div>
 
       <div className="body">
         <div className="main">
-          <Spectrogram spectrum={analysis?.spectrum ?? null} durationMs={durationMs} onSeek={seek} playMs={currentMs} />
           <NoteRoll
             notes={notes}
+            spectrum={analysis?.spectrum ?? null}
+            durationMs={durationMs}
+            bpm={bpm}
+            beatsPerBar={beatsPerBar}
+            firstBeatMs={firstBeatMs}
+            pitchMode={pitchMode}
+            tonic={tonic}
+            mode={mode}
+            snap={snap}
+            view={view}
+            loop={loop}
+            loopOn={loopOn}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            onSeek={seek}
+            onAudition={(midi) => void audition(midi)}
+            onAdd={(n) => useBp.getState().addNote(n)}
+            onPatch={(id, patch) => useBp.getState().patchNote(id, patch)}
+            onRemove={removeNote}
+            onToggleConfirmed={(id) => useBp.getState().toggleConfirmed(id)}
+            onView={(v) => useBp.getState().setView(v)}
+            onLoop={setLoop}
+            playMs={currentMs}
+          />
+          <StripPreview
             grid={grid}
             bpm={bpm}
             beatsPerBar={beatsPerBar}
             firstBeatMs={firstBeatMs}
             durationMs={durationMs}
-            pitchMode={pitchMode}
-            tonic={tonic}
-            selectedId={selectedId}
-            onSelect={setSelectedId}
-            onSeek={seek}
-            onAudition={(midi) => void audition(midi)}
-            onAdd={(n) => void useBp.getState().addNote(n)}
-            onPatch={(id, patch) => useBp.getState().patchNote(id, patch)}
-            onRemove={removeNote}
+            view={view}
             playMs={currentMs}
+            tonic={tonic}
+            onSeek={seek}
           />
-          <JpsPreview jps={jps} />
         </div>
 
         <div className="side">
@@ -384,7 +518,7 @@ export default function App() {
 
           <div>
             <h3>{COPY.jpsTitle}</h3>
-            <pre className="src">{jps || '（空）'}</pre>
+            <pre className="src">{jps || '（还没确认音符）'}</pre>
           </div>
         </div>
       </div>
@@ -392,12 +526,14 @@ export default function App() {
       <div className="status">
         <span>{fileName ?? COPY.empty}</span>
         <span>{durationMs ? `${(durationMs / 1000).toFixed(1)}s` : ''}</span>
-        <span>{analysis ? `${notes.length} 个音` : ''}</span>
+        <span>
+          {analysis ? `确认 ${confirmedCount} / 共 ${notes.length} 个音` : ''}
+        </span>
         <span>{busy ?? ''}</span>
         <span className="spacer" />
         {error && <span className="err">{error}</span>}
         {notice && <span className="hint">{notice}</span>}
-        <span className="hint">空格播放 · Tab 切换原音/合成</span>
+        <span className="hint">空格播放 · Tab 原音/合成 · F2 绘制 · F3 选择 · L 循环 · Ctrl+滚轮缩放</span>
       </div>
     </div>
   )

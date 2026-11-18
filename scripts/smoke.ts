@@ -17,7 +17,10 @@ import { FFT, hannWindow } from '../src/analysis/fft'
 import { guessKeys } from '../src/analysis/key'
 import { midiToNumber, midiToName } from '../src/analysis/pitchNames'
 import { quantize } from '../src/jps/quantize'
+import { marks } from '../src/jps/marks'
+import { snapMs } from '../src/jps/snap'
 import { toJps } from '../src/jps/toJps'
+import { msToX, spanMs } from '../src/ui/timeAxis'
 import { useBp } from '../src/model/store'
 import type { RawNote } from '../src/model/types'
 
@@ -137,9 +140,9 @@ const melody = concat([
 /* ---------------- 8. 量化：120BPM 下 500ms = 1 拍 = 4 tick ---------------- */
 {
   const raws: RawNote[] = [
-    { id: 'a', midi: 60, startMs: 0, endMs: 500, velocity: 0.6 },
-    { id: 'b', midi: 62, startMs: 500, endMs: 1000, velocity: 0.6 },
-    { id: 'c', midi: 64, startMs: 1000, endMs: 1500, velocity: 0.6 },
+    { id: 'a', midi: 60, startMs: 0, endMs: 500, velocity: 0.6, confirmed: true },
+    { id: 'b', midi: 62, startMs: 500, endMs: 1000, velocity: 0.6, confirmed: true },
+    { id: 'c', midi: 64, startMs: 1000, endMs: 1500, velocity: 0.6, confirmed: true },
   ]
   const q = quantize(raws, { bpm: 120, beatsPerBar: 4, firstBeatMs: 0 })
   const ticks = q.notes.map((n) => `${n.startTick}+${n.ticks}`).join(' ')
@@ -150,10 +153,10 @@ const melody = concat([
 /* ---------------- 9. 生成 jps → 引擎解析 → 排版 → SVG ---------------- */
 {
   const raws: RawNote[] = [
-    { id: 'a', midi: 60, startMs: 0, endMs: 500, velocity: 0.6 },
-    { id: 'b', midi: 64, startMs: 500, endMs: 1000, velocity: 0.6 },
-    { id: 'c', midi: 67, startMs: 1000, endMs: 2000, velocity: 0.6 },
-    { id: 'd', midi: 72, startMs: 2000, endMs: 2500, velocity: 0.6 },
+    { id: 'a', midi: 60, startMs: 0, endMs: 500, velocity: 0.6, confirmed: true },
+    { id: 'b', midi: 64, startMs: 500, endMs: 1000, velocity: 0.6, confirmed: true },
+    { id: 'c', midi: 67, startMs: 1000, endMs: 2000, velocity: 0.6, confirmed: true },
+    { id: 'd', midi: 72, startMs: 2000, endMs: 2500, velocity: 0.6, confirmed: true },
   ]
   const q = quantize(raws, { bpm: 120, beatsPerBar: 4, firstBeatMs: 0 })
   const jps = toJps(q.notes, {
@@ -179,9 +182,9 @@ const melody = concat([
 /* ---------------- 10. 跨小节的长音必须写成连音线 ---------------- */
 {
   const raws: RawNote[] = [
-    { id: 'a', midi: 60, startMs: 0, endMs: 1500, velocity: 0.6 },
+    { id: 'a', midi: 60, startMs: 0, endMs: 1500, velocity: 0.6, confirmed: true },
     // 1500ms 起、1000ms 长：120BPM 下从第 3 拍跨到下一小节
-    { id: 'b', midi: 67, startMs: 1500, endMs: 2500, velocity: 0.6 },
+    { id: 'b', midi: 67, startMs: 1500, endMs: 2500, velocity: 0.6, confirmed: true },
   ]
   const q = quantize(raws, { bpm: 120, beatsPerBar: 4, firstBeatMs: 0 })
   const jps = toJps(q.notes, { bpm: 120, beatsPerBar: 4, firstBeatMs: 0, tonic: 0, title: '跨小节' })
@@ -258,6 +261,56 @@ const melody = concat([
   useBp.getState().addNote({ midi: 60, startMs: 0, endMs: 400 })
   useBp.getState().resetNotes()
   check('回到初稿 = 分析出来的音符数', useBp.getState().notes.length === r.notes.length, `${useBp.getState().notes.length}/${r.notes.length}`)
+}
+
+/* ---------------- 11.8 确认集合：只有确认过的音才进谱 ---------------- */
+{
+  const parts = [tone(261.63, 500), tone(329.63, 500), silence(300)]
+  const r = analyzeSamples(concat(parts), SR)
+  useBp.getState().setAnalysis(r)
+
+  const qOf = () =>
+    useBp.getState().jps.split('\n').find((l) => l.startsWith('Q: ')) ?? ''
+  check('分析出来的音默认未确认 → 谱面空', qOf() === '' || !/[1-7]/.test(qOf()), qOf())
+  check(
+    '未确认时状态栏的提示文案出现',
+    useBp.getState().warnings.some((w) => w.includes('没确认')),
+    useBp.getState().warnings.join('；'),
+  )
+
+  useBp.getState().setAllConfirmed(true)
+  check('全选之后出谱', /[1-7]/.test(qOf()), qOf())
+  const confirmedQ = qOf()
+
+  const first = useBp.getState().notes[0]
+  if (first) useBp.getState().toggleConfirmed(first.id)
+  check('取消确认一个音 → 那个音从谱面消失', qOf() !== confirmedQ, `${confirmedQ} → ${qOf()}`)
+  if (first) useBp.getState().toggleConfirmed(first.id)
+  check('再确认回来 → 谱面复原', qOf() === confirmedQ, qOf())
+}
+
+/* ---------------- 11.9 吸附三档 + 流线谱时值记号 ---------------- */
+{
+  const opt = { bpm: 120, beatsPerBar: 4, firstBeatMs: 0 } // 一拍 500ms、一小节 2000ms
+  check('吸附关：原样返回', snapMs(1234, opt, 'off') === 1234, String(snapMs(1234, opt, 'off')))
+  check('吸附拍：1234 → 1000', snapMs(1234, opt, 'beat') === 1000, String(snapMs(1234, opt, 'beat')))
+  check('吸附小节：1234 → 最近的小节线 2000', snapMs(1234, opt, 'bar') === 2000, String(snapMs(1234, opt, 'bar')))
+  check('吸附格点（1/4 拍）：1234 → 1250', snapMs(1234, opt, 'grid') === 1250, String(snapMs(1234, opt, 'grid')))
+
+  const m = (t: number) => { const x = marks(t); return `${x.under}/${x.dash}/${x.dots}` }
+  check('4 tick = 一拍：无减时线无增时线', m(4) === '0/0/0', m(4))
+  check('8 tick = 两拍：一条增时线', m(8) === '0/1/0', m(8))
+  check('2 tick = 半拍：一条减时线', m(2) === '1/0/0', m(2))
+  check('1 tick = 1/4 拍：两条减时线', m(1) === '2/0/0', m(1))
+  check('6 tick = 附点四分：一个附点', m(6) === '0/0/1', m(6))
+}
+
+/* ---------------- 11.10 时间轴映射：整曲铺满时首尾正好贴边 ---------------- */
+{
+  const view = { zoom: 1, panMs: 0 }
+  check('zoom=1 时 0ms 在左边界', Math.abs(msToX(0, view, 4000, 66, 500) - 66) < 1e-6, String(msToX(0, view, 4000, 66, 500)))
+  check('zoom=1 时末尾在右边界', Math.abs(msToX(4000, view, 4000, 66, 500) - 566) < 1e-6, String(msToX(4000, view, 4000, 66, 500)))
+  check('zoom=2 时一屏只显示一半', Math.abs(spanMs({ zoom: 2, panMs: 0 }, 4000) - 2000) < 1e-6, String(spanMs({ zoom: 2, panMs: 0 }, 4000)))
 }
 
 /* ---------------- 12. 界面能挂载（SSR 渲染一次，抓初始渲染的崩溃） ---------------- */

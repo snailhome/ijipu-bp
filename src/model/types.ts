@@ -7,7 +7,7 @@
  * 两者都留着，用户调 BPM/首拍时只重算 GridNote，不回头改 RawNote。
  */
 
-/** 秒轴音符（分析结果，不改） */
+/** 秒轴音符（分析出来的是初稿，用户可改） */
 export interface RawNote {
   id: string
   /** MIDI 音高（A4 = 69） */
@@ -18,6 +18,24 @@ export interface RawNote {
   endMs: number
   /** 力度 0..1（取该音符区间对数谱均值） */
   velocity: number
+  /**
+   * 是否"我确认这是谱音"。
+   * 分析出来的音默认 false（淡色）；用户在绘制模式下点它 / 画出来的音是 true（亮色）。
+   * **导出只认 confirmed**（用户 m01788 第 5、9 条），所以它决定成品，不是纯显示标记。
+   */
+  confirmed: boolean
+}
+
+/** 表格点击模式：绘制（画音 + 确认） / 选择（只试听） */
+export type EditMode = 'draw' | 'select'
+
+/** 吸附：关 / 半拍格点 / 拍 / 小节线 */
+export type SnapMode = 'off' | 'grid' | 'beat' | 'bar'
+
+/** 重复区间（循环播放） */
+export interface LoopRange {
+  startMs: number
+  endMs: number
 }
 
 /** 调性候选：share = 相对可能性（0..1，全局归一） */

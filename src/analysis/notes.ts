@@ -224,6 +224,7 @@ export function trackMonophonic(spec: Spectrum, opts: TrackOptions = {}): RawNot
       startMs: seg.from * hopMs,
       endMs: (seg.to + 1) * hopMs,
       velocity: Math.min(1, Math.max(0.2, rms / maxRms)),
+      confirmed: false,
     }
   })
 }
