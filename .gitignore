@@ -4,3 +4,4 @@ dist-smoke/
 src-tauri/target/
 *.local
 .DS_Store
+.tmp-*

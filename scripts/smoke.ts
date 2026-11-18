@@ -163,6 +163,8 @@ const melody = concat([
     title: '冒烟测试',
   })
   check('jps 有头部与 Q 行', /B: 冒烟测试/.test(jps) && /^Q: /m.test(jps), jps.split('\n')[0])
+  // 锁死文本：增时线紧贴音符（`5-`）、跨小节补休止（`0--`），这是引擎认的写法
+  check("Q 行文本 = 1 3 5- | 1' 0--", jps.includes("Q: 1 3 5- | 1' 0--"), jps.split('\n').pop() ?? '')
 
   const parsed = parseJps(jps)
   const errors = parsed.errors.map((e) => (typeof e === 'string' ? e : (e.message ?? '')))
@@ -173,13 +175,29 @@ const melody = concat([
   check('排版出至少 1 页 SVG', svgs.length >= 1 && svgs[0].includes('<svg'), `pages=${svgs.length}`)
 }
 
-/* ---------------- 10. 空输入不炸 ---------------- */
+/* ---------------- 10. 跨小节的长音必须写成连音线 ---------------- */
+{
+  const raws: RawNote[] = [
+    { id: 'a', midi: 60, startMs: 0, endMs: 1500, velocity: 0.6 },
+    // 1500ms 起、1000ms 长：120BPM 下从第 3 拍跨到下一小节
+    { id: 'b', midi: 67, startMs: 1500, endMs: 2500, velocity: 0.6 },
+  ]
+  const q = quantize(raws, { bpm: 120, beatsPerBar: 4, firstBeatMs: 0 })
+  const jps = toJps(q.notes, { bpm: 120, beatsPerBar: 4, firstBeatMs: 0, tonic: 0, title: '跨小节' })
+  const qLine = jps.split('\n').find((l) => l.startsWith('Q: ')) ?? ''
+  const parsed = parseJps(jps)
+  const errors = parsed.errors.map((e) => (typeof e === 'string' ? e : (e.message ?? '')))
+  check('跨小节音符用 ( … ) 连起来且能解析', /\(\s*5/.test(qLine) && errors.length === 0, `${qLine}｜错=${errors.join('；')}`)
+  if (process.argv.includes('--show')) console.log(`跨小节样例：${qLine}`)
+}
+
+/* ---------------- 11. 空输入不炸 ---------------- */
 {
   const r = analyzeSamples(new Float32Array(SR), SR)
   check('静音输入 → 0 个音、无异常', r.notes.length === 0 && Number.isFinite(r.bpm), `${r.notes.length} 个音`)
 }
 
-/* ---------------- 11. 界面能挂载（SSR 渲染一次，抓初始渲染的崩溃） ---------------- */
+/* ---------------- 12. 界面能挂载（SSR 渲染一次，抓初始渲染的崩溃） ---------------- */
 {
   const html = renderToString(createElement(App))
   const ok =
