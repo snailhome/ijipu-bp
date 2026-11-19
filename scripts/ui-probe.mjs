@@ -391,6 +391,39 @@ try {
     `pan ${Math.round(afterZoom.panMs)}→${Math.round(afterPan.panMs)} zoom ${afterPan.zoom}`,
   )
 
+  // ── 键列右上角那把锁：锁上之后滚轮不再换音区（用户 m05515） ──
+  const lockPt = await cdp.eval(`(() => {
+    const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+    return { x: r.x + 52, y: r.y + 18, gx: r.x + r.width * 0.6, gy: r.y + r.height * 0.5 }
+  })()`)
+  await cdp.eval(`window.__bp.getState().setLockPitch(false)`)
+  await sleep(150)
+  const topBefore = await cdp.eval(`window.__bpRoll.top`)
+  await cdp.eval(`window.__bp.getState().setView({ ...window.__bp.getState().view, panMs: 300 })`)
+  await sleep(150)
+  const panBefore = await cdp.eval(`window.__bp.getState().view.panMs`)
+  await cdp.clickAt(lockPt.x, lockPt.y) // 锁上
+  await sleep(200)
+  const lockedFlag = await cdp.eval(`window.__bp.getState().lockPitch`)
+  await cdp.wheelAt(lockPt.gx, lockPt.gy, 120)
+  await sleep(250)
+  const topLocked = await cdp.eval(`window.__bpRoll.top`)
+  const panLocked = await cdp.eval(`window.__bp.getState().view.panMs`)
+  await cdp.clickAt(lockPt.x, lockPt.y) // 开锁
+  await sleep(200)
+  await cdp.wheelAt(lockPt.gx, lockPt.gy, 120)
+  await sleep(250)
+  const topFree = await cdp.eval(`window.__bpRoll.top`)
+  check(
+    '键列右上角的锁能锁住上下滚动（锁住时滚轮改横向平移）',
+    lockedFlag === true &&
+      topLocked === topBefore &&
+      panLocked !== panBefore &&
+      topFree !== topBefore,
+    `顶行 ${topBefore} → 锁住 ${topLocked}（pan ${Math.round(panBefore)}→${Math.round(panLocked)}）→ 开锁 ${topFree}`,
+  )
+
+
   // ── 时间尺：按住拖 = 圈播放区间（不必按 Shift）；点一下 = 只挪播放头 ──
   const ruler = await cdp.eval(`(() => {
     const c = document.querySelector('.pane.roll canvas')
@@ -548,6 +581,31 @@ try {
   const highC = await sampleHeat()
   check('对比滑条真能改变热力图曲线', lowC !== highC, `${lowC} vs ${highC}`)
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setGain(1); s.setContrast(1.4) })()`)
+
+  /* ── 右侧栏滑条：鼠标在上面滚轮就调它，且不滚右栏（用户 m05454） ── */
+  const wheelBox = await cdp.eval(`(() => {
+    const side = document.querySelector('.side')
+    const label = [...side.querySelectorAll('label.field')].find((l) => l.textContent.includes('倍率'))
+    const el = label && label.querySelector('input[type=range]')
+    if (!el) return null
+    /* 先把右栏滚下去一点（能滚的话），这样"滚轮不带动右栏"才验得出来；顺序要紧：先滚再取坐标 */
+    side.scrollTop = Math.min(60, Math.max(0, side.scrollHeight - side.clientHeight))
+    const r = el.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, scrollTop: side.scrollTop }
+  })()`)
+  const gainBefore = await cdp.eval(`window.__bp.getState().gain`)
+  if (wheelBox) await cdp.wheelAt(wheelBox.x, wheelBox.y, 120) // 往下滚 = 减
+  await sleep(250)
+  const afterWheel = await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    return { gain: s.gain, scrollTop: document.querySelector('.side').scrollTop }
+  })()`)
+  check(
+    '右栏滑条能被滚轮调、且不滚动右栏',
+    !!wheelBox && afterWheel.gain < gainBefore && afterWheel.scrollTop === wheelBox.scrollTop,
+    `gain ${gainBefore}→${afterWheel.gain}、scrollTop ${wheelBox?.scrollTop}→${afterWheel.scrollTop}`,
+  )
+  await cdp.eval(`window.__bp.getState().setGain(1)`)
 
   /* ── 空格启停 ── 之前焦点落在滑条上时被"输入框不响应热键"挡掉，现在只有真typing才挡 */
   const rollBox = await cdp.eval(`(() => {

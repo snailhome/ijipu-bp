@@ -47,6 +47,7 @@ export default function App() {
   const loop = useBp((s) => s.loop)
   const loopOn = useBp((s) => s.loopOn)
   const autoPage = useBp((s) => s.autoPage)
+  const lockPitch = useBp((s) => s.lockPitch)
   const gain = useBp((s) => s.gain)
   const contrast = useBp((s) => s.contrast)
   const suppress = useBp((s) => s.suppress)
@@ -71,6 +72,31 @@ export default function App() {
   const workerRef = useRef<Worker | null>(null)
   /* 分析用过的样本留着：调'去谐波'要把同一段音频重跑一遍，不能重新选文件 */
   const samplesRef = useRef<{ samples: Float32Array; sampleRate: number } | null>(null)
+  const sideRef = useRef<HTMLDivElement | null>(null)
+
+  /* 右侧栏里所有滑条：鼠标在上面滚轮就能调，而且那一刻不滚动右栏（用户 m05454）。
+   * React 的 onWheel 是 passive 的，preventDefault 拦不住滚动，所以这里挂原生监听。
+   * 直接写 el.value 会被 React 的 value tracker 认为"没变"，得用原生 setter 再派发 input 事件。 */
+  useEffect(() => {
+    const host = sideRef.current
+    if (!host) return
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    const onWheel = (ev: WheelEvent) => {
+      const el = (ev.target as HTMLElement | null)?.closest?.('input[type="range"]') as HTMLInputElement | null
+      if (!el) return
+      ev.preventDefault() // 只调滑条，不滚右栏
+      const step = Number(el.step) || 1
+      const min = Number(el.min)
+      const max = Number(el.max)
+      const dir = ev.deltaY > 0 ? -1 : 1
+      const next = Math.min(max, Math.max(min, Number(el.value) + dir * step * (ev.shiftKey ? 5 : 1)))
+      if (next === Number(el.value)) return
+      if (setter) setter.call(el, String(next))
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    host.addEventListener('wheel', onWheel, { passive: false })
+    return () => host.removeEventListener('wheel', onWheel)
+  }, [showSide])
 
   const confirmedCount = useMemo(() => notes.filter((n) => n.confirmed).length, [notes])
   const warnings = useBp((s) => s.warnings)
@@ -505,6 +531,8 @@ export default function App() {
             onPatch={(id, patch) => useBp.getState().patchNote(id, patch)}
             onRemove={removeNote}
             onToggleConfirmed={(id) => useBp.getState().toggleConfirmed(id)}
+            lockPitch={lockPitch}
+            onToggleLock={() => useBp.getState().setLockPitch(!lockPitch)}
             onView={(v) => useBp.getState().setView(v)}
             onLoop={setLoop}
             playMs={currentMs}
@@ -522,7 +550,7 @@ export default function App() {
           />
         </div>
 
-        <div className={showSide ? "side" : "side off"}>
+        <div className={showSide ? "side" : "side off"} ref={sideRef}>
           <label className="check" title="关着：分析只出频谱/节奏/调性，音符全靠自己在表格里点">
             <input
               type="checkbox"

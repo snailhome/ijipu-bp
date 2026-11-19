@@ -48,6 +48,9 @@ interface Props {
   onPatch: (id: string, patch: Partial<Pick<RawNote, 'midi' | 'startMs' | 'endMs'>>) => void
   onRemove: (id: string) => void
   onToggleConfirmed: (id: string) => void
+  /* 键盘上方那把锁：锁住竖着换音区（用户 m05515） */
+  lockPitch: boolean
+  onToggleLock: () => void
   onView: (v: View) => void
   onLoop: (r: LoopRange | null) => void
 }
@@ -528,10 +531,9 @@ export function NoteRoll(props: Props) {
       /* 黑格行：数字写在**黑键块里面**、颜色反相（黑键上浅字、高亮成黄时改回深字），用户 m05415 */
       if (BLACK.has(cls)) {
         if (props.pitchMode !== 'number') continue
-        g.textAlign = 'center'
+        /* 距黑格左缘的留白跟白格一样（都是 5px），用户 m05580 */
         g.fillStyle = lit > 0 ? 'rgba(30,44,60,0.95)' : '#e8f1fb'
-        g.fillText(midiToNumber(midi, props.tonic).text, KEY_BLACK_X + KEY_BLACK_W / 2, y + ROW_H / 2)
-        g.textAlign = 'left'
+        g.fillText(midiToNumber(midi, props.tonic).text, KEY_BLACK_X + 5, y + ROW_H / 2)
         continue
       }
 
@@ -553,11 +555,27 @@ export function NoteRoll(props: Props) {
     }
     g.fillStyle = 'rgba(8,12,18,0.9)'
     g.fillRect(KEY_W - 1, RULER_H, 1, metrics.h - RULER_H)
-    /* 8.5) 时间尺左边那格：当前调号，形如 1=bB（用户 m04234） */
+    /* 8.5) 时间尺左边那格：当前调号（形如 1=bB，用户 m04234）+ 右边一把锁（用户 m05515） */
     g.fillStyle = 'rgba(170,205,240,0.92)'
-    g.font = '600 11px ui-monospace, Consolas, monospace'
+    g.font = '700 13px ui-monospace, Consolas, monospace'
     g.textBaseline = 'middle'
     g.fillText(`1=${keyLabel(props.tonic)}`, 5, RULER_H / 2)
+
+    /* 锁图标：锁上时实心、开锁时淡一点；点它切"锁住竖着换音区"。
+     * 位置固定在调号右边（键列右上角），命中区在下面 pointerdown 里按 LOCK_BOX 判。 */
+    const lx = KEY_W - 14
+    const ly = RULER_H / 2
+    g.strokeStyle = props.lockPitch ? 'rgba(255,206,64,0.95)' : 'rgba(150,180,215,0.75)'
+    g.fillStyle = props.lockPitch ? 'rgba(255,206,64,0.95)' : 'rgba(150,180,215,0.55)'
+    g.lineWidth = 1.4
+    /* 锁体 */
+    g.beginPath()
+    g.roundRect(lx - 5, ly - 1, 10, 7, 1.5)
+    g.fill()
+    /* 锁梁（锁上时闭合、开锁时偏到一侧） */
+    g.beginPath()
+    g.arc(lx - (props.lockPitch ? 0 : 3), ly - 2.5, 3, Math.PI, 0)
+    g.stroke()
     /* 9) 播放头 */
     const px = xAt(playMs)
     if (px >= metrics.left) {
@@ -623,6 +641,15 @@ export function NoteRoll(props: Props) {
         props.onView({ zoom: view.zoom, panMs })
         return
       }
+      /* 竖着换音区：锁住的时候滚轮改走横着平移（用户 m05515 的锁 + m05608），解锁恢复上下 */
+      const horizontal = e.shiftKey || props.lockPitch
+      if (horizontal) {
+        const span = spanMs(view, durationMs)
+        const maxPan = Math.max(0, durationMs - span)
+        const panMs = Math.max(0, Math.min(maxPan, view.panMs + (e.deltaY > 0 ? span : -span) * 0.12))
+        props.onView({ zoom: view.zoom, panMs })
+        return
+      }
       setCenter((c) => Math.max(MIDI_LOW, Math.min(MIDI_HIGH, c - Math.sign(e.deltaY) * 2)))
     }
     host.addEventListener('wheel', onWheel, { passive: false })
@@ -668,6 +695,11 @@ export function NoteRoll(props: Props) {
       e.currentTarget.setPointerCapture(e.pointerId)
 
       if (y < RULER_H) {
+        /* 键列右上角那把锁：只切"锁住竖着换音区"，不挪播放头（用户 m05515） */
+        if (x >= KEY_W - 22 && x <= KEY_W - 2) {
+          props.onToggleLock()
+          return
+        }
         /* 时间尺：点一下 = 把播放头挪到这里并准备播放；按住拖 = 圈出播放区间（拖到哪算到哪） */
         const ms = snapMs(msAt(x), { bpm: props.bpm, beatsPerBar: props.beatsPerBar, firstBeatMs: props.firstBeatMs }, 'off')
         drag.current = { kind: 'loop', anchorMs: ms, moved: false }

@@ -58,6 +58,8 @@ interface State {
   loopOn: boolean
   /** 播放时自动把视野推到播放头（自动翻页） */
   autoPage: boolean
+  /* 锁住竖着换音区（钢琴键盘上方那把锁，用户 m05515） */
+  lockPitch: boolean
   /** 热力图显示倍率 */
   gain: number
   /** 热力图对比（指数） */
@@ -99,6 +101,7 @@ interface State {
   setLoop: (r: LoopRange | null) => void
   setLoopOn: (b: boolean) => void
   setAutoPage: (b: boolean) => void
+  setLockPitch: (b: boolean) => void
   setGain: (g: number) => void
   setContrast: (c: number) => void
   setSuppress: (s: number) => void
@@ -189,6 +192,7 @@ export const useBp = create<State>((set, get) => ({
   loop: null,
   loopOn: false,
   autoPage: true,
+  lockPitch: false,
   gain: 1,
   contrast: 1.4,
   suppress: 0,
@@ -260,6 +264,7 @@ export const useBp = create<State>((set, get) => ({
   setLoop: (r) => set({ loop: r }),
   setLoopOn: (b) => set({ loopOn: b }),
   setAutoPage: (b) => set({ autoPage: b }),
+  setLockPitch: (b) => set({ lockPitch: b }),
   setGain: (g) => set({ gain: Math.max(0.1, Math.min(6, g)) }),
   setSuppress: (v) => set({ suppress: Math.max(0, Math.min(1, v)) }),
   setAutoNotes: (b) => set({ autoNotes: b }),
