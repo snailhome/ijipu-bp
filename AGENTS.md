@@ -67,9 +67,12 @@ npm run smoke
   高亮白键要按 L / J / T 形状（左块伸进相邻黑键格半格），黑键只染自己那块。
   要动这套几何，先把这条规则改了并说明原因，别直接改画法。
 - 键上文字（音名 / 简谱数字）**只写白格行**，位置取白键左块的竖直正中（`(t + b) / 2`）。
-- **流线谱（`src/ui/StripPreview.tsx`）不用引擎的分页排版**：`layoutScore`+`renderScoreToSvg`
-  的小节宽度由排版算法决定，跟时间格对不齐。它按 `ui/timeAxis.ts` 的同一映射自己画，
-  左边留 66px（与音符表键盘列同宽）。要改宽度映射就**两处一起改**。
+- **流线谱（`src/ui/StripPreview.tsx`）的曲谱字形必须交给引擎**（用户 m02192）：`preview/stripSvg.ts`
+  取视窗附近几小节 `toJps` → `parseJps` → `layoutScore`（`noteSpaceLayout:'duration'`）→
+  `buildLinearStrip`（`timedStretch:true`）→ `renderScoreToSvg`，宿主只按 `ui/timeAxis.ts`
+  的映射把整条谱摆到时间轴上；左边留 66px（与音符表键盘列同宽）。**不要再在 canvas 里手画
+  数字/减时线/八度点/附点/连音弧** —— 那等于把引擎规范抄一遍，两边必然对不上。canvas 只画
+  小节号、播放头、空谱提示。要改宽度映射就**两处一起改**。
 
 ## 五、提交
 
@@ -153,5 +156,8 @@ npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM 
   `store.applyProject` 铺回状态，`App.tsx` 负责自动存（1.2 秒节流）、启动恢复、打开方案。
 - **规矩**：格式变了就抬 `PROJECT_VERSION`，`parseProject` 不认识就返回中文错误、按新开处理；
   **不要手改用户目录里的 `.bp.json`**，坏字段会被兜底但不保证语义。
+- **有内容才建**（用户 m02314）：`projectHasContent` 判定"有音符或改过参数"，刚打开、什么都没动
+  时不写空文件；**已经有方案的要继续写**（把音删光也得把"删光"存下来，`App.tsx` 的
+  `hasProjectRef` 管这一条）。`*.bp.json` 已进 `.gitignore`（本机工作状态，不进仓库）。
 - **验收**：`smoke` 里有 roundtrip 断言；桌面壳手动验"改几笔 → 关 → 重开 → 状态还在"，
   并确认 `jpsToSvgPages` 的 `errors` 为空。

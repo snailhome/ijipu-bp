@@ -30,7 +30,7 @@ import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
 import { PAGE_MS, useBp } from './model/store'
-import { buildProject, parseProject, projectPathFor, serializeProject } from './model/project'
+import { buildProject, parseProject, projectHasContent, projectPathFor, serializeProject } from './model/project'
 import type { ProjectFile } from './model/project'
 import { barIndexOf, barStartTick } from './jps/bars'
 import { spanMs } from './ui/timeAxis'
@@ -412,6 +412,9 @@ export default function App() {
   const pendingRestoreRef = useRef<ProjectFile | null>(null)
   /* 自动存方案的节流定时器（同一时间只挂一个，连续拖动最多每 1.2 秒写一次） */
   const saveTimerRef = useRef<number | null>(null)
+  /* 这首音频**已经**有方案文件了：刚打开、啥也没干时不建空文件（用户 m02314），
+   * 但已有方案要能继续写 —— 把音删光也得把"删光"存下来 */
+  const hasProjectRef = useRef(false)
   /* 写盘失败只报一次，别每 1.2 秒刷一遍状态栏 */
   const saveErrRef = useRef(false)
   const sideRef = useRef<HTMLDivElement | null>(null)
@@ -464,6 +467,7 @@ export default function App() {
         pendingRestoreRef.current = null
         if (restore) {
           st.applyProject(restore)
+          hasProjectRef.current = true
           st.setBusy(null)
           setSavedAt(restore.savedAt || null)
           setNotice(
@@ -553,6 +557,8 @@ export default function App() {
       }
       /* 打开文件这一轮永远分析混音：清掉上一轮的"分析哪一轨"标记 */
       pendingAnalyzeRef.current = null
+      /* 换歌了：新的音频旁边有没有方案，等恢复流程走完再说 */
+      hasProjectRef.current = false
       w.postMessage(
         {
           samples: loaded.samples,
@@ -586,9 +592,12 @@ export default function App() {
   }, [applyLoaded, set])
 
   /* ---------- 方案：保存 / 打开 / 启动恢复（用户 m01794） ---------- */
-  /** 立刻把当前状态写回音频旁边的 `.bp.json`；返回路径（浏览器里返回伪路径） */
-  const saveProject = useCallback(async (): Promise<string | null> => {
+  /** 立刻把当前状态写回音频旁边的 `.bp.json`；返回路径（浏览器里返回伪路径）。
+   *  force = 用户主动点了「保存方案」：哪怕还没内容也照写；
+   *  自动存则遵守「有内容才建」（用户 m02314）。 */
+  const saveProject = useCallback(async (force = false): Promise<string | null> => {
     const st = set.getState()
+    if (!force && !hasProjectRef.current && !projectHasContent(st)) return null
     const p = buildProject(st)
     if (!p) return null
     const path = projectPathFor(p.audio.path)
@@ -599,6 +608,7 @@ export default function App() {
       localStorage.setItem(`${PROJECT_LS_PREFIX}${path}`, text)
     }
     if (typeof localStorage !== 'undefined') localStorage.setItem('bp.lastProject', path)
+    hasProjectRef.current = true
     saveErrRef.current = false
     setSavedAt(p.savedAt)
     return path
@@ -1357,7 +1367,7 @@ export default function App() {
         <button
           className="icon-btn"
           onClick={() => {
-            void saveProject()
+            void saveProject(true)
               .then((p) => setNotice(p ? `${COPY.projectSavedTip}：${p}` : null))
               .catch((e: unknown) => {
                 set.getState().setError(`方案存不下来：${e instanceof Error ? e.message : String(e)}`)
@@ -1504,6 +1514,7 @@ export default function App() {
             view={view}
             playMs={currentMs}
             tonic={tonic}
+            title={title}
             onSeek={seek}
           />
         </div>

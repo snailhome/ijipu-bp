@@ -1,20 +1,19 @@
 /**
  * ui/StripPreview.tsx — 简谱"流线谱"预览条
  *
- * 为什么不用引擎的分页排版（`layoutScore` + `renderScoreToSvg`）：
- * 它把谱排成一页一页、每小节宽度由排版决定，**跟上面的时间格对不齐**；
- * 用户要求"与时间格对应宽度对应，这样调整音符能够即时显示"（m01788 第 7 条）。
- * 所以这里按同一个时间映射直接画：横轴 = 时间，数字写在音的起点，长音用增时线拉到位。
+ * 曲谱**字形全部交给引擎画**（`preview/stripSvg.ts`：jps → parse → layout →
+ * `buildLinearStrip` → `renderScoreToSvg`），这里只做两件事：
+ *   1. 按时间轴把这条谱摆到对应位置（横轴 = 时间，和上面的音符表同一套映射）；
+ *   2. 画小节号、播放头、空谱提示，接点击 seek。
  *
- * 口径与 `jps/toJps.ts` 保持一致（减时线/增时线/附点都照它的规则），
- * 真正交出去的仍然是 `store.jps`（那份要被引擎 `parseJps`/`layoutScore` 两道闸门验过）。
+ * 为什么不再手画：以前这里自己写数字/减时线/八度点/附点/连音弧，
+ * 等于把引擎的谱面规范又抄一遍，跟真正交出去的 jps 容易对不上（用户 m02192）。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { midiToNumber } from '../analysis/pitchNames'
-import { barCountOf, barIndexOf, barStartTick } from '../jps/bars'
-import { marks } from '../jps/marks'
+import { barCountOf, barStartTick } from '../jps/bars'
 import { beatMs } from '../jps/snap'
-import { msToX, xToMs } from './timeAxis'
+import { buildStripImage, type StripImage } from '../preview/stripSvg'
+import { msToX, spanMs, xToMs } from './timeAxis'
 import type { View } from '../model/store'
 import type { GridNote } from '../model/types'
 
@@ -29,13 +28,11 @@ interface Props {
   view: View
   playMs: number
   tonic: number
+  title: string
   onSeek: (ms: number) => void
 }
 
 const PAD_TOP = 26
-const PAD_BOTTOM = 12
-const LINE_Y = 46
-const FONT_SIZE = 20
 /** 左边留出与音符表键盘列等宽的空白，两个画布的时间刻度才对得上 */
 const LEFT = 66
 const RIGHT_PAD = 10
@@ -44,6 +41,7 @@ export function StripPreview(props: Props) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
+  const [image, setImage] = useState<StripImage | null>(null)
 
   useEffect(() => {
     const el = wrapRef.current
@@ -59,6 +57,52 @@ export function StripPreview(props: Props) {
     [props.durationMs, props.view, size.w],
   )
 
+  /* 出图：视窗附近几小节交给引擎排（改音/缩放/平移都要重排，稍作防抖避免拖动时连打） */
+  useEffect(() => {
+    if (size.w <= 0 || props.grid.length === 0) {
+      setImage(null)
+      return
+    }
+    let alive = true
+    const timer = window.setTimeout(() => {
+      const contentW = Math.max(1, size.w - LEFT - RIGHT_PAD)
+      const visibleMs = spanMs(props.view, props.durationMs)
+      const pxPerBeat = beatMs(props.bpm) * (contentW / visibleMs)
+      const img = buildStripImage({
+        grid: props.grid,
+        jps: {
+          bpm: props.bpm,
+          beatsPerBar: props.beatsPerBar,
+          pickupBeats: props.pickupBeats,
+          firstBeatMs: props.firstBeatMs,
+          title: props.title,
+          tonic: props.tonic,
+        },
+        fromMs: props.view.panMs,
+        toMs: props.view.panMs + visibleMs,
+        pxPerBeat,
+        marginBars: 1,
+      })
+      if (alive) setImage(img)
+    }, 40)
+    return () => {
+      alive = false
+      window.clearTimeout(timer)
+    }
+  }, [
+    props.grid,
+    props.bpm,
+    props.beatsPerBar,
+    props.pickupBeats,
+    props.firstBeatMs,
+    props.title,
+    props.tonic,
+    props.view,
+    props.durationMs,
+    size.w,
+  ])
+
+  /* 覆盖层：小节号、播放头、空谱提示（谱面本身是下面的 SVG） */
   useEffect(() => {
     const cv = canvasRef.current
     if (!cv || size.w <= 0) return
@@ -68,8 +112,8 @@ export function StripPreview(props: Props) {
     const g = cv.getContext('2d')
     if (!g) return
     g.setTransform(dpr, 0, 0, dpr, 0, 0)
-    g.fillStyle = '#f7f3e7'
-    g.fillRect(0, 0, size.w, size.h)
+    g.clearRect(0, 0, size.w, size.h)
+
     /* 左侧留白（与音符表键盘列同宽），画成稍深一点，看起来是同一个坐标系 */
     g.fillStyle = '#ece5d3'
     g.fillRect(0, 0, LEFT, size.h)
@@ -77,121 +121,18 @@ export function StripPreview(props: Props) {
     const beat = beatMs(props.bpm)
     const barOpt = { beatsPerBar: props.beatsPerBar, pickupBeats: props.pickupBeats }
     const tickMs = beat / 4
-
-    /* 小节线 + 小节号（含弱起：第 1 小节只有 pickupBeats 拍） */
     const lastTick = Math.max(1, ...props.grid.map((n) => n.startTick + n.ticks))
     const bars = barCountOf(lastTick, barOpt)
+
+    /* 小节号（谱面里的小节线由引擎画，这里只补号） */
     g.font = '10px ui-monospace, Consolas, monospace'
     g.textBaseline = 'middle'
+    g.fillStyle = 'rgba(60,60,60,0.55)'
     for (let b = 0; b <= bars; b++) {
       const ms = props.firstBeatMs + barStartTick(b, barOpt) * tickMs
-      const x = Math.round(xAt(ms)) + 0.5
-      if (x < -1 || x > size.w + 1) continue
-      g.strokeStyle = b === 0 ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.28)'
-      g.lineWidth = b === 0 ? 1.6 : 1
-      g.beginPath()
-      g.moveTo(x, PAD_TOP - 6)
-      g.lineTo(x, size.h - PAD_BOTTOM + 4)
-      g.stroke()
-      g.fillStyle = 'rgba(60,60,60,0.55)'
+      const x = xAt(ms)
+      if (x < LEFT - 1 || x > size.w + 1) continue
       g.fillText(String(b + 1), x + 3, PAD_TOP - 12)
-    }
-
-    /* 每小节的拍线（淡） */
-    for (let i = 0, t = 0; t <= lastTick; i++, t = i * 4) {
-      const ms = props.firstBeatMs + t * tickMs
-      const x = Math.round(xAt(ms)) + 0.5
-      if (x < 0 || x > size.w) continue
-      g.strokeStyle = 'rgba(0,0,0,0.07)'
-      g.lineWidth = 1
-      g.beginPath()
-      g.moveTo(x, PAD_TOP)
-      g.lineTo(x, size.h - PAD_BOTTOM)
-      g.stroke()
-    }
-
-    /* 谱面元素：音符 + 空隙补休止（一拍一个 `0`），长音用增时线/附点/连音线
-     * 口径同 `toJps`：增时线不能跨小节，跨小节要写连音线，所以这里按小节切段。 */
-    type Tok = { tick: number; kind: 'note' | 'rest'; midi?: number; ticks: number }
-    const toks: Tok[] = []
-    {
-      const sorted = [...props.grid].sort((a, b) => a.startTick - b.startTick)
-      const beatTicks = 4
-      let cursor = 0
-      for (const n of sorted) {
-        for (let t = cursor; t + beatTicks <= n.startTick; t += beatTicks) {
-          toks.push({ tick: t, kind: 'rest', ticks: beatTicks })
-        }
-        toks.push({ tick: n.startTick, kind: 'note', midi: n.midi, ticks: n.ticks })
-        cursor = Math.max(cursor, n.startTick + n.ticks)
-      }
-    }
-
-    g.textBaseline = 'alphabetic'
-    g.font = `${FONT_SIZE}px "Noto Serif SC", "Songti SC", serif`
-    for (const tk of toks) {
-      const startMs = props.firstBeatMs + tk.tick * tickMs
-      const x = xAt(startMs)
-      if (x < -40 || x > size.w + 40) continue
-      const y = LINE_Y
-      const m = marks(tk.ticks)
-      const num = tk.kind === 'note' && tk.midi !== undefined ? midiToNumber(tk.midi, props.tonic) : null
-      const text = num ? `${num.digit}${num.accidental}` : '0'
-
-      g.fillStyle = num ? '#1b1b1b' : 'rgba(70,70,70,0.72)'
-      g.fillText(text, x + 1, y)
-      const tw = g.measureText(text).width
-
-      /* 八度点 */
-      if (num) {
-        const dotR = 1.9
-        const dots = Math.abs(num.dots)
-        for (let i = 0; i < Math.min(3, dots); i++) {
-          g.beginPath()
-          const cy = num.dots > 0 ? y - FONT_SIZE - 3 - i * 6 : y + 5 + i * 6
-          g.arc(x + tw / 2, cy, dotR, 0, Math.PI * 2)
-          g.fill()
-        }
-      }
-
-      /* 减时线（写在数字下面） */
-      for (let i = 0; i < m.under; i++) {
-        const ly = y + 4 + i * 3
-        g.fillRect(x - 1, ly, Math.max(6, tw + 2), 1.4)
-      }
-
-      /* 增时线：按小节切段，跨小节处画连音弧（对应 jps 的 `( … )`） */
-      if (m.dash > 0) {
-        const endTick = tk.tick + tk.ticks
-        let segStart = tk.tick
-        let firstSeg = true
-        while (segStart < endTick) {
-          const barEnd = barStartTick(barIndexOf(segStart, barOpt) + 1, barOpt)
-          const segEnd = Math.min(endTick, barEnd)
-          const sx = firstSeg ? x + tw + 3 : xAt(props.firstBeatMs + segStart * tickMs) + 2
-          const ex = xAt(props.firstBeatMs + segEnd * tickMs)
-          g.fillStyle = 'rgba(27,27,27,0.9)'
-          g.fillRect(sx, y - 8, Math.max(4, ex - sx - 2), 1.6)
-          if (segEnd < endTick) {
-            const cx = xAt(props.firstBeatMs + segEnd * tickMs)
-            g.strokeStyle = '#1b1b1b'
-            g.lineWidth = 1.2
-            g.beginPath()
-            g.moveTo(cx - 11, y - 9)
-            g.quadraticCurveTo(cx, y - 21, cx + 11, y - 9)
-            g.stroke()
-          }
-          firstSeg = false
-          segStart = segEnd
-        }
-      }
-
-      /* 附点 */
-      for (let i = 0; i < m.dots; i++) {
-        const dx = x + tw + 3 + (m.dash > 0 ? 0 : i * 6)
-        const cy = m.dash > 0 ? y - 7.4 : y - 5
-        g.fillRect(dx, cy, 3, 3)
-      }
     }
 
     /* 播放头 */
@@ -225,11 +166,21 @@ export function StripPreview(props: Props) {
   return (
     <div className="pane strip" ref={wrapRef}>
       <span className="pane-label">简谱预览（流线谱：横轴即时间，改音立刻反映）</span>
-      <canvas
-        ref={canvasRef}
-        style={{ width: size.w, height: size.h }}
-        onClick={onClick}
-      />
+      <div className="strip-stage">
+        {image && (
+          <div
+            className="strip-svg"
+            style={{
+              left: xAt(image.startMs),
+              top: PAD_TOP,
+              width: image.width * image.scale,
+              height: image.height * image.scale,
+            }}
+            dangerouslySetInnerHTML={{ __html: image.svg }}
+          />
+        )}
+        <canvas ref={canvasRef} style={{ width: size.w, height: size.h }} onClick={onClick} />
+      </div>
     </div>
   )
 }

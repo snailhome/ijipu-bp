@@ -204,6 +204,34 @@ button.primary {
   cursor: text;
 }
 
+/* 谱面 SVG（引擎画）在下、覆盖层 canvas（小节号/播放头）在上 */
+.strip-stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.strip-svg {
+  position: absolute;
+  pointer-events: none;
+}
+
+.strip-svg svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 引擎页面自带白底 rect；预览条要透出纸色 */
+.strip-svg svg rect[data-page-bg] {
+  fill: transparent;
+}
+
+.strip-stage canvas {
+  position: absolute;
+  inset: 0;
+}
+
 /* 悬停行的信息牌（音名 + 简谱数字），贴在网格右上角 */
 .row-badge {
   position: absolute;

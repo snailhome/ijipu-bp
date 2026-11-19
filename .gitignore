@@ -8,6 +8,8 @@ src-tauri/gen/schemas/
 *.local
 .DS_Store
 .tmp-*
+# 扒谱方案文件（跟音频放一起，属于本机工作状态，不进仓库）
+*.bp.json
 .cache/
 spike/**/target/
 spike/**/target-b/
