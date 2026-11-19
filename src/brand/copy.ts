@@ -75,8 +75,8 @@ export const COPY = {
   settingsAnalyse: '分析',
   settingsAbout: '关于',
   stemsDownloadNow: '下载模型（302 MB，hf-mirror）',
-  stemsMissing: '分离模型还没装',
-  stemsMissingDll: '缺 ONNX Runtime 动态库 onnxruntime.dll',
+  stemsMissing: '分离模型还没装（缺 htdemucs_ft_vocals.onnx）',
+  stemsMissingDll: '缺 ONNX Runtime 动态库（onnxruntime.dll）：装模型包时会一起装到模型目录；也可以把它放到程序目录（跟 exe 同级）或模型目录，再点「重新检测」',
   stemsInstallHint:
     '装一次「爱扒谱 分离模型包」最省事；也可以自己去下模型，按下面这个路径放进去，再点「重新检测」。',
   stemsDownload: '打开下载页',

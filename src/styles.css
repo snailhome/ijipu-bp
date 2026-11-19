@@ -891,3 +891,42 @@ select option:checked {
   background: var(--accent);
   transition: width 0.2s linear;
 }
+
+/* ---------- 右栏宽度拖拽（用户 m07044） ---------- */
+.body {
+  grid-template-columns: minmax(0, 1fr) 300px;
+}
+
+.body.noside {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.body {
+  position: relative;
+}
+
+.side-resize {
+  /* 贴右栏左缘的一条带：绝对定位，不挤占网格布局 */
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: var(--side-w, 300px);
+  width: 6px;
+  margin-right: -3px;
+  cursor: col-resize;
+  z-index: 6;
+  background: transparent;
+}
+
+.side-resize:hover {
+  background: rgba(79, 209, 197, 0.35);
+}
+
+/* 设置图标用 iJipu 的「设置.png」，mask 上色，颜色跟其它按钮一致 */
+.tool-icon.gear {
+  width: 16px;
+  height: 16px;
+  background: currentColor;
+  -webkit-mask: url('/icons/设置.png') center / contain no-repeat;
+  mask: url('/icons/设置.png') center / contain no-repeat;
+}

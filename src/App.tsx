@@ -325,6 +325,13 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false)
   /* 右侧栏两种视图：扒谱用的「编辑」与前期一次性的「设置」（用户 m06889） */
   const [sideView, setSideView] = useState<'edit' | 'settings'>('edit')
+  /* 右侧栏宽度可拖（用户 m07044）；存 localStorage，下次进来还是这个宽度 */
+  const [sideW, setSideW] = useState(() => {
+    /* SSR（smoke 里 renderToString）没有 localStorage，先判一下 */
+    if (typeof localStorage === 'undefined') return 300
+    const v = Number(localStorage.getItem('bp.sideW') ?? '')
+    return Number.isFinite(v) && v >= 240 && v <= 760 ? v : 300
+  })
   /* 模型下载进度：0..1，null 表示没在下 */
   const [dl, setDl] = useState<number | null>(null)
 
@@ -1015,7 +1022,7 @@ export default function App() {
           title="设置"
           aria-label="设置"
         >
-          <Icon name="gear" />
+          <span className="tool-icon gear" aria-hidden="true" />
         </button>
         {/* 帮助：按键 / 快捷键 / 鼠标操作（用户 m05893） */}
         <button
@@ -1045,7 +1052,37 @@ export default function App() {
         </button>
       </div>
 
-      <div className={showSide ? "body" : "body noside"}>
+      <div className={showSide ? "body" : "body noside"} style={showSide ? ({ gridTemplateColumns: `minmax(0,1fr) ${sideW}px`, "--side-w": `${sideW}px` } as React.CSSProperties) : undefined}>
+        {/* 右栏宽度拖拽条（用户 m07044）：只在右栏打开时出现 */}
+        {showSide && (
+          <div
+            className="side-resize"
+            title="拖动调整右栏宽度（双击恢复 300）"
+            onDoubleClick={() => {
+              setSideW(300)
+              if (typeof localStorage !== 'undefined') localStorage.setItem('bp.sideW', '300')
+            }}
+            onPointerDown={(e) => {
+              e.preventDefault()
+              const startX = e.clientX
+              const startW = sideW
+              const move = (ev: PointerEvent) => {
+                const w = Math.min(760, Math.max(240, startW - (ev.clientX - startX)))
+                setSideW(w)
+              }
+              const up = () => {
+                window.removeEventListener('pointermove', move)
+                window.removeEventListener('pointerup', up)
+                setSideW((w) => {
+                  if (typeof localStorage !== 'undefined') localStorage.setItem('bp.sideW', String(w))
+                  return w
+                })
+              }
+              window.addEventListener('pointermove', move)
+              window.addEventListener('pointerup', up)
+            }}
+          />
+        )}
         <div className="main">
           <NoteRoll
             notes={notes}
@@ -1095,7 +1132,7 @@ export default function App() {
 
         {/* 设置页：前期/一次性的东西都收在这儿（用户 m06889） */}
         {sideView === 'settings' && (
-          <div className={showSide ? 'side' : 'side off'}>
+          <div className={showSide ? 'side' : 'side off'} style={{ width: sideW }}>
             <div className="side-title">{COPY.settingsTitle}</div>
 
             <SideGroup title={COPY.settingsAnalyse}>
@@ -1159,7 +1196,7 @@ export default function App() {
         <div
           className={showSide ? "side" : "side off"}
           ref={sideRef}
-          style={{ display: sideView === 'settings' ? 'none' : undefined }}
+          style={{ display: sideView === 'settings' ? 'none' : undefined, width: sideW }}
         >
           <div>
             <button className="group-head" onClick={() => setKeyOpen((v) => !v)} aria-expanded={keyOpen}>
@@ -1366,7 +1403,7 @@ export default function App() {
                 <input type="checkbox" checked={bandOnly} onChange={(e) => useBp.getState().setBandOnly(e.target.checked)} />
                 只看人声区（G3–C6）
               </label>
-              <div className="hint">口径同 noteDigger：颜色深度 = 值 ^ 对比 × 倍率。</div>
+              <div className="hint">颜色深度 = 值 ^ 对比 × 倍率。</div>
             </div>
           </SideGroup>
 
