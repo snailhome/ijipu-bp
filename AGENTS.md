@@ -51,7 +51,8 @@ npm run smoke
   这样 Node 冒烟才盖得到。
 - 只在本文件之外读 `window.__TAURI__` 的**唯一入口**是 `src/brand/env.ts`。
 - 播放头由 `AudioContext.currentTime` 推算，**不要用 rAF 累加时间**（会漂）。
-- 版本号三处一致：`package.json`、`src-tauri/tauri.conf.json`、`src/brand/version.ts`。
+- 版本号由 `scripts/auto-version.mjs` 在打包前自动升（见 §九），**不要手改**；
+  需要核对时看 `package.json`、`src-tauri/tauri.conf.json`、`src/brand/version.ts` 三处是否一致。
 - **扒谱主界面是 `src/ui/NoteRoll.tsx` 的"音高 × 时间"表格**（用户 2026-11-18 明确要求：
   不要带状波形，要 noteDigger 那种左侧钢琴键盘 + 横向时间轴 + 纵向音名，点格子能试听）。
   改这个组件就是改产品的主交互，动手前先想清楚"扒谱要反复核对：听原音频 → 定音高/时值 →
@@ -124,4 +125,16 @@ npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM 
 源图 `D:\Coding\JianpuScript\矢量图\Logo-bp.png`。窗口/任务栏图标在 `src-tauri/src/lib.rs`
 的 `.setup()` 里 `win.set_icon(...)`（注意：tauri 2.12 **没有** `Builder::icon`，且 `Cargo.toml`
 要开 `features = ["image-png"]`）；exe 图标来自 `src-tauri/icons/icon.ico`（`tauri icon` 生成）；
-界面里是 `public/icons/Logo-bp.png`。换图要**两处都更新**再重编，否则会出现"exe 换了、标题栏没换"。
+界面里是 `public/icons/logo-bp.png`。换图要**两处都更新**再重编，否则会出现"exe 换了、标题栏没换"。
+
+## 九、应用名与版本号（用户 2026-11-19 定，各子应用统一）
+
+- **安装目录 / 安装包名 = `productName`**：本应用是 `iJipuBP`（不再是「爱扒谱」）。
+  显示名（顶栏、窗口标题、开始菜单快捷方式）仍是「爱扒谱 · iJipu BP」，别改。
+- **exe = Cargo 包名**：本应用 `ijipu-bp` → `ijipu-bp.exe`（不要改成带点的 `iJipuBP.exe`）。
+- **图标文件名 `logo-bp.png`**（小写 logo-），`public/icons/` 下那份被 `index.html`、`App.tsx`、
+  `lib.rs` 的 `include_bytes!` 三处引用；改名要三处一起改。
+- **版本号自动升**：`scripts/auto-version.mjs`，SemVer；`feat`→MINOR、修复→PATCH、
+  破坏性→MAJOR、只改文档不升。**打包前跑 `npm run tauri:build` 会自动升**（脚本已接在里面），
+  升完把版本文件一起提交；不要再手改 `package.json` / `tauri.conf.json` / `src/brand/version.ts` 三处号。
+  基线：0.2.0（2026-11-19，用户拍板）。

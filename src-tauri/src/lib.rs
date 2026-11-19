@@ -107,7 +107,7 @@ pub fn run() {
             // 取不到窗口就跳过：图标不是功能，不该拦住启动。
             if let Some(win) = app.get_webview_window("main") {
                 if let Ok(icon) =
-                    tauri::image::Image::from_bytes(include_bytes!("../../public/icons/Logo-bp.png"))
+                    tauri::image::Image::from_bytes(include_bytes!("../../public/icons/logo-bp.png"))
                 {
                     let _ = win.set_icon(icon);
                 }

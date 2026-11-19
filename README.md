@@ -169,8 +169,8 @@ scripts/        引擎同步、冒烟、诊断、界面点按自测（ui-probe.m
 
 | 用在哪儿 | 由什么决定 |
 |---|---|
-| 窗口标题栏、任务栏 | `src-tauri/src/lib.rs` 的 `.setup()` 里 `win.set_icon(...)`，读 `public/icons/Logo-bp.png` |
-| 顶栏品牌 | `src/App.tsx` 的 `<img className="brand-logo" src="/icons/Logo-bp.png">` |
+| 窗口标题栏、任务栏 | `src-tauri/src/lib.rs` 的 `.setup()` 里 `win.set_icon(...)`，读 `public/icons/logo-bp.png` |
+| 顶栏品牌 | `src/App.tsx` 的 `<img className="brand-logo" src="/icons/logo-bp.png">` |
 | exe 文件图标 | `src-tauri/icons/icon.ico`（编译期由 tauri-build 嵌进 exe） |
 | 安装包快捷方式 | 沿用 exe 图标，无需另设 |
 | 浏览器标签页 | `index.html` 的 `<link rel="icon">` |
@@ -179,7 +179,7 @@ scripts/        引擎同步、冒烟、诊断、界面点按自测（ui-probe.m
 
 ```powershell
 npm run tauri -- icon "D:\Coding\JianpuScript\矢量图\Logo-bp.png" --fit contain   # 生成 src-tauri/icons/*
-Copy-Item "D:\Coding\JianpuScript\矢量图\Logo-bp.png" public\icons\Logo-bp.png -Force
+Copy-Item "D:\Coding\JianpuScript\矢量图\Logo-bp.png" public\icons\logo-bp.png -Force
 npm run tauri:build -- --no-bundle   # 重编后 exe 图标才变
 ```
 
@@ -216,7 +216,7 @@ builder 上（编译报 `no method named 'icon'`），要在 `.setup()` 里拿�
 
 ```rust
 if let Some(win) = app.get_webview_window("main") {
-    if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../public/icons/Logo-bp.png")) {
+    if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../public/icons/logo-bp.png")) {
         let _ = win.set_icon(icon);
     }
 }

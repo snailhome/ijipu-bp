@@ -943,8 +943,8 @@ export default function App() {
     <div className="app">
       <div className="toolbar">
         <span className="brand">
-          {/* 顶栏图标 = 品牌图标（Logo-bp.png；窗口/任务栏图标由 src-tauri/icons 决定） */}
-          <img className="brand-logo" src="/icons/Logo-bp.png" alt={COPY.appName} />
+          {/* 顶栏图标 = 品牌图标（logo-bp.png；窗口/任务栏图标由 src-tauri/icons 决定） */}
+          <img className="brand-logo" src="/icons/logo-bp.png" alt={COPY.appName} />
           <span className="brand-text">
             {COPY.appName}
             <small>
