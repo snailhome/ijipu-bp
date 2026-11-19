@@ -521,17 +521,19 @@ export function NoteRoll(props: Props) {
       if (midi < MIDI_LOW) break
       const y = RULER_H + r * ROW_H
       const cls = ((midi % 12) + 12) % 12
-      /* 键上文字：音名模式只标 C（和以前一样）；数字模式按当前调式标音级 */
+      /* 键上文字（用户 m05224）：
+       *  · 只在**白格行**写（黑格行一律不写，因为黑键只占右边 62%，左边那半格其实属于上下两个白键）
+       *  · 位置取这一格白键左块的**竖直正中**（L/J/T 的那条"腿"的中间），不是行中心 */
+      if (BLACK.has(cls)) continue
       const num = midiToNumber(midi, props.tonic)
       const showNum = props.pitchMode === 'number' && num.accidental === ''
       const showName = props.pitchMode === 'name' && (cls === 0 || midi === MIDI_LOW)
-      if (showNum || showName) {
-        /* 文字都写在键列左边的白区里（黑键只占右边 62%），所以一律用深色 */
-        g.fillStyle = 'rgba(30,44,60,0.9)'
-        g.font = FONT
-        g.textBaseline = 'middle'
-        g.fillText(showNum ? num.text : midiToName(midi), 5, y + ROW_H / 2)
-      }
+      if (!showNum && !showName) continue
+      const { t, b } = bandOf(cls, y)
+      g.fillStyle = 'rgba(30,44,60,0.9)'
+      g.font = FONT
+      g.textBaseline = 'middle'
+      g.fillText(showNum ? num.text : midiToName(midi), 5, (t + b) / 2)
     }
     g.fillStyle = 'rgba(8,12,18,0.9)'
     g.fillRect(KEY_W - 1, RULER_H, 1, metrics.h - RULER_H)
