@@ -64,6 +64,8 @@ interface State {
   gain: number
   /** 热力图对比（指数） */
   contrast: number
+  /** 只看人声区（G3–C6，约 196–1047Hz）· 减少伴奏干扰（用户 m06504 的便宜方案） */
+  bandOnly: boolean
   /** 去谐波强度 0..1（0 = 不做） */
   suppress: number
   autoNotes: boolean
@@ -104,6 +106,7 @@ interface State {
   setLockPitch: (b: boolean) => void
   setGain: (g: number) => void
   setContrast: (c: number) => void
+  setBandOnly: (b: boolean) => void
   setSuppress: (s: number) => void
   setAutoNotes: (b: boolean) => void
   /** 用当前谱再跑一次节奏分析，并把 BPM/首拍/拍号写回去 */
@@ -225,6 +228,7 @@ export const useBp = create<State>((set, get) => ({
   lockPitch: false,
   gain: 1,
   contrast: 1.4,
+  bandOnly: false,
   suppress: 0,
   autoNotes: false,
   rhythm: null,
@@ -321,6 +325,7 @@ export const useBp = create<State>((set, get) => ({
     applyDerived(set, get)
   },
   setContrast: (c) => set({ contrast: Math.max(0.2, Math.min(4, c)) }),
+  setBandOnly: (b) => set({ bandOnly: b }),
   setTonic: (t) => {
     set({ tonic: t, autoTonic: false })
     applyDerived(set, get)

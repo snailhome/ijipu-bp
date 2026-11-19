@@ -24,6 +24,8 @@ import type { EditMode, LoopRange, RawNote, SnapMode, Spectrum } from '../model/
 interface Props {
   notes: RawNote[]
   spectrum: Spectrum | null
+  /** 只看人声区（G3–C6）：区外的格子压暗到 0.12，减少伴奏干扰 */
+  bandOnly: boolean
   durationMs: number
   bpm: number
   beatsPerBar: number
@@ -143,7 +145,7 @@ type Drag =
   | { kind: 'key'; midi: number }
 
 export function NoteRoll(props: Props) {
-  const { notes, spectrum, durationMs, view, playMs, mode } = props
+  const { notes, spectrum, durationMs, view, playMs, mode, bandOnly } = props
   const wrapRef = useRef<HTMLDivElement | null>(null)
   /* 画布自己的容器：尺寸必须按它量，不能按整块面板量（面板里还有标题条和滚动条，
    * 按面板量会让画布被 flex 压扁，点击 y 坐标跟着错行 —— 用户 m04792 第二条） */
@@ -295,8 +297,10 @@ export function NoteRoll(props: Props) {
           }
           const t = shade((displayValue(v) - norm.lo) / norm.span, props.gain, props.contrast)
           if (t <= 0.02) continue
+          /* 只看人声区：G3(55)–C6(84) 之外压暗到 0.12，减少伴奏干扰（用户 m06504 的便宜方案） */
+          const outOfBand = bandOnly && (midi < 55 || midi > 84)
           const [cr, cg, cb] = heatColor(t)
-          g.fillStyle = `rgb(${cr},${cg},${cb})`
+          g.fillStyle = outOfBand ? `rgba(${cr},${cg},${cb},0.12)` : `rgb(${cr},${cg},${cb})`
           const x0 = Math.max(metrics.left, x)
           const x1 = Math.min(metrics.w, x + cellW)
           if (x1 <= x0) continue

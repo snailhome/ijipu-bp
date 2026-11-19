@@ -253,6 +253,7 @@ export default function App() {
   const futureLen = useBp((s) => s.future.length)
   const gain = useBp((s) => s.gain)
   const contrast = useBp((s) => s.contrast)
+  const bandOnly = useBp((s) => s.bandOnly)
   const suppress = useBp((s) => s.suppress)
   const autoNotes = useBp((s) => s.autoNotes)
   const rhythm = useBp((s) => s.rhythm)
@@ -889,6 +890,7 @@ export default function App() {
             loopOn={loopOn}
             gain={gain}
             contrast={contrast}
+            bandOnly={bandOnly}
             selectedId={selectedId}
             onSelect={setSelectedId}
             onSeek={seek}
@@ -1085,6 +1087,10 @@ export default function App() {
                 <span className="hint" style={{ width: 30, textAlign: 'right' }}>
                   {contrast.toFixed(2)}
                 </span>
+              </label>
+              <label className="check" title="只把 G3–C6（约 196–1047Hz）的格子画亮：伴奏在低音区/高频的泛音会被压暗">
+                <input type="checkbox" checked={bandOnly} onChange={(e) => useBp.getState().setBandOnly(e.target.checked)} />
+                只看人声区（G3–C6）
               </label>
               <div className="hint">口径同 noteDigger：颜色深度 = 值 ^ 对比 × 倍率。</div>
             </div>

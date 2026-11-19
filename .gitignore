@@ -8,3 +8,7 @@ src-tauri/gen/schemas/
 *.local
 .DS_Store
 .tmp-*
+.cache/
+spike/**/target/
+spike/**/target-b/
+.cache/
