@@ -11,6 +11,7 @@
  *  · 最后一小节不足 → 用休止补满
  */
 import { midiToNumber, keyJpsName } from '../analysis/pitchNames'
+import { barCountOf, barIndexOf, barStartTick, barTicksAt } from './bars'
 import { TICKS_PER_BEAT } from './quantize'
 import type { GridNote, GridOptions } from '../model/types'
 
@@ -63,20 +64,21 @@ interface Segment {
 
 /** 主入口：生成 jps 文本 */
 export function toJps(notes: GridNote[], opt: JpsOptions): string {
-  const barTicks = Math.max(1, opt.beatsPerBar) * TICKS_PER_BEAT
+  /* 小节边界含弱起：第 1 小节只有 pickupBeats 拍，从第 2 小节起才是整小节 */
   const barCount = Math.max(
     1,
-    ...notes.map((n) => Math.ceil((n.startTick + n.ticks) / barTicks)),
+    ...notes.map((n) => barCountOf(n.startTick + n.ticks, opt)),
   )
 
-  // 1) 按小节切片
+  // 1) 按小节切片（跨小节处在小节线切开，后面用连音线连起来）
   const segments: Segment[] = []
   notes.forEach((n, noteIndex) => {
     let cursor = n.startTick
     let left = n.ticks
     while (left > 0) {
-      const bar = Math.floor(cursor / barTicks)
-      const inBar = cursor - bar * barTicks
+      const bar = barIndexOf(cursor, opt)
+      const barTicks = barTicksAt(bar, opt)
+      const inBar = cursor - barStartTick(bar, opt)
       const take = Math.min(left, barTicks - inBar)
       segments.push({ midi: n.midi, bar, start: inBar, ticks: take, noteIndex })
       cursor += take
@@ -109,6 +111,7 @@ export function toJps(notes: GridNote[], opt: JpsOptions): string {
   }
 
   for (let bar = 0; bar < barCount; bar++) {
+    const barTicks = barTicksAt(bar, opt)
     const items = segments.filter((s) => s.bar === bar).sort((a, b) => a.start - b.start)
     let cursor = 0
     for (const item of items) {

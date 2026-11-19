@@ -81,6 +81,8 @@ interface State {
   autoTonic: boolean
   bpm: number
   beatsPerBar: number
+  /** 弱起拍数（0 = 第 1 小节也是整小节；>0 则第 1 小节只有这么多拍） */
+  pickupBeats: number
   firstBeatMs: number
   title: string
   /* 派生 */
@@ -114,6 +116,7 @@ interface State {
   setTonic: (t: number) => void
   setBpm: (b: number) => void
   setBeatsPerBar: (b: number) => void
+  setPickupBeats: (n: number) => void
   setFirstBeatMs: (ms: number) => void
   setTitle: (s: string) => void
   setParseErrors: (e: string[]) => void
@@ -150,7 +153,7 @@ interface State {
 function derive(
   s: Pick<
     State,
-    'notes' | 'bpm' | 'beatsPerBar' | 'firstBeatMs' | 'tonic' | 'title'
+    'notes' | 'bpm' | 'beatsPerBar' | 'pickupBeats' | 'firstBeatMs' | 'tonic' | 'title'
   >,
 ) {
   // 只有确认过的音才进谱面（用户 m01788 第 9 条）
@@ -158,11 +161,13 @@ function derive(
   const q = quantize(confirmed, {
     bpm: s.bpm,
     beatsPerBar: s.beatsPerBar,
+    pickupBeats: s.pickupBeats,
     firstBeatMs: s.firstBeatMs,
   })
   const jps = toJps(q.notes, {
     bpm: s.bpm,
     beatsPerBar: s.beatsPerBar,
+    pickupBeats: s.pickupBeats,
     firstBeatMs: s.firstBeatMs,
     tonic: s.tonic,
     title: s.title,
@@ -240,6 +245,7 @@ export const useBp = create<State>((set, get) => ({
   autoTonic: true,
   bpm: 100,
   beatsPerBar: 4,
+  pickupBeats: 0,
   firstBeatMs: 0,
   title: '爱扒谱导出',
   grid: [],
@@ -335,7 +341,14 @@ export const useBp = create<State>((set, get) => ({
     applyDerived(set, get)
   },
   setBeatsPerBar: (b) => {
-    set({ beatsPerBar: Math.max(1, Math.min(12, b)) })
+    const per = Math.max(1, Math.min(12, b))
+    /* 弱起必须比一小节少：拍号改小后顺手把弱起钳回来，避免出现"弱起 5 拍 / 每小节 4 拍" */
+    set({ beatsPerBar: per, pickupBeats: Math.min(get().pickupBeats, per - 1) })
+    applyDerived(set, get)
+  },
+  setPickupBeats: (n) => {
+    const per = Math.max(1, Math.min(12, get().beatsPerBar))
+    set({ pickupBeats: Math.max(0, Math.min(per - 1, Math.round(n))) })
     applyDerived(set, get)
   },
   setFirstBeatMs: (ms) => {

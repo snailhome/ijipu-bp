@@ -8,10 +8,12 @@
  * 量化单位固定 1/16 拍（1 tick = 1/4 拍）：简谱的时值都是 2^-n 与附点，
  * 1/16 拍已经够表达 16 分音符和附点八分；三连音写不出来，会进 warnings。
  */
+import { barCountOf } from './bars'
+import { TICKS_PER_BEAT } from './ticks'
 import type { GridNote, GridOptions, RawNote } from '../model/types'
 
-/** 每拍多少 tick（1 tick = 1/4 拍 = 16 分音符） */
-export const TICKS_PER_BEAT = 4
+/** 每拍多少 tick（1 tick = 1/4 拍 = 16 分音符）；常量已挪到 ticks.ts，这里仅为兼容旧引用 */
+export { TICKS_PER_BEAT } from './ticks'
 
 export interface QuantizeResult {
   notes: GridNote[]
@@ -56,10 +58,10 @@ export function quantize(notes: RawNote[], opt: GridOptions): QuantizeResult {
   }
   if (overlaps > 0) warnings.push(`${overlaps} 处音符重叠，已按后一个音截短前一个`)
 
-  const barTicks = Math.max(1, opt.beatsPerBar) * TICKS_PER_BEAT
   let maxTick = 0
   for (const n of raw) maxTick = Math.max(maxTick, n.startTick + n.ticks)
-  const barCount = Math.max(1, Math.ceil(maxTick / barTicks))
+  /* 小节边界含弱起：第 1 小节可能只有几拍（口径见 jps/bars.ts） */
+  const barCount = barCountOf(maxTick, opt)
 
   return { notes: raw, warnings, barCount }
 }

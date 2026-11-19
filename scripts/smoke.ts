@@ -197,6 +197,26 @@ const melody = concat([
   if (process.argv.includes('--show')) console.log(`跨小节样例：${qLine}`)
 }
 
+/* ---------------- 10.5 弱起：第 1 小节只装 pickupBeats 拍 ---------------- */
+{
+  const raws: RawNote[] = [
+    { id: 'a', midi: 60, startMs: 0, endMs: 500, velocity: 0.6, confirmed: true },
+    { id: 'b', midi: 64, startMs: 500, endMs: 1000, velocity: 0.6, confirmed: true },
+    { id: 'c', midi: 67, startMs: 1000, endMs: 2000, velocity: 0.6, confirmed: true },
+    { id: 'd', midi: 72, startMs: 2000, endMs: 2500, velocity: 0.6, confirmed: true },
+  ]
+  const opt = { bpm: 120, beatsPerBar: 4, pickupBeats: 2, firstBeatMs: 0 }
+  const q = quantize(raws, opt)
+  const jps = toJps(q.notes, { ...opt, tonic: 0, title: '弱起' })
+  const qLine = jps.split('\n').find((l) => l.startsWith('Q: ')) ?? ''
+  const errors = parseJps(jps).errors.map((e) => (typeof e === 'string' ? e : (e.message ?? '')))
+  check(
+    "弱起 2 拍：首小节只装 2 拍（1 3 | 5- 1' 0）且引擎 0 错误",
+    qLine === "Q: 1 3 | 5- 1' 0" && errors.length === 0,
+    `${qLine}｜错=${errors.join('；')}`,
+  )
+}
+
 /* ---------------- 11. 空输入不炸 ---------------- */
 {
   const r = analyzeSamples(new Float32Array(SR), SR)

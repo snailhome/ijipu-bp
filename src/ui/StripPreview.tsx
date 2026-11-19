@@ -11,6 +11,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { midiToNumber } from '../analysis/pitchNames'
+import { barCountOf, barIndexOf, barStartTick } from '../jps/bars'
 import { marks } from '../jps/marks'
 import { beatMs } from '../jps/snap'
 import { msToX, xToMs } from './timeAxis'
@@ -21,6 +22,8 @@ interface Props {
   grid: GridNote[]
   bpm: number
   beatsPerBar: number
+  /** 弱起拍数：第 1 小节的小节线/小节号要少画几拍（0 = 整小节） */
+  pickupBeats: number
   firstBeatMs: number
   durationMs: number
   view: View
@@ -72,16 +75,16 @@ export function StripPreview(props: Props) {
     g.fillRect(0, 0, LEFT, size.h)
 
     const beat = beatMs(props.bpm)
-    const barTicks = Math.max(1, props.beatsPerBar) * 4
+    const barOpt = { beatsPerBar: props.beatsPerBar, pickupBeats: props.pickupBeats }
     const tickMs = beat / 4
 
-    /* 小节线 + 小节号 */
+    /* 小节线 + 小节号（含弱起：第 1 小节只有 pickupBeats 拍） */
     const lastTick = Math.max(1, ...props.grid.map((n) => n.startTick + n.ticks))
-    const bars = Math.max(1, Math.ceil(lastTick / barTicks))
+    const bars = barCountOf(lastTick, barOpt)
     g.font = '10px ui-monospace, Consolas, monospace'
     g.textBaseline = 'middle'
     for (let b = 0; b <= bars; b++) {
-      const ms = props.firstBeatMs + b * barTicks * tickMs
+      const ms = props.firstBeatMs + barStartTick(b, barOpt) * tickMs
       const x = Math.round(xAt(ms)) + 0.5
       if (x < -1 || x > size.w + 1) continue
       g.strokeStyle = b === 0 ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.28)'
@@ -163,7 +166,7 @@ export function StripPreview(props: Props) {
         let segStart = tk.tick
         let firstSeg = true
         while (segStart < endTick) {
-          const barEnd = (Math.floor(segStart / barTicks) + 1) * barTicks
+          const barEnd = barStartTick(barIndexOf(segStart, barOpt) + 1, barOpt)
           const segEnd = Math.min(endTick, barEnd)
           const sx = firstSeg ? x + tw + 3 : xAt(props.firstBeatMs + segStart * tickMs) + 2
           const ex = xAt(props.firstBeatMs + segEnd * tickMs)

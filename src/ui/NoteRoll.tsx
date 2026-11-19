@@ -15,7 +15,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BIN_COUNT, MIDI_HIGH, MIDI_LOW, keyJpsName, midiToName, midiToNumber } from '../analysis/pitchNames'
 import { displayValue } from '../analysis/spectrum'
-import { beatMs, snapMs, snapStepMs } from '../jps/snap'
+import { beatMs, snapMs, snapMsFloor } from '../jps/snap'
+import { barStartTick, isBarStartTick } from '../jps/bars'
 import { COPY } from '../brand/copy'
 import { msToX, pickTickSeconds, spanMs, xToMs } from './timeAxis'
 import type { PitchMode, View } from '../model/store'
@@ -29,6 +30,8 @@ interface Props {
   durationMs: number
   bpm: number
   beatsPerBar: number
+  /** 弱起拍数：第 1 小节拍线/小节号要按它少画几拍（0 = 整小节） */
+  pickupBeats: number
   firstBeatMs: number
   pitchMode: PitchMode
   tonic: number
@@ -336,7 +339,7 @@ export function NoteRoll(props: Props) {
     /* 3) 时间格：小节线实线最亮、拍线实线、1/4 拍虚线 */
     if (props.bpm > 0) {
       const first = props.firstBeatMs
-      const perBar = beat * Math.max(1, props.beatsPerBar)
+      const barOpt = { beatsPerBar: props.beatsPerBar, pickupBeats: props.pickupBeats }
       const span = spanMs(view, durationMs)
       /* 3a) 1/4 拍虚线 */
       const quarter = beat / 4
@@ -365,7 +368,7 @@ export function NoteRoll(props: Props) {
         if (ms < 0 || ms > durationMs) continue
         const x = Math.round(xAt(ms)) + 0.5
         if (x < metrics.left || x > metrics.w) continue
-        const isBar = ((i % Math.max(1, props.beatsPerBar)) + props.beatsPerBar) % props.beatsPerBar === 0
+        const isBar = isBarStartTick(i * 4, barOpt)
         g.strokeStyle = isBar ? 'rgba(150,200,255,0.50)' : 'rgba(255,255,255,0.16)'
         g.lineWidth = isBar ? 1.5 : 1
         g.beginPath()
@@ -374,7 +377,6 @@ export function NoteRoll(props: Props) {
         g.stroke()
       }
       g.lineWidth = 1
-      void perBar
     }
 
     /* 4) 重复区间：琥珀色半透明块 + 两端握柄（可以拖着改长短）
@@ -498,16 +500,17 @@ export function NoteRoll(props: Props) {
     }
     if (props.bpm > 0) {
       const beat = beatMs(props.bpm)
-      const perBar = beat * Math.max(1, props.beatsPerBar)
-      const firstBar = props.firstBeatMs
-      for (let i = 0; ; i++) {
-        const ms = firstBar + i * perBar
+      const tickMs = beat / 4
+      const barOpt = { beatsPerBar: props.beatsPerBar, pickupBeats: props.pickupBeats }
+      for (let bar = 0; ; bar++) {
+        /* 小节线不是等宽的：弱起时第 1 小节只占 pickupBeats 拍 */
+        const ms = props.firstBeatMs + barStartTick(bar, barOpt) * tickMs
         if (ms > durationMs) break
         if (ms < 0) continue
         const x = xAt(ms)
         if (x < metrics.left || x > metrics.w) continue
         g.fillStyle = 'rgba(140,200,255,0.9)'
-        g.fillText(String(i + 1), x + 3, RULER_H - 5)
+        g.fillText(String(bar + 1), x + 3, RULER_H - 5)
       }
     }
 
@@ -647,6 +650,7 @@ export function NoteRoll(props: Props) {
     props.gain,
     props.contrast,
     props.beatsPerBar,
+    props.pickupBeats,
     props.firstBeatMs,
     props.loop,
     props.selectedId,
@@ -758,7 +762,7 @@ export function NoteRoll(props: Props) {
           return
         }
         /* 时间尺：点一下 = 把播放头挪到这里并准备播放；按住拖 = 圈出播放区间（拖到哪算到哪） */
-        const ms = snapMs(msAt(x), { bpm: props.bpm, beatsPerBar: props.beatsPerBar, firstBeatMs: props.firstBeatMs }, 'off')
+        const ms = snapMs(msAt(x), { bpm: props.bpm, beatsPerBar: props.beatsPerBar, pickupBeats: props.pickupBeats, firstBeatMs: props.firstBeatMs }, 'off')
         drag.current = { kind: 'loop', anchorMs: ms, moved: false }
         props.onSeek(ms)
         return
@@ -812,14 +816,10 @@ export function NoteRoll(props: Props) {
       props.onAudition(midiAt(y))
       props.onSeek(rawMs)
       if (!draw) return
-      const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, firstBeatMs: props.firstBeatMs }
+      const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, pickupBeats: props.pickupBeats, firstBeatMs: props.firstBeatMs }
       /* 起点取"光标所在的那一格"（向下取整），不是最近的格点 ——
        * 否则点在格子后半段时，新音会跑到十字准星右边一格，用户看到的就是"偏右上角"。 */
-      const step = snapStepMs(opt, props.snap)
-      const startMs =
-        step > 0
-          ? Math.max(0, props.firstBeatMs + Math.floor((rawMs - props.firstBeatMs) / step) * step)
-          : rawMs
+      const startMs = snapMsFloor(rawMs, opt, props.snap)
       const id = props.onAdd({
         midi: midiAt(y),
         startMs,
@@ -852,7 +852,7 @@ export function NoteRoll(props: Props) {
         e.currentTarget.style.cursor = lh === 'l' || lh === 'r' || edge ? 'ew-resize' : 'default'
         return
       }
-      const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, firstBeatMs: props.firstBeatMs }
+      const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, pickupBeats: props.pickupBeats, firstBeatMs: props.firstBeatMs }
       if (d.kind === 'scrub') {
         props.onSeek(snapMs(msAt(x), opt, props.snap))
         return

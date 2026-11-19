@@ -61,6 +61,12 @@ export interface GridOptions {
   beatsPerBar: number
   /** 首拍在音频里的绝对毫秒 */
   firstBeatMs: number
+  /**
+   * 弱起拍数（0 = 没有弱起，第 1 小节也是整小节）。
+   * 大于 0 时**第 1 小节只有这么多拍**，从第 2 小节起才是 beatsPerBar 拍；
+   * 引擎侧首小节允许不完整（只要求整数拍），所以量化轴不用平移，只改小节边界。
+   */
+  pickupBeats?: number
 }
 
 /** 频谱（帧 × 音高 bin），data 是行优先的 Float32Array */

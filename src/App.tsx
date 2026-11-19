@@ -30,6 +30,7 @@ import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
 import { PAGE_MS, useBp } from './model/store'
+import { barIndexOf, barStartTick } from './jps/bars'
 import { spanMs } from './ui/timeAxis'
 import type { AnalyzeResult, LoopRange, SnapMode, Spectrum } from './model/types'
 import { NoteRoll } from './ui/NoteRoll'
@@ -313,6 +314,7 @@ export default function App() {
   const tonic = useBp((s) => s.tonic)
   const bpm = useBp((s) => s.bpm)
   const beatsPerBar = useBp((s) => s.beatsPerBar)
+  const pickupBeats = useBp((s) => s.pickupBeats)
   const firstBeatMs = useBp((s) => s.firstBeatMs)
   const title = useBp((s) => s.title)
   const jps = useBp((s) => s.jps)
@@ -660,15 +662,17 @@ export default function App() {
     seek(st.loopOn && st.loop ? st.loop.startMs : 0)
   }, [seek, set])
 
-  /* Ctrl+左右：按小节跳（用户 m05893） */
+  /* Ctrl+左右：按小节跳（用户 m05893）；弱起时第 1 小节只有 pickupBeats 拍，要按真实边界算 */
   const jumpBar = useCallback(
     (dir: -1 | 1) => {
       const st = set.getState()
-      const barMs = (60000 / Math.max(1, st.bpm)) * Math.max(1, st.beatsPerBar)
-      const idx = Math.floor((st.currentMs - st.firstBeatMs) / barMs)
+      const barOpt = { beatsPerBar: st.beatsPerBar, pickupBeats: st.pickupBeats }
+      const tickMs = 60000 / Math.max(1, st.bpm) / 4
+      const tick = Math.max(0, (st.currentMs - st.firstBeatMs) / tickMs)
+      const bar = Math.max(0, barIndexOf(tick, barOpt) + dir)
       const target = Math.max(
         0,
-        Math.min(st.durationMs, st.firstBeatMs + (idx + dir) * barMs),
+        Math.min(st.durationMs, st.firstBeatMs + barStartTick(bar, barOpt) * tickMs),
       )
       seek(target)
     },
@@ -1090,6 +1094,7 @@ export default function App() {
             durationMs={durationMs}
             bpm={bpm}
             beatsPerBar={beatsPerBar}
+            pickupBeats={pickupBeats}
             firstBeatMs={firstBeatMs}
             pitchMode={pitchMode}
             tonic={tonic}
@@ -1121,6 +1126,7 @@ export default function App() {
             grid={grid}
             bpm={bpm}
             beatsPerBar={beatsPerBar}
+            pickupBeats={pickupBeats}
             firstBeatMs={firstBeatMs}
             durationMs={durationMs}
             view={view}
@@ -1352,6 +1358,19 @@ export default function App() {
                   onChange={(e) => useBp.getState().setBeatsPerBar(Number(e.target.value))}
                 />
                 / 4
+              </label>
+              <label className="field" title={COPY.pickupTip}>
+                {COPY.pickupLabel}
+                <select
+                  value={pickupBeats}
+                  onChange={(e) => useBp.getState().setPickupBeats(Number(e.target.value))}
+                >
+                  {Array.from({ length: Math.max(1, beatsPerBar) }, (_, i) => (
+                    <option key={i} value={i}>
+                      {i === 0 ? COPY.pickupNone : `${i} 拍`}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="field">
                 {COPY.firstBeatLabel}
