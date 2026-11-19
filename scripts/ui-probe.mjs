@@ -797,6 +797,59 @@ try {
     check('按黑键：黑键那块变黄、左边白区不变', false, '没找到黑键行')
   }
 
+  /* ── 白键高亮要按 L/J/T 的形状，不是矩形（用户 m05078） ──
+   * 取一个 D（两个黑键之间的白键，T 形）：在它竖直中心上方半格处，左边白区应变黄、
+   * 右边黑键那块仍是黑的；在本格中心，左右两边都应是黄的。 */
+  const shapePt = await cdp.eval(`(() => {
+    const c = document.querySelector('.pane.roll canvas')
+    const r = c.getBoundingClientRect()
+    const m = window.__bpRoll
+    const ROW_H = 14
+    /* 从顶行往下找一个 D（音级 2） */
+    let midi = null
+    for (let d = 0; d < (m.rows || 20); d++) {
+      const mm = m.top - d
+      if (((mm % 12) + 12) % 12 === 2) { midi = mm; break }
+    }
+    if (midi === null) return null
+    const rowTop = m.rulerH + (m.top - midi) * ROW_H
+    return {
+      midi,
+      x: r.x + r.width * 0.5,
+      yMid: r.y + rowTop + ROW_H / 2,
+      yAbove: r.y + rowTop - ROW_H / 4,
+      sx: c.width / parseFloat(c.style.width || String(c.width)),
+      sy: c.height / parseFloat(c.style.height || String(c.height)),
+      rowTop,
+    }
+  })()`)
+  if (shapePt) {
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: shapePt.x, y: shapePt.yMid, button: 'none', buttons: 0 })
+    await sleep(250)
+    const shapePx = await cdp.eval(`(() => {
+      const c = document.querySelector('.pane.roll canvas')
+      const g = c.getContext('2d')
+      const sx = ${shapePt.sx}, sy = ${shapePt.sy}
+      const pick = (wx, wy) => { const d = g.getImageData(Math.round(wx * sx), Math.round(wy * sy), 1, 1).data; return [d[0], d[1], d[2]] }
+      return {
+        armLeft: pick(6, ${shapePt.rowTop} - 3.5),
+        armRight: pick(58, ${shapePt.rowTop} - 3.5),
+        midLeft: pick(6, ${shapePt.rowTop} + 7),
+        midRight: pick(58, ${shapePt.rowTop} + 7),
+      }
+    })()`)
+    const yellowish = (c) => c[0] > 220 && c[1] > 150 && c[1] < 215 && c[2] < 110
+    check('白键高亮是 T 形：上半格只有左边变黄（右边是黑键）',
+      yellowish(shapePx.armLeft) && !yellowish(shapePx.armRight),
+      `左 ${shapePx.armLeft}、右 ${shapePx.armRight}`)
+    /* 左边那格在本格中心常常压着简谱数字的字（抗锯齿会把它压暗），所以只断言右侧"脚"是黄的 */
+    check('白键高亮是 T 形：本格右侧那截也变黄',
+      yellowish(shapePx.midRight),
+      `左 ${shapePx.midLeft}（可能压着数字）、右 ${shapePx.midRight}`)
+  } else {
+    check('白键高亮是 T 形：上半格只有左边变黄（右边是黑键）', false, '没找到 D 行')
+    check('白键高亮是 T 形：本格右侧那截也变黄', false, '没找到 D 行')
+  }
   /* ── 新画的音 = 最小绘制格（十六分音符 = 1/4 拍，用户 m04380） ── */
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setMode('draw'); s.setLoop(null); s.setLoopOn(false); s.setBpm(120); s.setView({ zoom: 1, panMs: 0 }) })()`)
   await sleep(200)
