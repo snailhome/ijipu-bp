@@ -8,7 +8,7 @@
  *  · 破坏性变更（BREAKING CHANGE / !: / 不兼容 / 破坏性） → MAJOR
  *  · 新增功能（feat / 新增 / 新功能 / 加入 / 支持 / 添加） → MINOR
  *  · 其余代码改动（修复、样式、细节）                     → PATCH
- *  · 只改文档 / 日志 / release-body → 不升版
+ *  · 不影响功能的改动（文档 / 日志 / release-body / 版本账本文件 / 升版脚本本身）→ 不升版
  *
  * 基线：上一次改动版本文件的提交。之后没有新提交时**不升版**，所以同一提交重复打包
  * 不会一直涨版本号；正常发布流程应先提交改动，再打包。
@@ -94,14 +94,21 @@ const changed = git(['diff', '--name-only', `${base}..HEAD`])
   .split(/\r?\n/)
   .filter(Boolean)
 
-/** 文档 / 日志 / 构建产物不算“功能变更” */
+/**
+ * 文档 / 日志 / 构建产物 / 版本账本 / 升版脚本本身不算“功能变更”。
+ * 用户 2026-11-19 拍板：以**是否影响功能**决定升不升版，干活的只是版本号跟着改的文件不升。
+ */
 const isCode = (file) =>
   !/\.md$/i.test(file) &&
   !/^docs\//i.test(file) &&
   !/^CHANGELOG/i.test(file) &&
   !/^release-body/i.test(file) &&
   !/^\.dsh\//i.test(file) &&
-  !/\.log$/i.test(file)
+  !/\.log$/i.test(file) &&
+  !/^package-lock\.json$/i.test(file) &&
+  !/^src-tauri\/Cargo\.lock$/i.test(file) &&
+  !/^src\/brand\/version\.ts$/.test(file) &&
+  !/^scripts\/auto-version\.mjs$/.test(file)
 
 if (!changed.some(isCode)) {
   console.log(`[auto-version] ${app.label}：自 ${base.slice(0, 8)} 起没有代码改动，版本保持 ${pkg.version}`)
