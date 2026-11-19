@@ -235,7 +235,8 @@ npm run tauri -- icon "D:\Coding\JianpuScript\矢量图\Logo-bp.png" --fit conta
 
 1. 把 `htdemucs_ft_vocals.onnx` 放到 `%APPDATA%\com.ijipu.bp\models\`（301 MB，MIT）。
 2. 把 `onnxruntime.dll` 放到 exe 旁边（或设 `ORT_DYLIB_PATH`）。
-3. 打开音频 → 右栏「分轨（实验）」→「分离人声」；完成后可切「混音 / 人声 / 伴奏」看不同热力图。
+3. 打开音频 → 右栏「分轨（实验）」→「分离人声」；完成后可切「混音 / 人声 / 伴奏」：
+   **热力图和播放音源一起切**——看哪轨就听哪轨；正在播时会从当前位置换到那一轨。
 
 实测：36 秒真人声 25 秒分离完（RTF 0.5×）；模型首次加载 5–6 秒。
 

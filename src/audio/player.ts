@@ -13,9 +13,13 @@ import type { RawNote } from '../model/types'
 import { midiToName } from '../analysis/pitchNames'
 
 export type PlayMode = 'audio' | 'synth'
+/** 分轨后播放哪一轨：mix 用原混音，人声/伴奏用分离出来的那一轨 */
+export type PlayTrack = 'mix' | 'vocals' | 'instrumental'
 
 let ctx: AudioContext | null = null
 let buffer: AudioBuffer | null = null
+let stems: { vocals: AudioBuffer; instrumental: AudioBuffer } | null = null
+let track: PlayTrack = 'mix'
 let source: AudioBufferSourceNode | null = null
 let synth: AudioBackend | null = null
 let raf = 0
@@ -38,8 +42,36 @@ function audioCtx(): AudioContext {
   return ctx
 }
 
+/**
+ * 换歌时把原混音换掉。分轨结果只属于上一首歌，一并作废（回到 mix）。
+ */
 export function setAudioBuffer(b: AudioBuffer | null): void {
   buffer = b
+  stems = null
+  track = 'mix'
+}
+
+/** 单声道 PCM → AudioBuffer（分离结果读回来是 Float32Array，播放层要 AudioBuffer） */
+export function makeAudioBuffer(samples: Float32Array, sampleRate: number): AudioBuffer {
+  const c = audioCtx()
+  const b = c.createBuffer(1, Math.max(1, samples.length), Math.max(8000, Math.round(sampleRate)))
+  b.getChannelData(0).set(samples)
+  return b
+}
+
+/** 分轨完成时把两轨一起存进来；null = 没有分轨结果 */
+export function setStemBuffers(s: { vocals: AudioBuffer; instrumental: AudioBuffer } | null): void {
+  stems = s
+  if (!s) track = 'mix'
+}
+
+/** 选播放音源；和热力图用同一个值（用户 m00413：看哪轨就听哪轨） */
+export function setPlayTrack(t: PlayTrack): void {
+  track = t
+}
+
+function activeBuffer(): AudioBuffer | null {
+  return track !== 'mix' && stems ? stems[track] : buffer
 }
 
 /**
@@ -111,16 +143,20 @@ export async function play(
   endMs = durationMs
 
   if (playMode === 'audio') {
-    if (!buffer) {
+    const buf = activeBuffer()
+    if (!buf) {
       onTick(startMs)
       return true
     }
     source = ctxNow.createBufferSource()
-    source.buffer = buffer
+    source.buffer = buf
     source.connect(ctxNow.destination)
     const t0 = ctxNow.currentTime + 0.05
     source.start(t0, startMs / 1000)
-    startAt = t0 - startMs / 1000
+    /* 基准就是"开始出声的时刻"：tick 里 pos = startMs + (now - startAt)。
+     * 这里如果写 t0 - startMs/1000，startMs 会被算两次，从非零位置续播（分轨切换、暂停再播）
+     * 会一下跳到 2×startMs，甚至直接到结尾。 */
+    startAt = t0
     source.onended = () => {
       if (my !== runId) return
       if (raf) cancelAnimationFrame(raf)

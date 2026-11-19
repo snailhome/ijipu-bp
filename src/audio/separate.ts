@@ -8,6 +8,8 @@ import { decodeBytes } from './decode'
 export interface Stems {
   vocals: Float32Array
   instrumental: Float32Array
+  /** 两轨的采样率（播放层建 AudioBuffer 要用，不能假定 44.1k） */
+  sampleRate: number
   seconds: number
 }
 
@@ -70,11 +72,11 @@ export function onDownloadProgress(cb: (done: number, total: number) => void): (
   return () => off?.()
 }
 
-async function readAndDecode(path: string): Promise<Float32Array | null> {
+async function readAndDecode(path: string): Promise<{ samples: Float32Array; sampleRate: number } | null> {
   const bytes = await invoke<ArrayBuffer | null>('bp_read_audio', { path })
   if (!bytes) return null
   const loaded = await decodeBytes(bytes, path, path)
-  return loaded.samples
+  return { samples: loaded.samples, sampleRate: loaded.sampleRate }
 }
 
 /**
@@ -94,7 +96,12 @@ export async function separateStems(
   const vocals = await readAndDecode(r.vocals_path)
   const instrumental = await readAndDecode(r.instrumental_path)
   if (!vocals || !instrumental) return null
-  return { vocals, instrumental, seconds: r.seconds }
+  return {
+    vocals: vocals.samples,
+    instrumental: instrumental.samples,
+    sampleRate: vocals.sampleRate,
+    seconds: r.seconds,
+  }
 }
 
 /** 订阅后端的分段进度（done, total）；返回取消函数 */

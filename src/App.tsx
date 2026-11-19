@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keyColor, keyDisplayName } from './analysis/pitchNames'
 import { loadAudioFromPath, pickAndLoadAudio, type LoadedAudio } from './audio/decode'
-import { play, setAudioBuffer, stop, audition, type PlayMode } from './audio/player'
+import { play, setAudioBuffer, setStemBuffers, setPlayTrack, makeAudioBuffer, stop, audition, type PlayMode } from './audio/player'
 import {
   canSeparate,
   downloadModel,
@@ -506,6 +506,12 @@ export default function App() {
   const [sepOk, setSepOk] = useState<SepReady | null>(null)
   const [sepTarget, setSepTarget] = useState<string | null>(null)
   const [stemMode, setStemMode] = useState<'mix' | 'vocals' | 'instrumental'>('mix')
+  /* 换歌：上一首的分轨结果作废（player 里的两轨已由 setAudioBuffer 清掉，这里清界面） */
+  useEffect(() => {
+    stemSpecRef.current = null
+    setStemsReady(false)
+    setStemMode('mix')
+  }, [fileName])
   /* 桌面壳里进界面时先问一句：模型和 onnxruntime.dll 都在不在。
    * 缺东西就显示"装模型包 / 去下载"，而不是等用户点了才报错。 */
   useEffect(() => {
@@ -557,13 +563,18 @@ export default function App() {
         return
       }
       stemSpecRef.current = {
-        vocals: computeSpectrum(r.vocals, 44100, {}),
-        instrumental: computeSpectrum(r.instrumental, 44100, {}),
+        vocals: computeSpectrum(r.vocals, r.sampleRate, {}),
+        instrumental: computeSpectrum(r.instrumental, r.sampleRate, {}),
       }
+      /* 两轨 PCM 也存给播放层：之后点哪轨，热力图和声音一起切（用户 m00413） */
+      setStemBuffers({
+        vocals: makeAudioBuffer(r.vocals, r.sampleRate),
+        instrumental: makeAudioBuffer(r.instrumental, r.sampleRate),
+      })
       setStemsReady(true)
       setStemMode('vocals')
       st.setBusy(null)
-      setNotice(`分离完成（推理 ${r.seconds.toFixed(1)}s）：现在看的是人声音轨，可切「伴奏」或「混音」`)
+      setNotice(`分离完成（推理 ${r.seconds.toFixed(1)}s）：现在看/听的是人声音轨，可切「伴奏」或「混音」`)
     } catch (e) {
       st.setBusy(null)
       st.setError(e instanceof Error ? e.message : String(e))
@@ -614,6 +625,17 @@ export default function App() {
     /* play() 返回 false = 这一路在 await 期间被 stop()/另一次 play() 顶掉了，别再动状态 */
     if (!ok) return
   }, [set])
+
+  /* 分轨切换：热力图（NoteRoll 的 spectrum）和播放音源用同一个 stemMode。
+   * 正在播就停下来、按当前位置在新轨续上，否则会出现"看人声、听混音"。
+   * 合成音模式不受影响（它放的是音符，不是音频）。 */
+  useEffect(() => {
+    setPlayTrack(stemMode)
+    const st = set.getState()
+    if (!st.playing || st.playMode !== 'audio') return
+    stop()
+    void startPlay(st.currentMs, st.playMode)
+  }, [stemMode, set, startPlay])
 
   const togglePlay = useCallback(() => {
     const st = set.getState()
