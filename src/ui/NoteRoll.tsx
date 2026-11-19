@@ -521,17 +521,26 @@ export function NoteRoll(props: Props) {
       if (midi < MIDI_LOW) break
       const y = RULER_H + r * ROW_H
       const cls = ((midi % 12) + 12) % 12
-      /* 键上文字（用户 m05224 + m05331 + m05374 定的最终口径）：
-       *  · **只写白格行**，黑格行一律不写（黑键只占右边 62%，左边那半格其实属于上下两个白键）
-       *  · 白格行按当前调式标音级，**半音也标**（例如 bB 调里的 B 自然就是 `1#`、E 自然就是 `4#`），
-       *    即 `midiToNumber` 的 `text` 原样写，不再过滤 accidental
-       *  · 位置取这一格白键左块的竖直正中（L/J/T 那条"腿"的中间），不是行中心 */
-      if (BLACK.has(cls)) continue
+      const lit = pressMidi === midi ? 1 : hoverMidi === midi ? 0.85 : 0
+      g.font = FONT
+      g.textBaseline = 'middle'
+
+      /* 黑格行：数字写在**黑键块里面**、颜色反相（黑键上浅字、高亮成黄时改回深字），用户 m05415 */
+      if (BLACK.has(cls)) {
+        if (props.pitchMode !== 'number') continue
+        g.textAlign = 'center'
+        g.fillStyle = lit > 0 ? 'rgba(30,44,60,0.95)' : '#e8f1fb'
+        g.fillText(midiToNumber(midi, props.tonic).text, KEY_BLACK_X + KEY_BLACK_W / 2, y + ROW_H / 2)
+        g.textAlign = 'left'
+        continue
+      }
+
+      /* 白格行（用户 m05224 + m05331 + m05374）：按当前调式标音级，半音也标
+       * （bB 调里 B 自然就是 `1#`、E 自然就是 `4#`），即 `text` 原样写、不过滤 accidental；
+       * 位置取白键左块的竖直正中（L/J/T 那条"腿"的中间）。 */
       const band = bandOf(cls, y)
       const cy = (band.t + band.b) / 2
       /* 白键左块里也有分界线（黑键中心那条），先描一圈白边再填字，免得线把字割成两半 */
-      g.font = FONT
-      g.textBaseline = 'middle'
       g.lineWidth = 2.5
       g.strokeStyle = 'rgba(255,255,255,0.95)'
       g.fillStyle = 'rgba(30,44,60,0.9)'
