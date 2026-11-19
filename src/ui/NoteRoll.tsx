@@ -469,15 +469,13 @@ export function NoteRoll(props: Props) {
       if (midi < MIDI_LOW) break
       const y = RULER_H + r * ROW_H
       const cls = ((midi % 12) + 12) % 12
-      /* 当前行（鼠标所在行）/ 按下的琴键：整格压黄（用户 m04380、m04792 第四条） */
-      const lit = pressMidi === midi ? 0.95 : hoverMidi === midi ? 0.55 : 0
-      if (lit > 0) {
-        g.fillStyle = `rgba(255,206,64,${lit})`
-        g.fillRect(0, y, KEY_W, ROW_H)
-      }
+      /* 当前行（鼠标所在行）/ 按下的琴键：按"键的形状"压黄（用户 m04380、m04987 第五条）。
+       * 白键整格（0..KEY_W）变黄；黑键只有它自己那块（右 62%）变黄，左边仍是白的。 */
+      const lit = pressMidi === midi ? 1 : hoverMidi === midi ? 0.85 : 0
+      const litFill = lit >= 1 ? '#ffc83c' : '#f2b53c'
       if (BLACK.has(cls)) {
         /* 黑键：I 形，右侧贴边、整行高（用户 m04792 第一条） */
-        g.fillStyle = '#000000'
+        g.fillStyle = lit > 0 ? litFill : '#000000'
         g.beginPath()
         g.roundRect(KEY_BLACK_X, y, KEY_BLACK_W, ROW_H, [2, 0, 0, 2])
         g.fill()
@@ -485,9 +483,17 @@ export function NoteRoll(props: Props) {
         g.fillStyle = 'rgba(0,0,0,0.45)'
         g.fillRect(0, y + ROW_H / 2 - 0.5, KEY_BLACK_X, 1)
       } else if (cls === 4 || cls === 11) {
-        /* 分界之二：E|F 与 B|C 之间没有黑键，整格通栏画线（这条线落在本格下边界） */
+        /* 分界之二：E|F 与 B|C 之间没有黑键，整格通栏画线。
+         * 注意方向：行是往下走的，E 的上边界才是跟 F 的分界（用户 m04987：画在下边界就跑到了 D#） */
+        if (lit > 0) {
+          g.fillStyle = litFill
+          g.fillRect(0, y, KEY_W, ROW_H)
+        }
         g.fillStyle = 'rgba(0,0,0,0.45)'
-        g.fillRect(0, y + ROW_H - 0.5, KEY_W, 1)
+        g.fillRect(0, y - 0.5, KEY_W, 1)
+      } else if (lit > 0) {
+        g.fillStyle = litFill
+        g.fillRect(0, y, KEY_W, ROW_H)
       }
       /* 键上文字：音名模式只标 C（和以前一样）；数字模式按当前调式标音级 */
       const num = midiToNumber(midi, props.tonic)

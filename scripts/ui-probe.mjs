@@ -760,6 +760,43 @@ try {
     !yellowish(beforeKey) && yellowish(duringKey) && !yellowish(afterKey),
     `${beforeKey} → ${duringKey} → ${afterKey}`)
 
+  /* ── 黑键：按下时只有黑键那块变黄，左边仍是白的（用户 m04987 第五条，对照图 4） ── */
+  const blackPt = await cdp.eval(`(() => {
+    const m = window.__bpRoll || {}
+    const cv = document.querySelector('.pane.roll canvas')
+    const r = cv.getBoundingClientRect()
+    const ROW_H = 14, KEY_W = 66
+    const BLACK = new Set([1, 3, 6, 8, 10])
+    const rulerH = typeof m.rulerH === 'number' ? m.rulerH : 36
+    for (let row = 3; row < (m.rows || 20) - 3; row++) {
+      const midi = m.top - row
+      if (!BLACK.has(((midi % 12) + 12) % 12)) continue
+      const wy = rulerH + row * ROW_H + ROW_H / 2
+      return { x: r.x + KEY_W * 0.85, y: r.y + wy, wy, bx: KEY_W * 0.85, lx: 5 }
+    }
+    return null
+  })()`)
+  if (blackPt) {
+    const readAt = (wx) => `(() => {
+      const cv = document.querySelector('.pane.roll canvas')
+      const g = cv.getContext('2d')
+      const sx = cv.width / parseFloat(cv.style.width || String(cv.width))
+      const sy = cv.height / parseFloat(cv.style.height || String(cv.height))
+      const d = g.getImageData(Math.round(${wx} * sx), Math.round(${blackPt.wy} * sy), 1, 1).data
+      return [d[0], d[1], d[2]]
+    })()`
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: blackPt.x, y: blackPt.y, button: 'left', buttons: 1, clickCount: 1 })
+    await sleep(250)
+    const blockDuring = await cdp.eval(readAt(blackPt.bx))
+    const leftDuring = await cdp.eval(readAt(blackPt.lx))
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: blackPt.x, y: blackPt.y, button: 'left', buttons: 0, clickCount: 1 })
+    await sleep(200)
+    check('按黑键：黑键那块变黄、左边白区不变', yellowish(blockDuring) && !yellowish(leftDuring),
+      `黑键块 ${blockDuring}、左侧 ${leftDuring}`)
+  } else {
+    check('按黑键：黑键那块变黄、左边白区不变', false, '没找到黑键行')
+  }
+
   /* ── 新画的音 = 最小绘制格（十六分音符 = 1/4 拍，用户 m04380） ── */
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setMode('draw'); s.setLoop(null); s.setLoopOn(false); s.setBpm(120); s.setView({ zoom: 1, panMs: 0 }) })()`)
   await sleep(200)
