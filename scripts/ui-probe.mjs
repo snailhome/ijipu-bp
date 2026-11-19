@@ -277,6 +277,23 @@ try {
   check('绘制模式点空白会加音且直接算确认', afterDraw.n === 3 && afterDraw.conf === 1, JSON.stringify(afterDraw.n + '/' + afterDraw.conf))
   check('加了音之后 jps 里有谱行', /^Q:/m.test(afterDraw.jps), (afterDraw.jps || '').split('\n').filter((l) => l.startsWith('Q:')).join(' | '))
 
+  /* 点的行必须就是鼠标所在的那一行（用户 m04792：点表格会错行，错开两行） */
+  const hitRow = await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    const m = window.__bpRoll || {}
+    const ROW_H = 14
+    const RULER_H = typeof m.rulerH === 'number' ? m.rulerH : 36
+    const c = document.querySelector('.pane.roll canvas')
+    const r = c.getBoundingClientRect()
+    const cy = r.height * 0.72
+    const want = m.top - Math.floor((cy - RULER_H) / ROW_H)
+    const made = s.notes.filter((x) => x.id.startsWith('m'))
+    const got = made.length ? made[made.length - 1].midi : null
+    return { want, got, dpr: window.devicePixelRatio, cssH: Math.round(r.height), bufH: c.height }
+  })()`)
+  check('点格子落在鼠标所在的那一行', hitRow.want === hitRow.got,
+    `鼠标那一行 ${hitRow.want}、画出来 ${hitRow.got}（css 高 ${hitRow.cssH}、缓冲 ${hitRow.bufH}）`)
+
   // 精确点一个已知音符：行高/顶行直接从页面里的 __bpRoll 拿（自己估过一次，差一行就点歪）
   const clickNote = async (id) => {
     const box = await cdp.eval(`(() => {

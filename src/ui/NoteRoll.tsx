@@ -130,6 +130,9 @@ type Drag =
 export function NoteRoll(props: Props) {
   const { notes, spectrum, durationMs, view, playMs, mode } = props
   const wrapRef = useRef<HTMLDivElement | null>(null)
+  /* 画布自己的容器：尺寸必须按它量，不能按整块面板量（面板里还有标题条和滚动条，
+   * 按面板量会让画布被 flex 压扁，点击 y 坐标跟着错行 —— 用户 m04792 第二条） */
+  const hostRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
   const [center, setCenter] = useState(76)
@@ -142,7 +145,7 @@ export function NoteRoll(props: Props) {
 
   /* 尺寸跟随容器 */
   useEffect(() => {
-    const el = wrapRef.current
+    const el = hostRef.current
     if (!el) return
     const ro = new ResizeObserver(() => {
       setSize({ w: el.clientWidth, h: el.clientHeight })
@@ -406,11 +409,14 @@ export function NoteRoll(props: Props) {
       if (x2 < metrics.w) g.fillRect(x2, RULER_H, metrics.w - x2, metrics.h - RULER_H)
     }
 
-    /* 6) 悬停行高亮 + 右上角信息 */
+    /* 6) 悬停行高亮 + 右上角信息（用户 m04792 第三条：原来 0.05 太淡，看不见） */
     if (hoverMidi !== null) {
       const y = rowTop(hoverMidi)
-      g.fillStyle = 'rgba(255,255,255,0.05)'
+      g.fillStyle = 'rgba(120,190,255,0.20)'
       g.fillRect(metrics.left, y, metrics.width, ROW_H)
+      g.strokeStyle = 'rgba(150,210,255,0.45)'
+      g.lineWidth = 1
+      g.strokeRect(metrics.left + 0.5, y + 0.5, metrics.width - 1, ROW_H - 1)
     }
 
     /* 7) 时间尺 */
@@ -463,26 +469,25 @@ export function NoteRoll(props: Props) {
       if (midi < MIDI_LOW) break
       const y = RULER_H + r * ROW_H
       const cls = ((midi % 12) + 12) % 12
-      const aboveCls = ((midi + 1) % 12 + 12) % 12
-      /* 每个半音行都是一格，格子高度全都一样（用户 m04271「高度不均」）：
-       * 左侧白区在每行上边界画一条线；两个白键直接相接处（E|F、B|C）延长到整个键列宽 */
-      if (!BLACK.has(aboveCls)) {
-        g.fillStyle = 'rgba(0,0,0,0.45)'
-        g.fillRect(0, y, KEY_W, 1)
-      } else {
-        g.fillStyle = 'rgba(0,0,0,0.22)'
-        g.fillRect(0, y, KEY_BLACK_X, 1)
+      /* 当前行（鼠标所在行）/ 按下的琴键：整格压黄（用户 m04380、m04792 第四条） */
+      const lit = pressMidi === midi ? 0.95 : hoverMidi === midi ? 0.55 : 0
+      if (lit > 0) {
+        g.fillStyle = `rgba(255,206,64,${lit})`
+        g.fillRect(0, y, KEY_W, ROW_H)
       }
       if (BLACK.has(cls)) {
+        /* 黑键：I 形，右侧贴边、整行高（用户 m04792 第一条） */
         g.fillStyle = '#000000'
         g.beginPath()
         g.roundRect(KEY_BLACK_X, y, KEY_BLACK_W, ROW_H, [2, 0, 0, 2])
         g.fill()
-      }
-      /* 按下的那一格整格压黄（用户 m04380：按下高亮，松手灭） */
-      if (pressMidi === midi) {
-        g.fillStyle = 'rgba(255,206,64,0.85)'
-        g.fillRect(0, y, KEY_W, ROW_H)
+        /* 分界之一：从黑键竖直中心画到左侧界 —— 两个白键之间的分界藏在这条黑键中间 */
+        g.fillStyle = 'rgba(0,0,0,0.45)'
+        g.fillRect(0, y + ROW_H / 2 - 0.5, KEY_BLACK_X, 1)
+      } else if (cls === 4 || cls === 11) {
+        /* 分界之二：E|F 与 B|C 之间没有黑键，整格通栏画线（这条线落在本格下边界） */
+        g.fillStyle = 'rgba(0,0,0,0.45)'
+        g.fillRect(0, y + ROW_H - 0.5, KEY_W, 1)
       }
       /* 键上文字：音名模式只标 C（和以前一样）；数字模式按当前调式标音级 */
       const num = midiToNumber(midi, props.tonic)
@@ -791,6 +796,7 @@ export function NoteRoll(props: Props) {
         <span>音符表</span>
         <span className="dim">{hint}</span>
       </div>
+      <div className="roll-host" ref={hostRef}>
       <canvas
         ref={canvasRef}
         style={{
@@ -808,6 +814,7 @@ export function NoteRoll(props: Props) {
         }}
         onContextMenu={onContext}
       />
+      </div>
       {/* 悬浮信息：跟着鼠标走，但只在音符格区域显示（时间尺上不显示） */}
       {hoverMidi !== null && hoverY !== null && hoverY >= RULER_H && (
         <div className="row-badge">

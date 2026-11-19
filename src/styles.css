@@ -182,9 +182,16 @@ button.primary {
   display: flex;
   flex-direction: column;
 }
-.pane.roll > canvas {
+/* 画布容器：量尺寸量的是这一层（上面还有标题条、下面还有滚动条） */
+.roll-host {
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
+}
+
+.roll-host > canvas {
+  display: block;
 }
 
 /* 简谱流线谱条：纸色，高度固定；横轴与上面的表格同一套映射 */
@@ -458,10 +465,6 @@ a.link {
   flex-direction: column;
 }
 
-.pane.roll > canvas {
-  flex: 1 1 auto;
-  min-height: 0;
-}
 
 /* ===== 横向滚动条：一直显示，没放大时 thumb 铺满（拖不动） ===== */
 .hbar {
