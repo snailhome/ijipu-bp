@@ -36,6 +36,10 @@ import type { AnalyzeResult, LoopRange, SnapMode, Spectrum } from './model/types
 import { NoteRoll } from './ui/NoteRoll'
 import { StripPreview } from './ui/StripPreview'
 
+/** 分析拿哪一路音频：跟着右栏"混音 / 人声 / 伴奏"的当前选择走（用户 m00810） */
+type AnalyzeSource = 'mix' | 'vocals' | 'instrumental'
+const SOURCE_LABEL: Record<AnalyzeSource, string> = { mix: '混音', vocals: '人声', instrumental: '伴奏' }
+
 /** range 滑条的"已填充"比例（CSS 里 --fill 决定渐变停在哪；值到顶时颜色真的顶到尽头） */
 function fillStyle(pct: number): Record<string, string> {
   const v = Math.max(0, Math.min(100, pct))
@@ -61,6 +65,14 @@ function Icon({ name }: { name: string }) {
       return (
         <svg {...common}>
           <path d="M2 4.5h4l1.4 1.6H14v6.4H2z" />
+        </svg>
+      )
+    case 'analyze':
+      /* 频谱柱 + 一点高光：对当前这一轨"自动判音" */
+      return (
+        <svg {...common}>
+          <path d="M2.6 12V9M5.4 12V6.4M8.2 12V8.6M11 12V4.4M13.6 12V7.2" />
+          <circle cx="11" cy="2.6" r="1.2" fill="currentColor" stroke="none" />
         </svg>
       )
     case 'play':
@@ -356,6 +368,12 @@ export default function App() {
   const workerRef = useRef<Worker | null>(null)
   /* 分析用过的样本留着：调'去谐波'要把同一段音频重跑一遍，不能重新选文件 */
   const samplesRef = useRef<{ samples: Float32Array; sampleRate: number } | null>(null)
+  /* 分轨那两轨的 PCM 也留着：分析"当前这一轨"时直接拿它重跑，不再解码一遍（用户 m00810） */
+  const stemPcmRef = useRef<{ vocals: Float32Array; instrumental: Float32Array; sampleRate: number } | null>(null)
+  /* 混音那份频谱单独留底：分析人声/伴奏之后 analysis.spectrum 会变成那一轨，混音热力图不能跟着换 */
+  const mixSpecRef = useRef<Spectrum | null>(null)
+  /* 这一轮分析是"哪一轨、要不要全部当谱音"：worker 回来时按它处理 */
+  const pendingAnalyzeRef = useRef<{ confirm: boolean; source: AnalyzeSource } | null>(null)
   const sideRef = useRef<HTMLDivElement | null>(null)
 
   /* 右侧栏里所有滑条：鼠标在上面滚轮就能调，而且那一刻不滚动右栏（用户 m05454）。
@@ -390,13 +408,37 @@ export default function App() {
     const w = new Worker(new URL('./worker/analyze.worker.ts', import.meta.url), { type: 'module' })
     w.onmessage = (e: MessageEvent<{ ok: boolean; result?: AnalyzeResult; error?: string }>) => {
       const msg = e.data
+      const st = set.getState()
       if (msg.ok && msg.result) {
-        set.getState().setAnalysis(msg.result)
-        set.getState().setBusy(null)
-        setNotice(`分析完成：BPM ${msg.result.bpm}，${msg.result.notes.length > 0 ? `自动填入 ${msg.result.notes.length} 个音` : `没自动填音（在表格里点着画）`}`)
+        const pending = pendingAnalyzeRef.current
+        pendingAnalyzeRef.current = null
+        /* 重新分析不该把播放头弹回开头：setAnalysis 会把它归零，先记下再放回去 */
+        const backMs = st.currentMs
+        st.setAnalysis(msg.result)
+        /* 频谱归位：分析混音 → 混音留底；分析人声/伴奏 → 只换那一轨的热力图 */
+        if (!pending || pending.source === 'mix') mixSpecRef.current = msg.result.spectrum
+        else if (stemSpecRef.current) stemSpecRef.current[pending.source] = msg.result.spectrum
+        const n = msg.result.notes.length
+        if (pending?.confirm) {
+          st.setAllConfirmed(true)
+          st.setCurrentMs(backMs)
+          setNotice(
+            n > 0
+              ? `分析完成（${SOURCE_LABEL[pending.source]}）：BPM ${msg.result.bpm}，${n} 个音已全部当谱音，jps 已生成 —— 接着人工听、改`
+              : `分析完成（${SOURCE_LABEL[pending.source]}）：没找到音。试试调「去谐波」，或者换一轨再分析`,
+          )
+        } else {
+          setNotice(
+            `分析完成${pending ? `（${SOURCE_LABEL[pending.source]}）` : ''}：BPM ${msg.result.bpm}，${
+              n > 0 ? `自动填入 ${n} 个音` : '没自动填音（在表格里点着画）'
+            }`,
+          )
+        }
+        st.setBusy(null)
       } else {
-        set.getState().setError(msg.error ?? '分析失败')
-        set.getState().setBusy(null)
+        pendingAnalyzeRef.current = null
+        st.setError(msg.error ?? '分析失败')
+        st.setBusy(null)
       }
     }
     w.onerror = () => {
@@ -427,6 +469,8 @@ export default function App() {
         samples: new Float32Array(loaded.samples),
         sampleRate: loaded.sampleRate,
       }
+      /* 打开文件这一轮永远分析混音：清掉上一轮的"分析哪一轨"标记 */
+      pendingAnalyzeRef.current = null
       w.postMessage(
         {
           samples: loaded.samples,
@@ -481,27 +525,10 @@ export default function App() {
     }
   }, [applyLoaded, set])
 
-  /* ---------- 去谐波：把同一段音频带着新的强度重跑一遍 ---------- */
-  const applySuppress = useCallback(
-    (v: number) => {
-      const st = set.getState()
-      st.setSuppress(v)
-      const buf = samplesRef.current
-      const w = workerRef.current
-      if (!buf || !w) return
-      st.setBusy(COPY.analyzing)
-      const copy = new Float32Array(buf.samples)
-      w.postMessage(
-        { samples: copy, sampleRate: buf.sampleRate, suppress: v, beatsPerBar: st.beatsPerBar, notes: st.autoNotes },
-        [copy.buffer as ArrayBuffer],
-      )
-    },
-    [set],
-  )
   /* ---------- 分轨（桌面专属）：人声 / 伴奏 ----------
    * 前端解码 → PCM 交给 Rust 跑 ONNX → 两轨 wav 落盘再读回来 → 各算一份频谱。
    * 切「人声/伴奏」只换热力图用的那份频谱，不动音符，也不重算分析。 */
-  const stemSpecRef = useRef<{ vocals: Spectrum; instrumental: Spectrum } | null>(null)
+  const stemSpecRef = useRef<{ vocals?: Spectrum; instrumental?: Spectrum } | null>(null)
   const [stemsReady, setStemsReady] = useState(false)
   const [sepOk, setSepOk] = useState<SepReady | null>(null)
   const [sepTarget, setSepTarget] = useState<string | null>(null)
@@ -509,9 +536,72 @@ export default function App() {
   /* 换歌：上一首的分轨结果作废（player 里的两轨已由 setAudioBuffer 清掉，这里清界面） */
   useEffect(() => {
     stemSpecRef.current = null
+    stemPcmRef.current = null
+    mixSpecRef.current = null
+    pendingAnalyzeRef.current = null
     setStemsReady(false)
     setStemMode('mix')
   }, [fileName])
+
+  /* ---------- 分析：对"当前选中的那一轨"重跑 ----------
+   * 为什么不是"打开时自动分析一遍就完了"（用户 m00741）：勾了「分析后自动填入音符」之后，
+   * 用户希望点一下顶栏就出初稿；而且分轨之后要能只分析人声 / 只分析伴奏。
+   * 所以入口收成这一个函数：按 stemMode 取 PCM（分轨了就取那一轨，否则取混音），
+   * 强制 notes:true 重跑 worker，回来后铺到表上；要不要"全部当谱音"由调用方定。 */
+  const analyzeSource = useCallback(
+    (opts: { confirm: boolean; notes: boolean; suppress: number }) => {
+      const st = set.getState()
+      const w = workerRef.current
+      if (!w) return
+      const stemPcm = stemPcmRef.current
+      const source: AnalyzeSource = stemMode !== 'mix' && stemPcm ? stemMode : 'mix'
+      const pcm =
+        source === 'mix'
+          ? samplesRef.current
+            ? { samples: samplesRef.current.samples, sampleRate: samplesRef.current.sampleRate }
+            : null
+          : {
+              samples: source === 'vocals' ? stemPcm!.vocals : stemPcm!.instrumental,
+              sampleRate: stemPcm!.sampleRate,
+            }
+      if (!pcm) {
+        st.setError('先打开一段音频')
+        return
+      }
+      st.setError(null)
+      st.setBusy(COPY.analyzing)
+      pendingAnalyzeRef.current = { confirm: opts.confirm, source }
+      /* 复制一份再 transfer：ref 里那份要留着给下一次分析 / 去谐波用 */
+      const copy = new Float32Array(pcm.samples)
+      w.postMessage(
+        {
+          samples: copy,
+          sampleRate: pcm.sampleRate,
+          suppress: opts.suppress,
+          beatsPerBar: st.beatsPerBar,
+          notes: opts.notes,
+        },
+        [copy.buffer as ArrayBuffer],
+      )
+    },
+    [set, stemMode],
+  )
+
+  /** 顶栏「分析」：当前这一轨重跑一遍，音符铺到表上并全部当谱音 → jps 立刻出来 */
+  const runAnalyze = useCallback(() => {
+    const st = set.getState()
+    analyzeSource({ confirm: true, notes: true, suppress: st.suppress })
+  }, [analyzeSource, set])
+
+  /* ---------- 去谐波：把当前这一轨带着新的强度重跑一遍 ---------- */
+  const applySuppress = useCallback(
+    (v: number) => {
+      const st = set.getState()
+      st.setSuppress(v)
+      analyzeSource({ confirm: false, notes: st.autoNotes, suppress: v })
+    },
+    [analyzeSource, set],
+  )
   /* 桌面壳里进界面时先问一句：模型和 onnxruntime.dll 都在不在。
    * 缺东西就显示"装模型包 / 去下载"，而不是等用户点了才报错。 */
   useEffect(() => {
@@ -562,6 +652,8 @@ export default function App() {
         st.setError('分离没返回结果')
         return
       }
+      /* 两轨 PCM 留一份：之后「分析」/「去谐波」可以只针对当前这一轨重跑（用户 m00810） */
+      stemPcmRef.current = { vocals: r.vocals, instrumental: r.instrumental, sampleRate: r.sampleRate }
       stemSpecRef.current = {
         vocals: computeSpectrum(r.vocals, r.sampleRate, {}),
         instrumental: computeSpectrum(r.instrumental, r.sampleRate, {}),
@@ -872,6 +964,15 @@ export default function App() {
         </button>
         <button
           className="icon-btn"
+          onClick={runAnalyze}
+          disabled={!analysis || !!busy}
+          title={COPY.analyzeTip}
+          aria-label={COPY.analyze}
+        >
+          <Icon name="analyze" />
+        </button>
+        <button
+          className="icon-btn"
           onClick={togglePlay}
           disabled={!analysis}
           title={playing ? COPY.pause : COPY.play}
@@ -995,9 +1096,14 @@ export default function App() {
         <span className="tgroup">
         <button
           className="icon-btn"
-          onClick={() => useBp.getState().setAllConfirmed(true)}
-          disabled={!notes.length}
-          title={COPY.confirmAllTip}
+          onClick={() => {
+            /* 用户 m00741/m00810：勾了"分析后自动填入音符"后点这颗按钮，若还没有音，
+             * 期望的是"分析一遍、把音都当谱音"；有音时仍是原来的"全部当谱音"。 */
+            if (notes.length === 0) runAnalyze()
+            else useBp.getState().setAllConfirmed(true)
+          }}
+          disabled={notes.length === 0 ? !analysis || !!busy : false}
+          title={notes.length === 0 ? COPY.confirmAllEmptyTip : COPY.confirmAllTip}
           aria-label={COPY.confirmAll}
         >
           <Icon name="checkAll" />
@@ -1112,7 +1218,11 @@ export default function App() {
         <div className="main">
           <NoteRoll
             notes={notes}
-            spectrum={stemMode === 'mix' || !stemSpecRef.current ? (analysis?.spectrum ?? null) : stemSpecRef.current[stemMode]}
+            spectrum={
+              stemMode === 'mix'
+                ? (mixSpecRef.current ?? analysis?.spectrum ?? null)
+                : (stemSpecRef.current?.[stemMode] ?? analysis?.spectrum ?? null)
+            }
             durationMs={durationMs}
             bpm={bpm}
             beatsPerBar={beatsPerBar}

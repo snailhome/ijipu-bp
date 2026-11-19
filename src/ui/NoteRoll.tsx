@@ -18,6 +18,7 @@ import { displayValue } from '../analysis/spectrum'
 import { beatMs, snapMs, snapMsFloor } from '../jps/snap'
 import { barStartTick, isBarStartTick } from '../jps/bars'
 import { COPY } from '../brand/copy'
+import { assignLanes } from './noteLanes'
 import { msToX, pickTickSeconds, spanMs, xToMs } from './timeAxis'
 import type { PitchMode, View } from '../model/store'
 import type { EditMode, LoopRange, RawNote, SnapMode, Spectrum } from '../model/types'
@@ -164,6 +165,8 @@ export function NoteRoll(props: Props) {
   /* 按住 Alt 临时当绘制模式用（用户 m05672）：选择模式下 Alt 一按就能画，松开回到选择 */
   const [altHeld, setAltHeld] = useState(false)
   const drag = useRef<Drag | null>(null)
+  /* 同一行里重叠的音要上下错开（用户 m00741）：车道算法在 noteLanes.ts，画和点共用同一份 */
+  const lanes = useMemo(() => assignLanes(notes), [notes])
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -416,14 +419,16 @@ export function NoteRoll(props: Props) {
       }
     }
 
-    /* 5) 音符 */
+    /* 5) 音符（同一行里时间撞车的音按车道上下错开，见 noteLanes.ts） */
     for (const n of notes) {
       if (n.midi > metrics.top || n.midi < bottomMidi) continue
       const x1 = xAt(n.startMs)
       const x2 = Math.max(x1 + 2, xAt(n.endMs))
       if (x2 < metrics.left || x1 > metrics.w) continue
-      const y = rowTop(n.midi)
-      const h = ROW_H - 1
+      const spot = lanes.get(n.id)
+      const per = ROW_H / (spot?.lanes ?? 1)
+      const y = rowTop(n.midi) + (spot?.lane ?? 0) * per
+      const h = Math.max(2, per - 1)
       const sel = n.id === props.selectedId
       /* 确认过的音是"我要扒的谱音"，得在彩虹热力图上跳出来（用户 m06417）：
        * 亮青绿实心 + 深色描边 + 一点外发光，像贴上去的小卡片；没确认的保持灰、别抢眼。 */
@@ -646,6 +651,7 @@ export function NoteRoll(props: Props) {
     spectrum,
     metrics,
     notes,
+    lanes,
     props.bpm,
     props.gain,
     props.contrast,
@@ -738,11 +744,16 @@ export function NoteRoll(props: Props) {
         if (n.midi !== midi) continue
         const x1 = xAt(n.startMs)
         const x2 = Math.max(x1 + 3, xAt(n.endMs))
-        if (x >= x1 - 1 && x <= x2 + 1) return n
+        if (x < x1 - 1 || x > x2 + 1) continue
+        /* 同一行撞车的音上下错开画，所以还要看点在不在它自己那一条里（用户 m00741） */
+        const spot = lanes.get(n.id)
+        const per = ROW_H / (spot?.lanes ?? 1)
+        const top = rowTop(midi) + (spot?.lane ?? 0) * per
+        if (y >= top - 1 && y <= top + per + 1) return n
       }
       return null
     },
-    [midiAt, notes, xAt],
+    [lanes, midiAt, notes, rowTop, xAt],
   )
 
   const onPointerDown = useCallback(

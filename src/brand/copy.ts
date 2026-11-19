@@ -45,6 +45,10 @@ export const COPY = {
   autoPage: '自动翻页',
   autoPageTip: '播放时视野跟着播放头走（放大后才感觉得到）',
   confirmAll: '全选',
+  confirmAllEmptyTip: '还没有分析出来的音：点一下会用当前这一轨分析一遍，全部当谱音',
+  analyze: '分析',
+  analyzeTip:
+    '对当前这一轨（混音/人声/伴奏）重新分析：自动判音、画到表上、全部当谱音 —— 先出一版初稿，再人工听改',
   clearAll: '全不选',
   clearAllTip: '把所有音都取消确认（导出与简谱预览都会空掉）',
   confirmAllTip: '把分析出来的音全部当成谱音（之后再逐个取消不对的）',

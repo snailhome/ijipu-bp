@@ -23,6 +23,7 @@ import { marks } from '../src/jps/marks'
 import { snapMs } from '../src/jps/snap'
 import { toJps } from '../src/jps/toJps'
 import { msToX, spanMs } from '../src/ui/timeAxis'
+import { assignLanes } from '../src/ui/noteLanes'
 import { useBp } from '../src/model/store'
 import type { RawNote } from '../src/model/types'
 
@@ -376,6 +377,32 @@ const melody = concat([
   check('zoom=1 时 0ms 在左边界', Math.abs(msToX(0, view, 4000, 66, 500) - 66) < 1e-6, String(msToX(0, view, 4000, 66, 500)))
   check('zoom=1 时末尾在右边界', Math.abs(msToX(4000, view, 4000, 66, 500) - 566) < 1e-6, String(msToX(4000, view, 4000, 66, 500)))
   check('zoom=2 时一屏只显示一半', Math.abs(spanMs({ zoom: 2, panMs: 0 }, 4000) - 2000) < 1e-6, String(spanMs({ zoom: 2, panMs: 0 }, 4000)))
+}
+
+/* ---------------- 11.11 同一行重叠的音符分车道（用户 m00741：不能完全盖住） ---------------- */
+{
+  const note = (id: string, midi: number, startMs: number, endMs: number): RawNote => ({
+    id,
+    midi,
+    startMs,
+    endMs,
+    velocity: 0.8,
+    confirmed: true,
+  })
+  const single = assignLanes([note('a', 60, 0, 500)])
+  check('分车道：单个音占满整行（1 条）', single.get('a')?.lane === 0 && single.get('a')?.lanes === 1)
+  const dup = assignLanes([note('a', 60, 0, 500), note('b', 60, 0, 500)])
+  check(
+    '分车道：同音高同一时刻两个音 → 2 条、各占一条',
+    dup.get('a')?.lanes === 2 && dup.get('a')?.lane !== dup.get('b')?.lane,
+    JSON.stringify([...dup]),
+  )
+  const partial = assignLanes([note('a', 60, 0, 500), note('b', 60, 400, 900)])
+  check('分车道：部分重叠也是 2 条', partial.get('a')?.lanes === 2 && partial.get('b')?.lanes === 2)
+  const apart = assignLanes([note('a', 60, 0, 500), note('b', 60, 500, 900)])
+  check('分车道：首尾相接不算撞车（各自整行）', apart.get('a')?.lanes === 1 && apart.get('b')?.lanes === 1)
+  const other = assignLanes([note('a', 60, 0, 500), note('b', 62, 0, 500)])
+  check('分车道：不同音高本来就分行，不切车道', other.get('a')?.lanes === 1 && other.get('b')?.lanes === 1)
 }
 
 /* ---------------- 12. 界面能挂载（SSR 渲染一次，抓初始渲染的崩溃） ---------------- */

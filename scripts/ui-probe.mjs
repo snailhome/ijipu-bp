@@ -275,6 +275,13 @@ try {
   })()`)
   check('能灌入假分析（2 个未确认音）', injected === 2, String(injected))
 
+  /* 顶栏「分析」按钮：用户 m00741 就是说点它没反应，这里至少守住入口在、有音频后能点 */
+  const analyzeBtn = await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '分析')
+    return b ? { disabled: b.disabled, title: b.title } : null
+  })()`)
+  check('顶栏有「分析」按钮（有音频时能点）', !!analyzeBtn && analyzeBtn.disabled === false, JSON.stringify(analyzeBtn))
+
   /** 点音符表画布上的一格（客户端坐标由画布矩形换算） */
   const clickRoll = async (fx, fy) => {
     const box = await cdp.eval(`(() => {
@@ -1155,6 +1162,67 @@ try {
   check('弱起 1 拍时 Ctrl+→ 跳到第 2 小节起点', Math.abs(afterPickupJump - 500) < 90, String(Math.round(afterPickupJump)))
   await cdp.eval(`window.__bp.getState().setPickupBeats(0)`)
   await sleep(120)
+
+  /* ── 同音高、同一时刻两个音：上下错开，点上半 / 下半要能分别选中、分别删（用户 m00741） ── */
+  const laneSetup = async () => cdp.eval(`(() => {
+    const bp = window.__bp, st = bp.getState()
+    st.setLoaded({ fileName: 'probe.wav', filePath: null, durationMs: 4000 })
+    const frames = 200, bins = 88
+    st.setAnalysis({
+      durationMs: 4000, sampleRate: 44100,
+      spectrum: { frames, hopMs: 20, sampleRate: 44100, data: new Float32Array(frames * bins), frameRms: new Float32Array(frames).fill(0.1) },
+      notes: [
+        { id: 'dup0', midi: 67, startMs: 1000, endMs: 1500, velocity: 0.8, confirmed: false },
+        { id: 'dup1', midi: 67, startMs: 1000, endMs: 1500, velocity: 0.8, confirmed: false },
+      ],
+      bpm: 120, firstBeatMs: 0,
+      keyCandidates: [{ tonic: 0, share: 1 }],
+    })
+    st.setAllConfirmed(true)
+    st.setView({ zoom: 1, panMs: 0 })
+    st.setMode('select')
+    return bp.getState().notes.length
+  })()`)
+  const laneCount = await laneSetup()
+  check('同一音高同一时刻的两个音都在（假分析）', laneCount === 2, String(laneCount))
+  /* 点的 y 落在行内 1/4（上半 → 车道 0）或 3/4（下半 → 车道 1）；x 取两个音的中点 */
+  const lanePoint = async (frac) => cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    const m = window.__bpRoll || {}
+    const ROW_H = 14, KEY_W = 66
+    const RULER_H = typeof m.rulerH === 'number' ? m.rulerH : 36
+    const top = typeof m.top === 'number' ? m.top : 76
+    const c = document.querySelector('.pane.roll canvas')
+    const r = c.getBoundingClientRect()
+    const span = s.durationMs / s.view.zoom
+    const x = KEY_W + ((1250 - s.view.panMs) / span) * (r.width - KEY_W)
+    const y = RULER_H + (top - 67) * ROW_H + ROW_H * ${frac}
+    return { x: r.x + x, y: r.y + y }
+  })()`)
+  const pTop = await lanePoint(0.25)
+  await cdp.clickAt(pTop.x, pTop.y)
+  await sleep(160)
+  await cdp.pressKey('Delete', 'Delete', 46)
+  await sleep(200)
+  const leftTop = await cdp.eval(`window.__bp.getState().notes.map((n) => n.id)`)
+  check(
+    '点重叠音的上半再删 → 删的是上面那条（dup0）',
+    Array.isArray(leftTop) && leftTop.length === 1 && leftTop[0] === 'dup1',
+    JSON.stringify(leftTop),
+  )
+
+  await laneSetup()
+  const pBot = await lanePoint(0.75)
+  await cdp.clickAt(pBot.x, pBot.y)
+  await sleep(160)
+  await cdp.pressKey('Delete', 'Delete', 46)
+  await sleep(200)
+  const leftBot = await cdp.eval(`window.__bp.getState().notes.map((n) => n.id)`)
+  check(
+    '点重叠音的下半再删 → 删的是下面那条（dup1）',
+    Array.isArray(leftBot) && leftBot.length === 1 && leftBot[0] === 'dup0',
+    JSON.stringify(leftBot),
+  )
 
   /* ── 帮助弹层（顶栏键盘图标） ── */
   await cdp.eval(`(() => {
