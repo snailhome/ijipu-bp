@@ -132,8 +132,8 @@ class Cdp {
   }
 
   /** 按一下某个键（code 用 DOM 的 code，比如 Space / Backquote） */
-  async pressKey(code, key = code, vk = 0) {
-    const base = { code, key, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk }
+  async pressKey(code, key = code, vk = 0, modifiers = 0) {
+    const base = { code, key, modifiers, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk }
     await this.send('Input.dispatchKeyEvent', { type: 'keyDown', ...base })
     await this.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base })
     await sleep(120)
@@ -544,11 +544,11 @@ try {
   // ── 右侧栏开关（收起时主区要真正占满，别留 280px 空白）──
   const sideOn = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
   const rollWOn = await cdp.eval(`document.querySelector('.pane.roll').getBoundingClientRect().width`)
-  await cdp.eval(`document.querySelector('.icon-btn').click()`)
+  await cdp.eval(`document.querySelector('.toolbar .side-toggle').click()`)
   await sleep(200)
   const sideOff = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !el || el.classList.contains('off') })()`)
   const rollWOff = await cdp.eval(`document.querySelector('.pane.roll').getBoundingClientRect().width`)
-  await cdp.eval(`document.querySelector('.icon-btn').click()`)
+  await cdp.eval(`document.querySelector('.toolbar .side-toggle').click()`)
   await sleep(200)
   const sideBack = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
   check('右侧栏默认展开、点图标能收起、再点能展开', sideOn && sideOff && sideBack)
@@ -1068,10 +1068,10 @@ try {
     windowsVirtualKeyCode: 90,
   })
   await sleep(250)
-  const afterUndo = await cdp.eval(
+  const undoAfterKey = await cdp.eval(
     `window.__bp.getState().notes.find((n) => n.id === ${JSON.stringify(noteId)})?.midi`,
   )
-  check('Ctrl+Z 撤销方向键那一步', afterUndo === draggedMidi, `${midiAfterKey}→${afterUndo}`)
+  check('Ctrl+Z 撤销方向键那一步', undoAfterKey === draggedMidi, `${midiAfterKey}→${undoAfterKey}`)
 
   /* 工具条上的撤销按钮：有历史时可点，点一下真的回退 */
   const beforeBtn = await cdp.eval(`window.__bp.getState().notes.length`)
@@ -1089,6 +1089,73 @@ try {
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setMode('select') })()`)
   await sleep(150)
 
+  /* ── 撤销 / 重做（用户 m05893：撤销提到 200 步，并加重做） ── */
+  await cdp.eval(`window.__bp.setState({ notes: [], history: [], future: [], selectedId: null })`)
+  await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    s.addNote({ midi: 62, startMs: 0, endMs: 250 })
+    s.addNote({ midi: 64, startMs: 250, endMs: 500 })
+  })()`)
+  await sleep(200)
+  await cdp.clickText('撤销')
+  await sleep(200)
+  const undoCaseN = await cdp.eval(`({ n: window.__bp.getState().notes.length, f: window.__bp.getState().future.length })`)
+  check('点「撤销」少一个音、并且进了重做栈', undoCaseN.n === 1 && undoCaseN.f === 1, JSON.stringify(undoCaseN))
+  await cdp.clickText('重做')
+  await sleep(200)
+  const redoCaseN = await cdp.eval(`({ n: window.__bp.getState().notes.length, f: window.__bp.getState().future.length })`)
+  check('点「重做」把音补回来、重做栈清空', redoCaseN.n === 2 && redoCaseN.f === 0, JSON.stringify(redoCaseN))
+
+  /* ── 回开头 / Ctrl+左右跳小节 ── */
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setLoop(null); s.setLoopOn(false); s.setCurrentMs(1700) })()`)
+  await sleep(120)
+  await cdp.clickText('回到开头')
+  await sleep(200)
+  const atStart = await cdp.eval(`window.__bp.getState().currentMs`)
+  check('点「回到开头」播放头回 0', atStart < 60, String(Math.round(atStart)))
+
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setLoop({ startMs: 800, endMs: 2400 }); s.setLoopOn(true); s.setCurrentMs(2000) })()`)
+  await sleep(120)
+  await cdp.clickText('回到开头')
+  await sleep(200)
+  const atLoopStart = await cdp.eval(`window.__bp.getState().currentMs`)
+  check('有播放区时「回到开头」回区间开头', Math.abs(atLoopStart - 800) < 60, String(Math.round(atLoopStart)))
+
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setLoop(null); s.setLoopOn(false); s.setBpm(120); s.setBeatsPerBar(4); s.setFirstBeatMs(0); s.setCurrentMs(100) })()`)
+  await sleep(120)
+  /* 一小节 = 4 拍 @120bpm = 2000ms；从第 0 小节往后跳应落在 2000ms */
+  await cdp.pressKey('ArrowRight', 'ArrowRight', 39, 2)
+  await sleep(220)
+  const afterBarJump = await cdp.eval(`window.__bp.getState().currentMs`)
+  check('Ctrl+→ 往后跳一个小节', Math.abs(afterBarJump - 2000) < 90, String(Math.round(afterBarJump)))
+  await cdp.pressKey('ArrowLeft', 'ArrowLeft', 37, 2)
+  await sleep(220)
+  const afterBarBack = await cdp.eval(`window.__bp.getState().currentMs`)
+  check('Ctrl+← 往回跳一个小节', Math.abs(afterBarBack - 0) < 90, String(Math.round(afterBarBack)))
+
+  /* ── 帮助弹层（顶栏键盘图标） ── */
+  await cdp.eval(`(() => {
+    const btn = [...document.querySelectorAll('.toolbar .icon-btn')].find((b) => (b.getAttribute('aria-label') || '').includes('按键'))
+    if (btn) btn.click()
+  })()`)
+  await sleep(250)
+  const helpOpen = await cdp.eval(`!!document.querySelector('.modal-backdrop .modal')`)
+  check('点顶栏键盘图标能打开帮助弹层', helpOpen === true, String(helpOpen))
+  const helpRows = await cdp.eval(`document.querySelectorAll('.modal .help-row').length`)
+  check('帮助弹层里列了按键条目', helpRows > 10, String(helpRows))
+  await cdp.pressKey('Escape', 'Escape', 27)
+  await sleep(250)
+  const helpClosed = await cdp.eval(`!document.querySelector('.modal-backdrop')`)
+  check('Esc 能关掉帮助弹层', helpClosed === true, String(helpClosed))
+
+  /* ── 右栏滑条值到顶时填充到头 ── */
+  await cdp.eval(`window.__bp.getState().setGain(5)`)
+  await sleep(200)
+  const gainFill = await cdp.eval(`(() => {
+    const el = [...document.querySelectorAll('.side input[type=range]')].find((x) => x.max === '5')
+    return el ? getComputedStyle(el).getPropertyValue('--fill').trim() : 'none'
+  })()`)
+  check('倍率滑条拉满时填充到头（--fill=100%）', gainFill === '100.0%', gainFill)
   const errs = await cdp.eval(`window.__bpErrors || 0`)
   check('页面没有运行时错误', !errs, errs ? String(errs) : '')
 

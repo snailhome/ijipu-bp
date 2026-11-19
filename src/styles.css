@@ -601,3 +601,117 @@ a.link {
 .check input {
   accent-color: var(--accent);
 }
+
+/* ===== 右栏滑条：自己画轨道和拇指，值满了就真的顶到头 =====
+   浏览器默认的 range 在 Windows 上会留一段固定内缩，值到最大时拇指离右端还有一截，
+   看着像"没到头"。这里 appearance:none 自己画，--fill 由 React 按当前值的百分比写进去。 */
+.side input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 18px;
+  /* 通用的 input 规则会画边框和内边距，滑条这里要清掉，否则外面套一个圆角框 */
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.side input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0 var(--fill, 50%),
+    rgba(255, 255, 255, 0.18) var(--fill, 50%) 100%
+  );
+}
+
+.side input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+.side input[type='range']::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.side input[type='range']::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.side input[type='range']::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+/* ===== 帮助弹层（顶栏键盘图标点开） ===== */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 6, 10, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.modal {
+  width: min(720px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-body {
+  padding: 10px 14px 16px;
+  overflow-y: auto;
+}
+
+.modal-body h4 {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.help-row {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.06);
+}
+
+.help-keys {
+  color: var(--fg);
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.help-what {
+  color: var(--fg-dim);
+}

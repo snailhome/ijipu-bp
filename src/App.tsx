@@ -23,6 +23,53 @@ import type { AnalyzeResult, LoopRange, SnapMode } from './model/types'
 import { NoteRoll } from './ui/NoteRoll'
 import { StripPreview } from './ui/StripPreview'
 
+/** range 滑条的"已填充"比例（CSS 里 --fill 决定渐变停在哪；值到顶时颜色真的顶到尽头） */
+function fillStyle(pct: number): Record<string, string> {
+  const v = Math.max(0, Math.min(100, pct))
+  return { ['--fill']: v.toFixed(1) + '%' }
+}
+
+/** 帮助面板的内容（用户 m05893：顶栏键盘图标点开就能查按键 / 快捷键 / 鼠标操作） */
+const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
+  {
+    title: '播放',
+    rows: [
+      ['空格', '播放 / 暂停；圈了播放区就在区间里循环'],
+      ['Tab', '原音频 / 合成音 互换'],
+      ['L', '重复区间开关'],
+      ['Home', '回开头（没选播放区回曲子开头，选了回播放区开头）'],
+      ['Ctrl + ← / →', '退 / 进一个小节'],
+    ],
+  },
+  {
+    title: '编辑',
+    rows: [
+      ['` 反引号', '绘制 / 选择 互换（默认选择）'],
+      ['按住 Alt', '选择模式下临时当绘制用，松开恢复'],
+      ['拖空白处', '画一个音（起点落在光标那一格，按住往右拖加长）'],
+      ['拖音符中间', '上下改音高、左右改位置'],
+      ['拖音符右缘', '改时值（光标会变左右箭头）'],
+      ['点已有音符', '确认 / 取消确认（只有确认过的音才会导出）'],
+      ['↑ / ↓', '选中的音符升 / 降半音（Shift 一个八度）'],
+      ['Delete / Backspace', '删掉选中的音符；右键点音符也能删'],
+      ['Ctrl + Z', '撤销（最多 200 步，一次拖动算一步）'],
+      ['Ctrl + Shift + Z / Ctrl + Y', '重做'],
+      ['Ctrl + A', '全选确认'],
+    ],
+  },
+  {
+    title: '鼠标与视野',
+    rows: [
+      ['滚轮', '上下换音区（键列上的锁锁住后改成左右平移）'],
+      ['Shift + 滚轮', '左右平移'],
+      ['Shift + Alt + 滚轮', '横向缩放（Ctrl + 滚轮也行）'],
+      ['拖时间尺', '框播放区间；点一下 = 取消区间并挪播放头'],
+      ['拖区间两端握柄', '改区间起止'],
+      ['右栏滑条上滚轮', '微调这条滑条（按住 Shift 五倍步长）'],
+      ['点钢琴键', '试听该音高'],
+    ],
+  },
+]
 const KEY_CHOICES = Array.from({ length: 12 }, (_, i) => i)
 const SNAP_CHOICES: Array<{ v: SnapMode; label: string }> = [
   { v: 'off', label: COPY.snapOff },
@@ -49,6 +96,7 @@ export default function App() {
   const autoPage = useBp((s) => s.autoPage)
   const lockPitch = useBp((s) => s.lockPitch)
   const historyLen = useBp((s) => s.history.length)
+  const futureLen = useBp((s) => s.future.length)
   const gain = useBp((s) => s.gain)
   const contrast = useBp((s) => s.contrast)
   const suppress = useBp((s) => s.suppress)
@@ -66,6 +114,20 @@ export default function App() {
   const set = useBp
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [helpOpen, setHelpOpen] = useState(false)
+
+  /* 帮助弹层：Esc 关掉（点外面关在 backdrop 的 onClick 里） */
+  useEffect(() => {
+    if (!helpOpen) return
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        ev.preventDefault()
+        setHelpOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [helpOpen])
   /* 右侧栏（调性/参数/显示/源码）能不能收起来——宽屏看谱时把它关掉能多出一大块 */
   const [showSide, setShowSide] = useState(true)
   /* 调性分析那一组能不能折起来（调号选择挪进组里了） */
@@ -273,6 +335,27 @@ export default function App() {
     [set, startPlay],
   )
 
+  /* 回开头：没选播放区就回曲子开头，选了播放区就回播放区开头（用户 m05893） */
+  const goStart = useCallback(() => {
+    const st = set.getState()
+    seek(st.loopOn && st.loop ? st.loop.startMs : 0)
+  }, [seek, set])
+
+  /* Ctrl+左右：按小节跳（用户 m05893） */
+  const jumpBar = useCallback(
+    (dir: -1 | 1) => {
+      const st = set.getState()
+      const barMs = (60000 / Math.max(1, st.bpm)) * Math.max(1, st.beatsPerBar)
+      const idx = Math.floor((st.currentMs - st.firstBeatMs) / barMs)
+      const target = Math.max(
+        0,
+        Math.min(st.durationMs, st.firstBeatMs + (idx + dir) * barMs),
+      )
+      seek(target)
+    },
+    [seek, set],
+  )
+
 
   /* ---------- 重复区间：播放到区间末尾就跳回区间开头 ---------- */
   useEffect(() => {
@@ -353,9 +436,25 @@ export default function App() {
           e.preventDefault()
           removeNote(selectedId)
         }
+      } else if (e.code === 'KeyZ' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+        /* Ctrl+Shift+Z 跟 Ctrl+Y 一样是重做 */
+        e.preventDefault()
+        st.redo()
       } else if (e.code === 'KeyZ' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
         st.undo()
+      } else if (e.code === 'KeyY' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        st.redo()
+      } else if (e.code === 'Home') {
+        e.preventDefault()
+        goStart()
+      } else if (e.code === 'ArrowLeft' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        jumpBar(-1)
+      } else if (e.code === 'ArrowRight' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        jumpBar(1)
       } else if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
         /* 选中音符上下改音高（Shift 一个八度，用户 m05736 第 1 条） */
         if (!selectedId) return
@@ -371,7 +470,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey, true) // 捕获阶段：先于控件自己的默认行为
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [removeNote, selectedId, set, switchMode, togglePlay])
+  }, [goStart, jumpBar, removeNote, selectedId, set, switchMode, togglePlay])
 
   /* ---------- 导出 ---------- */
   const exportJps = useCallback(async () => {
@@ -493,6 +592,16 @@ export default function App() {
         >
           {COPY.undo}
         </button>
+        <button
+          onClick={() => useBp.getState().redo()}
+          disabled={futureLen === 0}
+          title={COPY.redoTip}
+        >
+          {COPY.redo}
+        </button>
+        <button onClick={goStart} title={COPY.goStartTip}>
+          {COPY.goStart}
+        </button>
         <button onClick={() => useBp.getState().setAllConfirmed(true)} disabled={!notes.length} title={COPY.confirmAllTip}>
           {COPY.confirmAll}
         </button>
@@ -511,6 +620,22 @@ export default function App() {
         </button>
         <button onClick={() => void exportJps()} disabled={confirmedCount === 0} title="只导出你确认过的音">
           {COPY.exportJps}
+        </button>
+        {/* 帮助：按键 / 快捷键 / 鼠标操作（用户 m05893） */}
+        <button
+          className={helpOpen ? 'icon-btn on' : 'icon-btn'}
+          onClick={() => setHelpOpen(true)}
+          title="按键与鼠标操作"
+          aria-label="按键与鼠标操作"
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="1.5" y="4" width="13" height="8" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            <rect x="3.4" y="6" width="1.6" height="1.6" fill="currentColor" />
+            <rect x="6" y="6" width="1.6" height="1.6" fill="currentColor" />
+            <rect x="8.6" y="6" width="1.6" height="1.6" fill="currentColor" />
+            <rect x="11.2" y="6" width="1.6" height="1.6" fill="currentColor" />
+            <rect x="4.6" y="9" width="6.8" height="1.5" rx="0.5" fill="currentColor" />
+          </svg>
         </button>
         {/* 右侧栏开关：图标与 iJipu BP 的兄弟项目「爱出片」用同一个
             （public/icons/右侧边栏.svg，靠 CSS mask 上色，打开=亮、收起=灰） */}
@@ -650,7 +775,7 @@ export default function App() {
                   onChange={(e) => useBp.getState().setSuppress(Number(e.target.value))}
                   onPointerUp={(e) => applySuppress(Number((e.target as HTMLInputElement).value))}
                   onKeyUp={(e) => applySuppress(Number((e.currentTarget as HTMLInputElement).value))}
-                  style={{ width: 120 }}
+                  style={{ width: 120, ...fillStyle(suppress * 100) }}
                 />
                 <span className="mono">{suppress.toFixed(2)}</span>
               </label>
@@ -718,7 +843,7 @@ export default function App() {
                   step={0.1}
                   value={gain}
                   onChange={(e) => useBp.getState().setGain(Number(e.target.value))}
-                  style={{ width: 140 }}
+                  style={{ width: 140, ...fillStyle(((gain - 0.2) / 4.8) * 100) }}
                 />
                 <span className="hint" style={{ width: 30, textAlign: 'right' }}>
                   {gain.toFixed(1)}
@@ -733,7 +858,7 @@ export default function App() {
                   step={0.05}
                   value={contrast}
                   onChange={(e) => useBp.getState().setContrast(Number(e.target.value))}
-                  style={{ width: 140 }}
+                  style={{ width: 140, ...fillStyle(((contrast - 0.3) / 2.7) * 100) }}
                 />
                 <span className="hint" style={{ width: 30, textAlign: 'right' }}>
                   {contrast.toFixed(2)}
@@ -760,6 +885,33 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* 帮助弹层：点外面或按 Esc 关掉 */}
+      {helpOpen && (
+        <div className="modal-backdrop" onClick={() => setHelpOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="按键与鼠标操作">
+            <div className="modal-head">
+              <strong>按键 · 快捷键 · 鼠标</strong>
+              <button className="icon-btn" onClick={() => setHelpOpen(false)} title="关闭（Esc）" aria-label="关闭">
+                ×
+              </button>
+            </div>
+            <div className="modal-body">
+              {HELP_SECTIONS.map((sec) => (
+                <section key={sec.title}>
+                  <h4>{sec.title}</h4>
+                  {sec.rows.map(([keys, what]) => (
+                    <div className="help-row" key={keys}>
+                      <span className="help-keys">{keys}</span>
+                      <span className="help-what">{what}</span>
+                    </div>
+                  ))}
+                </section>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="status">
         <span>{fileName ?? COPY.empty}</span>

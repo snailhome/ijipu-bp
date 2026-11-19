@@ -138,7 +138,9 @@ interface State {
   beginEdit: () => void
   endEdit: () => void
   undo: () => void
+  redo: () => void
   history: RawNote[][]
+  future: RawNote[][]
 }
 
 /** 由当前参数算出 grid / jps / warnings（纯计算，不改 state） */
@@ -184,11 +186,13 @@ function nextId(): string {
   return `m${seq.toString(36)}`
 }
 
-/* ── 撤销栈（用户 m05736：50 步） ──
+/* ── 撤销 / 重做栈（用户 m05736 要 50 步，m05893 加到 200 步并要重做） ──
  * 用整份 notes 快照，不做 diff：扒谱的音符量级是几百到几千，太便宜了，diff 反而容易出现
  * "撤销之后和原来差一点"的坑。
+ * 200 步的内存估算：一个音约 100 字节，1000 个音的曲子一份快照 100KB，200 份 ≈ 20MB 上限；
+ * 实际扒谱的曲子多在 300–800 个音，通常在 5–10MB，可以接受。
  * 拖动时会有几十次 patchNote，所以用 gestureDepth 归并成一步。 */
-const MAX_UNDO = 50
+const MAX_UNDO = 200
 let gestureDepth = 0
 let gestureSaved = false
 
@@ -198,7 +202,8 @@ function pushUndo(set: (p: Partial<State>) => void, get: () => State): void {
   const history = s.history.length >= MAX_UNDO ? s.history.slice(1) : s.history.slice()
   history.push(s.notes)
   gestureSaved = gestureDepth > 0
-  set({ history })
+  /* 一旦有新动作，原来的"重做"就作废（跟常见编辑器一致） */
+  set({ history, future: [] })
 }
 
 export const useBp = create<State>((set, get) => ({
@@ -208,6 +213,7 @@ export const useBp = create<State>((set, get) => ({
   analysis: null,
   notes: [],
   history: [],
+  future: [],
   busy: null,
   error: null,
   playing: false,
@@ -257,6 +263,7 @@ export const useBp = create<State>((set, get) => ({
       loop: null,
       loopOn: false,
       history: [],
+      future: [],
     })
     gestureDepth = 0
     gestureSaved = false
@@ -418,7 +425,25 @@ export const useBp = create<State>((set, get) => ({
     gestureDepth = 0
     gestureSaved = false
     const prev = s.history[s.history.length - 1]
-    set({ history: s.history.slice(0, -1), notes: prev })
+    set({
+      history: s.history.slice(0, -1),
+      /* 撤销出去的这一份进重做栈，重做时原样塞回来 */
+      future: [...s.future, s.notes].slice(-MAX_UNDO),
+      notes: prev,
+    })
+    applyDerived(set, get)
+  },
+  redo: () => {
+    const s = get()
+    if (s.future.length === 0) return
+    gestureDepth = 0
+    gestureSaved = false
+    const next = s.future[s.future.length - 1]
+    set({
+      future: s.future.slice(0, -1),
+      history: [...s.history, s.notes].slice(-MAX_UNDO),
+      notes: next,
+    })
     applyDerived(set, get)
   },
 }))

@@ -299,12 +299,12 @@ const melody = concat([
   check('再撤一步回到加音前', useBp.getState().notes.length === baseLen,
     `${useBp.getState().notes.length}/${baseLen}`)
 
-  /* 50 步上限：连加 60 个音，历史长度不该超过 50 */
-  for (let i = 0; i < 60; i++) {
+  /* 上限 200 步（用户 m05893 把 50 提到 200）：连加 220 个音，历史长度不该超过 200 */
+  for (let i = 0; i < 220; i++) {
     useBp.getState().addNote({ midi: 48, startMs: i * 100, endMs: i * 100 + 50 })
   }
   const depth = useBp.getState().history.length
-  check('撤销栈最多 50 步', depth === 50, String(depth))
+  check('撤销栈最多 200 步', depth === 200, String(depth))
 }
 
 /* ---------------- 11.8 确认集合：只有确认过的音才进谱 ---------------- */
