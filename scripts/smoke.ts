@@ -275,6 +275,38 @@ const melody = concat([
   check('回到初稿 = 分析出来的音符数', useBp.getState().notes.length === r.notes.length, `${useBp.getState().notes.length}/${r.notes.length}`)
 }
 
+/* ---------------- 11.75 撤销：一次拖动算一步、最多 50 步 ---------------- */
+{
+  const parts = [tone(261.63, 500), silence(300)]
+  const r = analyzeSamples(concat(parts), SR)
+  useBp.getState().setAnalysis(r)
+  const baseLen = useBp.getState().notes.length
+
+  /* 一次"拖动"：beginEdit → 多次 patchNote → endEdit，撤销一次要回到拖动前 */
+  const id = useBp.getState().addNote({ midi: 60, startMs: 0, endMs: 200 })
+  useBp.getState().endEdit() /* 把加音这一步收尾，单独算一步 */
+  const afterAdd = useBp.getState().notes.find((n) => n.id === id)
+  useBp.getState().beginEdit()
+  for (const step of [1, 2, 3, 4]) useBp.getState().patchNote(id, { midi: 60 + step })
+  useBp.getState().endEdit()
+  const afterDrag = useBp.getState().notes.find((n) => n.id === id)
+  useBp.getState().undo()
+  const afterUndo = useBp.getState().notes.find((n) => n.id === id)
+  check('一次拖动只算一步撤销', afterDrag?.midi === 64 && afterUndo?.midi === afterAdd?.midi,
+    `${afterAdd?.midi} → 拖到 ${afterDrag?.midi} → 撤销回 ${afterUndo?.midi}`)
+
+  useBp.getState().undo() /* 再撤一步：刚加的那个音没了 */
+  check('再撤一步回到加音前', useBp.getState().notes.length === baseLen,
+    `${useBp.getState().notes.length}/${baseLen}`)
+
+  /* 50 步上限：连加 60 个音，历史长度不该超过 50 */
+  for (let i = 0; i < 60; i++) {
+    useBp.getState().addNote({ midi: 48, startMs: i * 100, endMs: i * 100 + 50 })
+  }
+  const depth = useBp.getState().history.length
+  check('撤销栈最多 50 步', depth === 50, String(depth))
+}
+
 /* ---------------- 11.8 确认集合：只有确认过的音才进谱 ---------------- */
 {
   const parts = [tone(261.63, 500), tone(329.63, 500), silence(300)]

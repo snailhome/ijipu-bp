@@ -48,6 +48,7 @@ export default function App() {
   const loopOn = useBp((s) => s.loopOn)
   const autoPage = useBp((s) => s.autoPage)
   const lockPitch = useBp((s) => s.lockPitch)
+  const historyLen = useBp((s) => s.history.length)
   const gain = useBp((s) => s.gain)
   const contrast = useBp((s) => s.contrast)
   const suppress = useBp((s) => s.suppress)
@@ -352,6 +353,17 @@ export default function App() {
           e.preventDefault()
           removeNote(selectedId)
         }
+      } else if (e.code === 'KeyZ' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        st.undo()
+      } else if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
+        /* 选中音符上下改音高（Shift 一个八度，用户 m05736 第 1 条） */
+        if (!selectedId) return
+        const cur = st.notes.find((n) => n.id === selectedId)
+        if (!cur) return
+        e.preventDefault()
+        const step = e.shiftKey ? 12 : 1
+        st.patchNote(selectedId, { midi: cur.midi + (e.code === 'ArrowUp' ? step : -step) })
       } else if (e.code === 'KeyA' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
         st.setAllConfirmed(true)
@@ -474,6 +486,13 @@ export default function App() {
             {COPY.pitchNumber}
           </button>
         </div>
+        <button
+          onClick={() => useBp.getState().undo()}
+          disabled={historyLen === 0}
+          title={COPY.undoTip}
+        >
+          {COPY.undo}
+        </button>
         <button onClick={() => useBp.getState().setAllConfirmed(true)} disabled={!notes.length} title={COPY.confirmAllTip}>
           {COPY.confirmAll}
         </button>
@@ -531,6 +550,8 @@ export default function App() {
             onPatch={(id, patch) => useBp.getState().patchNote(id, patch)}
             onRemove={removeNote}
             onToggleConfirmed={(id) => useBp.getState().toggleConfirmed(id)}
+            onBeginEdit={() => useBp.getState().beginEdit()}
+            onEndEdit={() => useBp.getState().endEdit()}
             lockPitch={lockPitch}
             onToggleLock={() => useBp.getState().setLockPitch(!lockPitch)}
             onView={(v) => useBp.getState().setView(v)}

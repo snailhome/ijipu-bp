@@ -133,6 +133,12 @@ interface State {
   setAllConfirmed: (b: boolean) => void
   /** 丢掉人工改动，回到分析初稿 */
   resetNotes: () => void
+  /* ── 撤销（用户 m05736：50 步） ── */
+  /** 一次拖动/一次按键算一步：按下时调它，松手时调 endEdit */
+  beginEdit: () => void
+  endEdit: () => void
+  undo: () => void
+  history: RawNote[][]
 }
 
 /** 由当前参数算出 grid / jps / warnings（纯计算，不改 state） */
@@ -178,12 +184,30 @@ function nextId(): string {
   return `m${seq.toString(36)}`
 }
 
+/* ── 撤销栈（用户 m05736：50 步） ──
+ * 用整份 notes 快照，不做 diff：扒谱的音符量级是几百到几千，太便宜了，diff 反而容易出现
+ * "撤销之后和原来差一点"的坑。
+ * 拖动时会有几十次 patchNote，所以用 gestureDepth 归并成一步。 */
+const MAX_UNDO = 50
+let gestureDepth = 0
+let gestureSaved = false
+
+function pushUndo(set: (p: Partial<State>) => void, get: () => State): void {
+  if (gestureDepth > 0 && gestureSaved) return
+  const s = get()
+  const history = s.history.length >= MAX_UNDO ? s.history.slice(1) : s.history.slice()
+  history.push(s.notes)
+  gestureSaved = gestureDepth > 0
+  set({ history })
+}
+
 export const useBp = create<State>((set, get) => ({
   fileName: null,
   filePath: null,
   durationMs: 0,
   analysis: null,
   notes: [],
+  history: [],
   busy: null,
   error: null,
   playing: false,
@@ -232,7 +256,10 @@ export const useBp = create<State>((set, get) => ({
       view: { zoom, panMs: 0 },
       loop: null,
       loopOn: false,
+      history: [],
     })
+    gestureDepth = 0
+    gestureSaved = false
   },
   setAnalysis: (a) => {
     set({
@@ -311,6 +338,7 @@ export const useBp = create<State>((set, get) => ({
   refresh: () => applyDerived(set, get),
 
   addNote: (n) => {
+    pushUndo(set, get)
     const startMs = Math.max(0, Math.min(n.startMs, n.endMs))
     /* 最短 20ms：只是防 0 长度，不再卡 40ms —— 最小绘制格是 1/16 拍（120bpm 下 31ms） */
     const endMs = Math.max(startMs + 20, Math.max(n.startMs, n.endMs))
@@ -330,6 +358,7 @@ export const useBp = create<State>((set, get) => ({
     return note.id
   },
   patchNote: (id, patch) => {
+    pushUndo(set, get)
     const notes = get()
       .notes.map((n) => {
         if (n.id !== id) return n
@@ -349,10 +378,12 @@ export const useBp = create<State>((set, get) => ({
     applyDerived(set, get)
   },
   removeNote: (id) => {
+    pushUndo(set, get)
     set({ notes: get().notes.filter((n) => n.id !== id) })
     applyDerived(set, get)
   },
   toggleConfirmed: (id) => {
+    pushUndo(set, get)
     set({
       notes: get().notes.map((n) =>
         n.id === id ? { ...n, confirmed: !n.confirmed } : n,
@@ -361,12 +392,33 @@ export const useBp = create<State>((set, get) => ({
     applyDerived(set, get)
   },
   setAllConfirmed: (b) => {
+    pushUndo(set, get)
     set({ notes: get().notes.map((n) => ({ ...n, confirmed: b })) })
     applyDerived(set, get)
   },
   resetNotes: () => {
     const a = get().analysis
+    pushUndo(set, get)
     set({ notes: a ? a.notes.map((n) => ({ ...n, confirmed: false })) : [] })
+    applyDerived(set, get)
+  },
+
+  /* ── 撤销 ── */
+  beginEdit: () => {
+    gestureDepth += 1
+    gestureSaved = false
+  },
+  endEdit: () => {
+    gestureDepth = 0
+    gestureSaved = false
+  },
+  undo: () => {
+    const s = get()
+    if (s.history.length === 0) return
+    gestureDepth = 0
+    gestureSaved = false
+    const prev = s.history[s.history.length - 1]
+    set({ history: s.history.slice(0, -1), notes: prev })
     applyDerived(set, get)
   },
 }))

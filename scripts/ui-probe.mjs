@@ -1008,6 +1008,85 @@ try {
   check('按住横拖只出一个音，长度跟着拖', dragOut.grew && dragOut.len > 300,
     `个数 ${dragBox.before}→${dragOut.grew ? '多一个' : '没对'}，长度 ${dragOut.len}ms`)
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setMode('select') })()`)
+
+  /* ── 音符右缘光标 / 上下拖改音高 / 方向键改音高 / 撤销（用户 m05780、m05736） ── */
+  const noteId = await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    s.setMode('draw')
+    const id = s.addNote({ midi: 64, startMs: 1000, endMs: 1600 })
+    s.endEdit()
+    return id
+  })()`)
+  await sleep(200)
+  const noteGeo = await cdp.eval(`(() => {
+    const st = window.__bp.getState()
+    const m = window.__bpRoll
+    const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+    const n = st.notes.find((x) => x.id === ${JSON.stringify(noteId)})
+    const span = st.durationMs / st.view.zoom
+    const xOf = (ms) => r.x + m.left + ((ms - st.view.panMs) / span) * (r.width - m.left)
+    const yOf = (midi) => r.y + m.rulerH + (m.top - midi) * 14 + 7
+    return { x0: xOf(n.startMs), x1: xOf(n.endMs), y: yOf(n.midi), midi: n.midi }
+  })()`)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: noteGeo.x1 - 3,
+    y: noteGeo.y,
+    button: 'none',
+    buttons: 0,
+  })
+  await sleep(200)
+  const edgeCursor = await cdp.eval(`document.querySelector('.pane.roll canvas').style.cursor`)
+  check('鼠标停在音符右缘时是左右箭头', edgeCursor === 'ew-resize', edgeCursor)
+
+  await cdp.dragAt(noteGeo.x0 + 20, noteGeo.y, noteGeo.x0 + 20, noteGeo.y - 28, 6) // 往上拖两行
+  await sleep(200)
+  const draggedMidi = await cdp.eval(
+    `window.__bp.getState().notes.find((n) => n.id === ${JSON.stringify(noteId)})?.midi`,
+  )
+  check('上下拖音符改音高', draggedMidi === noteGeo.midi + 2, `${noteGeo.midi}→${draggedMidi}`)
+
+  await cdp.clickAt(noteGeo.x0 + 20, noteGeo.y - 28) // 选中它（不拖 = 切确认，但选中是副作用）
+  await cdp.pressKey('ArrowUp', 'ArrowUp', 38)
+  const midiAfterKey = await cdp.eval(
+    `window.__bp.getState().notes.find((n) => n.id === ${JSON.stringify(noteId)})?.midi`,
+  )
+  check('方向键上 = 升半音', midiAfterKey === draggedMidi + 1, `${draggedMidi}→${midiAfterKey}`)
+
+  await cdp.send('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    code: 'KeyZ',
+    key: 'z',
+    modifiers: 2,
+    windowsVirtualKeyCode: 90,
+  })
+  await cdp.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    code: 'KeyZ',
+    key: 'z',
+    modifiers: 2,
+    windowsVirtualKeyCode: 90,
+  })
+  await sleep(250)
+  const afterUndo = await cdp.eval(
+    `window.__bp.getState().notes.find((n) => n.id === ${JSON.stringify(noteId)})?.midi`,
+  )
+  check('Ctrl+Z 撤销方向键那一步', afterUndo === draggedMidi, `${midiAfterKey}→${afterUndo}`)
+
+  /* 工具条上的撤销按钮：有历史时可点，点一下真的回退 */
+  const beforeBtn = await cdp.eval(`window.__bp.getState().notes.length`)
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.addNote({ midi: 55, startMs: 2400, endMs: 2600 }); s.endEdit() })()`)
+  await cdp.clickText('撤销')
+  await sleep(200)
+  const afterBtn = await cdp.eval(`window.__bp.getState().notes.length`)
+  check('工具条的撤销按钮能回退一步', afterBtn === beforeBtn, `${beforeBtn + 1}→${afterBtn}`)
+  await cdp.eval(`window.__bp.setState({ history: [] })`)
+  await sleep(150)
+  const undoDisabled = await cdp.eval(
+    `(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === '撤销'); return !!b && b.disabled })()`,
+  )
+  check('没有历史时撤销按钮是灰的', undoDisabled === true, String(undoDisabled))
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setMode('select') })()`)
   await sleep(150)
 
   const errs = await cdp.eval(`window.__bpErrors || 0`)

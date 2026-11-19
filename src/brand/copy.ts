@@ -44,6 +44,8 @@ export const COPY = {
   confirmAll: '全选',
   clearAll: '全不选',
   confirmAllTip: '把分析出来的音全部当成谱音（之后再逐个取消不对的）',
+  undo: '撤销',
+  undoTip: '撤销上一步（Ctrl+Z，最多 50 步；一次拖动算一步）',
   resetDraft: '回到初稿',
   resetDraftTip: '丢掉所有手工改动与确认，回到分析结果',
   stripTitle: '简谱预览（流线谱：横轴即时间，改音立刻反映）',

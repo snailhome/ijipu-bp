@@ -48,6 +48,9 @@ interface Props {
   onPatch: (id: string, patch: Partial<Pick<RawNote, 'midi' | 'startMs' | 'endMs'>>) => void
   onRemove: (id: string) => void
   onToggleConfirmed: (id: string) => void
+  /* 一次拖动 = 一步撤销（用户 m05736） */
+  onBeginEdit: () => void
+  onEndEdit: () => void
   /* 键盘上方那把锁：锁住竖着换音区（用户 m05515） */
   lockPitch: boolean
   onToggleLock: () => void
@@ -124,7 +127,16 @@ type Drag =
   /** 拖重复区间的左/右端；grabMs 记按下时鼠标对应的时间，拖动时整体平移用 */
   | { kind: 'loopEdge'; edge: 'l' | 'r'; startMs: number; endMs: number }
   | { kind: 'loopMove'; grabMs: number; startMs: number; endMs: number }
-  | { kind: 'move'; id: string; grabMs: number; startMs: number; endMs: number; moved: boolean }
+  | {
+      kind: 'move'
+      id: string
+      grabMs: number
+      grabY: number
+      midi: number
+      startMs: number
+      endMs: number
+      moved: boolean
+    }
   | { kind: 'resize'; id: string; startMs: number }
   | { kind: 'create'; id: string; startMs: number; moved: boolean }
   /** 按在钢琴键上（只用来做高亮，松手就清） */
@@ -714,6 +726,7 @@ export function NoteRoll(props: Props) {
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
       e.currentTarget.setPointerCapture(e.pointerId)
+      props.onBeginEdit()
       /* Alt 临时绘制：除了 keydown 记的 altHeld，也认事件自带的 altKey（用户 m05672） */
       const draw = mode === 'draw' || altHeld || e.altKey
 
@@ -764,6 +777,8 @@ export function NoteRoll(props: Props) {
             kind: 'move',
             id: hit.id,
             grabMs: rawMs,
+            grabY: y,
+            midi: hit.midi,
             startMs: hit.startMs,
             endMs: hit.endMs,
             moved: false,
@@ -804,10 +819,16 @@ export function NoteRoll(props: Props) {
 
       const d = drag.current
       if (!d) {
-        /* 没在拖的时候：握柄上是左右箭头；其余一律箭头/手指（用户 m04626：绘制模式也用普通箭头，
-         * 不要十字；区间已经不能整段拖了，再显示 grab 会骗人） */
+        /* 没在拖的时候：握柄上是左右箭头；绘制模式下停在音符右缘也是左右箭头（用户 m05780：
+         * 得让用户看得出来这里能调时值）；其余一律普通箭头（m04626 说过不要十字）。 */
         const lh = loopHit(x)
-        e.currentTarget.style.cursor = lh === 'l' || lh === 'r' ? 'ew-resize' : 'default'
+        const edge =
+          (mode === 'draw' || altHeld) &&
+          (() => {
+            const hit = noteAt(x, y)
+            return !!hit && x >= xAt(hit.endMs) - EDGE_PX
+          })()
+        e.currentTarget.style.cursor = lh === 'l' || lh === 'r' || edge ? 'ew-resize' : 'default'
         return
       }
       const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, firstBeatMs: props.firstBeatMs }
@@ -845,10 +866,15 @@ export function NoteRoll(props: Props) {
       }
       if (d.kind === 'move') {
         const delta = msAt(x) - d.grabMs
-        if (!d.moved && Math.abs(delta) < beatMs(props.bpm) / 8) return
+        const dRow = Math.round((d.grabY - y) / ROW_H) /* 往上拖 = 升 key，一格一个半音 */
+        if (!d.moved && Math.abs(delta) < beatMs(props.bpm) / 8 && dRow === 0) return
         d.moved = true
         const start = snapMs(d.startMs + delta, opt, props.snap)
-        props.onPatch(d.id, { startMs: start, endMs: start + (d.endMs - d.startMs) })
+        props.onPatch(d.id, {
+          startMs: start,
+          endMs: start + (d.endMs - d.startMs),
+          midi: Math.max(MIDI_LOW, Math.min(MIDI_HIGH, d.midi + dRow)),
+        })
         return
       }
       if (d.kind === 'resize') {
@@ -868,6 +894,7 @@ export function NoteRoll(props: Props) {
   )
 
   const onPointerUp = useCallback(() => {
+    props.onEndEdit()
     const d = drag.current
     drag.current = null
     setPressMidi(null)
