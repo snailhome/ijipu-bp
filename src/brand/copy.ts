@@ -20,6 +20,13 @@ export const COPY = {
   pickupNone: '无（整小节）',
   pickupTip: '弱起：第 1 小节只算 N 拍（真·不完整首小节）。0 = 第 1 小节也是整小节。',
   exportJps: '导出 .jps',
+  projectSave: '保存方案',
+  projectSaveTip:
+    '把当前音频、参数和音符存成方案（存在音频旁边：<音频名>.bp.json）。平时改了会自动存，这是立刻存一次',
+  projectOpen: '打开方案',
+  projectOpenTip: '选一个 .bp.json 方案：按里面记的音频路径重新打开，并恢复参数、音符和视野',
+  projectSavedTip: '方案已存档',
+  projectAutoTip: '自动保存：改动 1 秒多后写回音频旁边的 .bp.json，下次打开接着干',
   copyJps: '复制 .jps',
   analyzing: '分析中…',
   empty: '还没有音频。点「打开音频」开始。',

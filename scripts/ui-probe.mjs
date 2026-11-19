@@ -282,6 +282,42 @@ try {
   })()`)
   check('顶栏有「分析」按钮（有音频时能点）', !!analyzeBtn && analyzeBtn.disabled === false, JSON.stringify(analyzeBtn))
 
+  /* 方案（用户 m01794）：两个入口在；「保存方案」点了要真的写出一份 .bp.json。
+   * 浏览器里没有磁盘路径，存到 localStorage 兜底（跟桌面壳的写文件走同一个序列化）。 */
+  const projectBtns = await cdp.eval(`(() => {
+    const q = (label) => [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === label)
+    const save = q('保存方案')
+    const open = q('打开方案')
+    return { save: !!save, open: !!open, saveDisabled: save ? save.disabled : null }
+  })()`)
+  check('顶栏有「保存方案」「打开方案」按钮', projectBtns.save && projectBtns.open, JSON.stringify(projectBtns))
+  check('没有音频路径时「保存方案」是灰的', projectBtns.saveDisabled === true)
+
+  const savedProj = await cdp.eval(`(async () => {
+    const bp = window.__bp
+    bp.setState({ filePath: '/tmp/probe.wav', fileName: 'probe.wav' })
+    await new Promise((r) => setTimeout(r, 120))
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '保存方案')
+    if (!b) return { err: 'no-button' }
+    b.click()
+    await new Promise((r) => setTimeout(r, 300))
+    const text = localStorage.getItem('bp.project:/tmp/probe.wav.bp.json')
+    const store = bp.getState()
+    const out = {
+      disabled: b.disabled,
+      stored: !!text,
+      storedNotes: text ? JSON.parse(text).notes.length : -1,
+      stateNotes: store.notes.length,
+    }
+    bp.setState({ filePath: null })
+    return out
+  })()`)
+  check(
+    '「保存方案」按下后写出方案，音符数对得上',
+    savedProj && savedProj.stored && savedProj.storedNotes === savedProj.stateNotes,
+    JSON.stringify(savedProj),
+  )
+
   /** 点音符表画布上的一格（客户端坐标由画布矩形换算） */
   const clickRoll = async (fx, fy) => {
     const box = await cdp.eval(`(() => {

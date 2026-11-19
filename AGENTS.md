@@ -140,3 +140,18 @@ npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM 
   **打包前跑 `npm run tauri:build` 会自动升**（脚本已接在里面），
   升完把版本文件一起提交；不要再手改 `package.json` / `tauri.conf.json` / `src/brand/version.ts` 三处号。
   基线：0.2.0（2026-11-19，用户拍板）。
+
+## 十、方案文件 `.bp.json`（用户 m01794：扒到一半能存、下次接着干）
+
+- **位置**：音频旁边，`<音频名含后缀>.bp.json`（`某曲.wav` → `某曲.wav.bp.json`）。
+  不集中往 `%APPDATA%` 存：跟着音频走，换机器、拷走整个文件夹都能接着干。
+- **内容**：`{ app:'ijipu-bp', version, savedAt, audio:{name,path}, settings{…}, notes[] }`。
+  `settings` 覆盖 BPM/拍号/弱起/首拍/调性/标题/滑条/播放模式/吸附/循环/视野/播放头；
+  `notes` 是全部音符（带 `confirmed`，它决定 jps 导出什么）。
+  **分轨的两轨音频不存**（几百 MB），恢复时重新分离；`analysis` 频谱也不存，重新算。
+- **代码分工**：`src/model/project.ts` 是**纯函数**（build/parse/serialize + 逐字段兜底），
+  `store.applyProject` 铺回状态，`App.tsx` 负责自动存（1.2 秒节流）、启动恢复、打开方案。
+- **规矩**：格式变了就抬 `PROJECT_VERSION`，`parseProject` 不认识就返回中文错误、按新开处理；
+  **不要手改用户目录里的 `.bp.json`**，坏字段会被兜底但不保证语义。
+- **验收**：`smoke` 里有 roundtrip 断言；桌面壳手动验"改几笔 → 关 → 重开 → 状态还在"，
+  并确认 `jpsToSvgPages` 的 `errors` 为空。

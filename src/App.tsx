@@ -30,6 +30,8 @@ import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
 import { PAGE_MS, useBp } from './model/store'
+import { buildProject, parseProject, projectPathFor, serializeProject } from './model/project'
+import type { ProjectFile } from './model/project'
 import { barIndexOf, barStartTick } from './jps/bars'
 import { spanMs } from './ui/timeAxis'
 import type { AnalyzeResult, LoopRange, SnapMode, Spectrum } from './model/types'
@@ -40,10 +42,21 @@ import { StripPreview } from './ui/StripPreview'
 type AnalyzeSource = 'mix' | 'vocals' | 'instrumental'
 const SOURCE_LABEL: Record<AnalyzeSource, string> = { mix: '混音', vocals: '人声', instrumental: '伴奏' }
 
+/** 浏览器/开发环境下方案的 localStorage 键前缀（桌面壳走真实文件，不碰它） */
+const PROJECT_LS_PREFIX = 'bp.project:'
+
 /** range 滑条的"已填充"比例（CSS 里 --fill 决定渐变停在哪；值到顶时颜色真的顶到尽头） */
 function fillStyle(pct: number): Record<string, string> {
   const v = Math.max(0, Math.min(100, pct))
   return { ['--fill']: v.toFixed(1) + '%' }
+}
+
+/** ISO 时间 → 本地 HH:MM:SS（方案提示、状态栏"已存"用） */
+function clockOfIso(iso: string): string {
+  const t = new Date(iso)
+  if (Number.isNaN(t.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`
 }
 
 
@@ -73,6 +86,23 @@ function Icon({ name }: { name: string }) {
         <svg {...common}>
           <path d="M2.6 12V9M5.4 12V6.4M8.2 12V8.6M11 12V4.4M13.6 12V7.2" />
           <circle cx="11" cy="2.6" r="1.2" fill="currentColor" stroke="none" />
+        </svg>
+      )
+    case 'save':
+      /* 软盘：立刻存一次方案 */
+      return (
+        <svg {...common}>
+          <path d="M2.6 2.6h8.1l2.7 2.7v8.1H2.6z" />
+          <path d="M5.2 2.6v3.7h4.4V2.6" />
+          <path d="M5.2 11.4V8.6h5.2v2.8" />
+        </svg>
+      )
+    case 'openProject':
+      /* 文件夹 + 向上箭头：打开方案 */
+      return (
+        <svg {...common}>
+          <path d="M2 4.5h4l1.4 1.6H14v6.4H2z" />
+          <path d="M8 11.2V7.8M6.5 9.3L8 7.8l1.5 1.5" />
         </svg>
       )
     case 'play':
@@ -300,6 +330,7 @@ function SideGroup({
 
 export default function App() {
   const fileName = useBp((s) => s.fileName)
+  const filePath = useBp((s) => s.filePath)
   const durationMs = useBp((s) => s.durationMs)
   const analysis = useBp((s) => s.analysis)
   const busy = useBp((s) => s.busy)
@@ -324,6 +355,7 @@ export default function App() {
   const autoNotes = useBp((s) => s.autoNotes)
   const rhythm = useBp((s) => s.rhythm)
   const tonic = useBp((s) => s.tonic)
+  const autoTonic = useBp((s) => s.autoTonic)
   const bpm = useBp((s) => s.bpm)
   const beatsPerBar = useBp((s) => s.beatsPerBar)
   const pickupBeats = useBp((s) => s.pickupBeats)
@@ -335,6 +367,8 @@ export default function App() {
 
   const set = useBp
   const [notice, setNotice] = useState<string | null>(null)
+  /* 上次自动存成的时间（状态栏显示"已存 HH:MM:SS"） */
+  const [savedAt, setSavedAt] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   /* 右侧栏两种视图：扒谱用的「编辑」与前期一次性的「设置」（用户 m06889） */
@@ -374,6 +408,12 @@ export default function App() {
   const mixSpecRef = useRef<Spectrum | null>(null)
   /* 这一轮分析是"哪一轨、要不要全部当谱音"：worker 回来时按它处理 */
   const pendingAnalyzeRef = useRef<{ confirm: boolean; source: AnalyzeSource } | null>(null)
+  /* 打开音频时读到的方案：等分析结果回来再盖上去（setAnalysis 会清空音符） */
+  const pendingRestoreRef = useRef<ProjectFile | null>(null)
+  /* 自动存方案的节流定时器（同一时间只挂一个，连续拖动最多每 1.2 秒写一次） */
+  const saveTimerRef = useRef<number | null>(null)
+  /* 写盘失败只报一次，别每 1.2 秒刷一遍状态栏 */
+  const saveErrRef = useRef(false)
   const sideRef = useRef<HTMLDivElement | null>(null)
 
   /* 右侧栏里所有滑条：鼠标在上面滚轮就能调，而且那一刻不滚动右栏（用户 m05454）。
@@ -418,6 +458,21 @@ export default function App() {
         /* 频谱归位：分析混音 → 混音留底；分析人声/伴奏 → 只换那一轨的热力图 */
         if (!pending || pending.source === 'mix') mixSpecRef.current = msg.result.spectrum
         else if (stemSpecRef.current) stemSpecRef.current[pending.source] = msg.result.spectrum
+        /* 打开音频时读到了方案：分析结果一回来，就把参数、音符、视野盖回去（用户 m01794）。
+         * 必须等 setAnalysis 之后，因为它会把 notes 换成机器初稿。 */
+        const restore = pendingRestoreRef.current
+        pendingRestoreRef.current = null
+        if (restore) {
+          st.applyProject(restore)
+          st.setBusy(null)
+          setSavedAt(restore.savedAt || null)
+          setNotice(
+            `已恢复方案：${restore.audio.name}${
+              restore.savedAt ? `（上次存于 ${clockOfIso(restore.savedAt)}）` : ''
+            }`,
+          )
+          return
+        }
         const n = msg.result.notes.length
         if (pending?.confirm) {
           st.setAllConfirmed(true)
@@ -453,10 +508,37 @@ export default function App() {
   }, [set])
 
   /* ---------- 打开音频 ---------- */
-  /** 装载 + 起分析：选文件和"启动参数带文件"都走这一条，避免两套逻辑 */
+  /** 读音频旁边的方案（`.bp.json`）。第一次打开没有这个文件，属正常情况，返回 null。 */
+  const readProjectFile = useCallback(async (projectPath: string): Promise<ProjectFile | null> => {
+    try {
+      let text: string | null = null
+      if (isTauriShell()) text = await invoke<string>('bp_read_text', { path: projectPath })
+      else if (typeof localStorage !== 'undefined') text = localStorage.getItem(`${PROJECT_LS_PREFIX}${projectPath}`)
+      if (!text) return null
+      const r = parseProject(text)
+      if ('error' in r) {
+        setNotice(`方案读不了：${r.error}（这次按新开处理）`)
+        return null
+      }
+      return r.project
+    } catch {
+      /* 文件不存在 / 读不了：第一次打开的常态，不打扰用户 */
+      return null
+    }
+  }, [])
+
+  /** 装载 + 起分析：选文件、"启动参数带文件"、恢复方案都走这一条，避免两套逻辑。
+   *  restoreArg 不传 = 自动找音频旁边的方案；传 null = 明确不恢复。 */
   const applyLoaded = useCallback(
-    (loaded: LoadedAudio) => {
+    async (loaded: LoadedAudio, restoreArg?: ProjectFile | null) => {
       const st = set.getState()
+      const restore =
+        restoreArg === undefined
+          ? loaded.path
+            ? await readProjectFile(projectPathFor(loaded.path))
+            : null
+          : restoreArg
+      pendingRestoreRef.current = restore ?? null
       stop()
       st.setPlaying(false)
       st.setLoaded({ fileName: loaded.name, filePath: loaded.path, durationMs: loaded.durationMs })
@@ -482,7 +564,7 @@ export default function App() {
         [loaded.samples.buffer as ArrayBuffer],
       )
     },
-    [set],
+    [readProjectFile, set],
   )
 
   const openAudio = useCallback(async () => {
@@ -496,34 +578,167 @@ export default function App() {
         st.setBusy(null)
         return
       }
-      applyLoaded(loaded)
+      await applyLoaded(loaded)
     } catch (e) {
       st.setError(e instanceof Error ? e.message : String(e))
       st.setBusy(null)
     }
   }, [applyLoaded, set])
 
-  /* ---------- 启动参数里的音频（桌面壳：双击 / 命令行） ---------- */
+  /* ---------- 方案：保存 / 打开 / 启动恢复（用户 m01794） ---------- */
+  /** 立刻把当前状态写回音频旁边的 `.bp.json`；返回路径（浏览器里返回伪路径） */
+  const saveProject = useCallback(async (): Promise<string | null> => {
+    const st = set.getState()
+    const p = buildProject(st)
+    if (!p) return null
+    const path = projectPathFor(p.audio.path)
+    const text = serializeProject(p)
+    if (isTauriShell()) {
+      await invoke('bp_write_text', { path, text })
+    } else if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(`${PROJECT_LS_PREFIX}${path}`, text)
+    }
+    if (typeof localStorage !== 'undefined') localStorage.setItem('bp.lastProject', path)
+    saveErrRef.current = false
+    setSavedAt(p.savedAt)
+    return path
+  }, [set])
+
+  /** 自动存：连续改动时最多每 1.2 秒写一次；写完不弹提示，只在状态栏更新时间。
+   *  分析中/正在恢复方案时不写：此时 notes 还是空的（或机器初稿），一写就把好方案盖掉。 */
+  const scheduleSave = useCallback(() => {
+    const st = set.getState()
+    if (!st.filePath) return
+    if (st.busy || pendingRestoreRef.current) return
+    if (saveTimerRef.current !== null) return
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null
+      void saveProject().catch((e: unknown) => {
+        if (saveErrRef.current) return
+        saveErrRef.current = true
+        set.getState().setError(`方案存不下来：${e instanceof Error ? e.message : String(e)}`)
+      })
+    }, 1200)
+  }, [saveProject, set])
+
+  /** 打开一个已有方案：按里面记的音频路径重新装载，再恢复状态 */
+  const restoreProject = useCallback(
+    async (p: ProjectFile) => {
+      const st = set.getState()
+      st.setError(null)
+      setNotice(null)
+      st.setBusy('正在打开方案…')
+      try {
+        const loaded = await loadAudioFromPath(p.audio.path)
+        if (!loaded) throw new Error(`方案里的音频不在了：${p.audio.path}`)
+        await applyLoaded(loaded, p)
+      } catch (e) {
+        st.setError(e instanceof Error ? e.message : String(e))
+        st.setBusy(null)
+      }
+    },
+    [applyLoaded, set],
+  )
+
+  const openProject = useCallback(async () => {
+    if (!isTauriShell()) return
+    try {
+      const path = await invoke<string | null>('bp_pick_project')
+      if (!path) return
+      const text = (await invoke<string>('bp_read_text', { path })) ?? ''
+      if (!text) {
+        set.getState().setError(`方案是空的：${path}`)
+        return
+      }
+      const r = parseProject(text)
+      if ('error' in r) {
+        set.getState().setError(`方案读不了：${r.error}`)
+        return
+      }
+      await restoreProject(r.project)
+    } catch (e) {
+      set.getState().setError(e instanceof Error ? e.message : String(e))
+      set.getState().setBusy(null)
+    }
+  }, [restoreProject, set])
+
+  /* ---------- 启动：带音频参数就开那个；否则接着上次的方案干 ---------- */
+  const bootedRef = useRef(false)
   useEffect(() => {
     if (!isTauriShell()) return
-    let cancelled = false
+    /* StrictMode 下 effect 会跑两趟（第二趟紧跟着第一趟的 cleanup）。
+     * 这里只认第一趟：不要按 cleanup 的 cancelled 把第一趟掐掉，否则两趟都不干活。 */
+    if (bootedRef.current) return
+    bootedRef.current = true
     void (async () => {
       try {
-        const path = (await invoke<string | null>('bp_initial_audio')) ?? null
-        if (!path || cancelled) return
-        const loaded = await loadAudioFromPath(path)
-        if (!loaded || cancelled) return
-        set.getState().setError(null)
-        applyLoaded(loaded)
+        const arg = (await invoke<string | null>('bp_initial_audio')) ?? null
+        if (arg) {
+          const loaded = await loadAudioFromPath(arg)
+          if (!loaded) return
+          set.getState().setError(null)
+          await applyLoaded(loaded)
+          return
+        }
+        /* 没有启动参数：读"上次存过的那条方案"的路径（自动保存时记在 localStorage） */
+        const last = typeof localStorage !== 'undefined' ? localStorage.getItem('bp.lastProject') : null
+        if (!last) return
+        let text = ''
+        try {
+          text = (await invoke<string>('bp_read_text', { path: last })) ?? ''
+        } catch {
+          /* 文件被删了：清了标记，当作新开 */
+          localStorage.removeItem('bp.lastProject')
+          return
+        }
+        const r = parseProject(text)
+        if ('error' in r) {
+          set.getState().setError(`上次的方案读不了：${r.error}`)
+          return
+        }
+        await restoreProject(r.project)
       } catch (e) {
         set.getState().setError(e instanceof Error ? e.message : String(e))
         set.getState().setBusy(null)
       }
     })()
-    return () => {
-      cancelled = true
-    }
-  }, [applyLoaded, set])
+  }, [applyLoaded, restoreProject, set])
+
+  /* ---------- 自动保存：参数、音符、视野一变，1.2 秒内写回音频旁边的 .bp.json ----------
+   * currentMs 故意不列进依赖：播放时它每帧都在变，不然会一直在写盘；
+   * 暂停时（下面那个 effect）再补存一次，把播放头位置记下来。 */
+  useEffect(() => {
+    scheduleSave()
+  }, [
+    notes,
+    bpm,
+    beatsPerBar,
+    pickupBeats,
+    firstBeatMs,
+    tonic,
+    autoTonic,
+    title,
+    gain,
+    contrast,
+    bandOnly,
+    suppress,
+    autoNotes,
+    pitchMode,
+    mode,
+    snap,
+    loop,
+    loopOn,
+    autoPage,
+    lockPitch,
+    playMode,
+    view,
+    busy,
+    scheduleSave,
+  ])
+
+  useEffect(() => {
+    if (!playing) scheduleSave()
+  }, [playing, scheduleSave])
 
   /* ---------- 分轨（桌面专属）：人声 / 伴奏 ----------
    * 前端解码 → PCM 交给 Rust 跑 ONNX → 两轨 wav 落盘再读回来 → 各算一份频谱。
@@ -1138,6 +1353,31 @@ export default function App() {
         >
           <Icon name="export" />
         </button>
+        {/* 方案：自动存之外，给一个"现在存"和"打开别的方案"的明确入口（用户 m01794） */}
+        <button
+          className="icon-btn"
+          onClick={() => {
+            void saveProject()
+              .then((p) => setNotice(p ? `${COPY.projectSavedTip}：${p}` : null))
+              .catch((e: unknown) => {
+                set.getState().setError(`方案存不下来：${e instanceof Error ? e.message : String(e)}`)
+              })
+          }}
+          disabled={!filePath || !!busy}
+          title={COPY.projectSaveTip}
+          aria-label={COPY.projectSave}
+        >
+          <Icon name="save" />
+        </button>
+        <button
+          className="icon-btn"
+          onClick={() => void openProject()}
+          disabled={!!busy}
+          title={COPY.projectOpenTip}
+          aria-label={COPY.projectOpen}
+        >
+          <Icon name="openProject" />
+        </button>
         </span>
         <span className="tsep" />
         {/* 设置：前期的、一次性的东西都收在这里（模型安装、自动填音…） */}
@@ -1608,6 +1848,8 @@ export default function App() {
         <span>
           {analysis ? `确认 ${confirmedCount} / 共 ${notes.length} 个音` : ''}
         </span>
+        {/* 方案自动保存的时间（用户 m01794）：一眼能看出"存没存" */}
+        {savedAt && <span className="hint" title={COPY.projectAutoTip}>已存 {clockOfIso(savedAt)}</span>}
         <span>{busy ?? ''}</span>
         <span className="spacer" />
         {error && <span className="err">{error}</span>}

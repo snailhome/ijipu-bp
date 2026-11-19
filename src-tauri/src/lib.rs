@@ -84,6 +84,45 @@ async fn bp_save_jps(
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+/// 读方案文本（UTF-8）。方案文件跟音频放一起，路径由前端拼。
+#[tauri::command]
+fn bp_read_text(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("读不到 {path}：{e}"))
+}
+
+/// 写方案文本，写完**立刻回读比对**：半截文件会变成"读不了的方案"，不能静默成功。
+#[tauri::command]
+fn bp_write_text(path: String, text: String) -> Result<(), String> {
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("建不了目录 {}：{e}", dir.display()))?;
+    }
+    std::fs::write(&path, text.as_bytes()).map_err(|e| format!("写不进去 {path}：{e}"))?;
+    let back = std::fs::read_to_string(&path).map_err(|e| format!("回读失败：{e}"))?;
+    if back != text {
+        return Err("写入校验没过：回读内容与要写的不一致".into());
+    }
+    Ok(())
+}
+
+/// 选一个方案文件（`.bp.json`）。
+#[tauri::command]
+async fn bp_pick_project(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("打开扒谱方案")
+            .add_filter("爱扒谱方案", &["json"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|e| format!("对话框没起来：{e}"))?;
+
+    match picked {
+        Some(p) => Ok(Some(path_of(p)?.to_string_lossy().into_owned())),
+        None => Ok(None),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -93,6 +132,9 @@ pub fn run() {
             bp_read_audio,
             bp_initial_audio,
             bp_save_jps,
+            bp_read_text,
+            bp_write_text,
+            bp_pick_project,
             sep::bp_sep_model,
             sep::bp_sep_model_target,
             sep::bp_sep_ready,

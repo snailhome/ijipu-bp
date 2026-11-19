@@ -17,6 +17,7 @@ import { quantize } from '../jps/quantize'
 import { analyzeRhythm } from '../analysis/beat'
 import { toJps } from '../jps/toJps'
 import type { PlayMode } from '../audio/player'
+import type { ProjectFile } from './project'
 import type {
   AnalyzeResult,
   EditMode,
@@ -95,6 +96,8 @@ interface State {
   setError: (s: string | null) => void
   setLoaded: (p: { fileName: string; filePath: string | null; durationMs: number }) => void
   setAnalysis: (a: AnalyzeResult) => void
+  /** 恢复方案：覆盖参数与音符（analysis 由调用方先设好）。id 重新编号，避免和本进程新画的音撞号 */
+  applyProject: (p: ProjectFile) => void
   setPlaying: (b: boolean) => void
   setCurrentMs: (ms: number) => void
   setPlayMode: (m: PlayMode) => void
@@ -290,6 +293,46 @@ export const useBp = create<State>((set, get) => ({
       durationMs: Math.max(get().durationMs, a.durationMs),
       currentMs: 0,
     })
+    applyDerived(set, get)
+  },
+  applyProject: (p) => {
+    /* 方案是上一轮存下来的，参数按现在的上下限再钳一遍（拍号改小后弱起不能越界）。
+     * 音符 id 重新编号：本进程可能已经画过几个音，直接用旧 id 有撞号风险。 */
+    const per = Math.max(1, Math.min(12, Math.round(p.settings.beatsPerBar)))
+    const pickup = Math.max(0, Math.min(per - 1, Math.round(p.settings.pickupBeats)))
+    const dur = get().durationMs || Number.POSITIVE_INFINITY
+    set({
+      notes: p.notes.map((n) => ({ ...n, id: nextId() })),
+      bpm: Math.max(20, Math.min(300, p.settings.bpm)),
+      beatsPerBar: per,
+      pickupBeats: pickup,
+      firstBeatMs: Math.max(0, p.settings.firstBeatMs),
+      tonic: Math.max(0, Math.min(11, Math.round(p.settings.tonic))),
+      autoTonic: p.settings.autoTonic,
+      title: p.settings.title,
+      gain: Math.max(0.1, Math.min(6, p.settings.gain)),
+      contrast: Math.max(0.2, Math.min(4, p.settings.contrast)),
+      bandOnly: p.settings.bandOnly,
+      suppress: Math.max(0, Math.min(1, p.settings.suppress)),
+      autoNotes: p.settings.autoNotes,
+      pitchMode: p.settings.pitchMode,
+      mode: p.settings.mode,
+      snap: p.settings.snap,
+      loop: p.settings.loop,
+      loopOn: p.settings.loopOn && !!p.settings.loop,
+      autoPage: p.settings.autoPage,
+      lockPitch: p.settings.lockPitch,
+      playMode: p.settings.playMode,
+      view: {
+        zoom: Math.max(1, Math.min(64, p.settings.view.zoom)),
+        panMs: Math.max(0, p.settings.view.panMs),
+      },
+      currentMs: Math.max(0, Math.min(dur, p.settings.currentMs)),
+      history: [],
+      future: [],
+    })
+    gestureDepth = 0
+    gestureSaved = false
     applyDerived(set, get)
   },
   setPlaying: (b) => set({ playing: b }),

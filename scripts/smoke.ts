@@ -24,6 +24,8 @@ import { snapMs } from '../src/jps/snap'
 import { toJps } from '../src/jps/toJps'
 import { msToX, spanMs } from '../src/ui/timeAxis'
 import { assignLanes } from '../src/ui/noteLanes'
+import { buildProject, parseProject, projectPathFor, serializeProject } from '../src/model/project'
+import type { ProjectSource } from '../src/model/project'
 import { useBp } from '../src/model/store'
 import type { RawNote } from '../src/model/types'
 
@@ -403,6 +405,78 @@ const melody = concat([
   check('分车道：首尾相接不算撞车（各自整行）', apart.get('a')?.lanes === 1 && apart.get('b')?.lanes === 1)
   const other = assignLanes([note('a', 60, 0, 500), note('b', 62, 0, 500)])
   check('分车道：不同音高本来就分行，不切车道', other.get('a')?.lanes === 1 && other.get('b')?.lanes === 1)
+}
+
+/* ---------------- 11.12 方案文件（用户 m01794：存下来、下次接着干） ---------------- */
+{
+  const notes: RawNote[] = [
+    { id: 'n1', midi: 60, startMs: 0, endMs: 500, velocity: 0.8, confirmed: true },
+    { id: 'n2', midi: 64, startMs: 500, endMs: 1000, velocity: 0.6, confirmed: false },
+  ]
+  const src: ProjectSource = {
+    fileName: '曲.wav',
+    filePath: 'D:\\music\\曲.wav',
+    notes,
+    bpm: 120,
+    beatsPerBar: 3,
+    pickupBeats: 2,
+    firstBeatMs: 120,
+    tonic: 5,
+    autoTonic: false,
+    title: '我的谱',
+    gain: 1.3,
+    contrast: 1.8,
+    bandOnly: true,
+    suppress: 0.25,
+    autoNotes: true,
+    pitchMode: 'name',
+    mode: 'draw',
+    snap: 'beat',
+    loop: { startMs: 500, endMs: 1500 },
+    loopOn: true,
+    autoPage: false,
+    lockPitch: true,
+    playMode: 'synth',
+    view: { zoom: 2.5, panMs: 700 },
+    currentMs: 900,
+  }
+  const path = projectPathFor(src.filePath ?? '')
+  check('方案路径 = 音频路径 + .bp.json', path === 'D:\\music\\曲.wav.bp.json', path)
+  check('没有音频路径（浏览器）不产方案', buildProject({ ...src, filePath: null }) === null)
+
+  const built = buildProject(src, '2026-11-19T20:00:00.000Z')
+  const text = built ? serializeProject(built) : ''
+  const back = parseProject(text)
+  check(
+    '方案读回：音符数、拍号、弱起、视野、循环都还在',
+    'project' in back &&
+      back.project.notes.length === 2 &&
+      back.project.settings.beatsPerBar === 3 &&
+      back.project.settings.pickupBeats === 2 &&
+      back.project.settings.view.zoom === 2.5 &&
+      back.project.settings.loop?.endMs === 1500,
+    text.slice(0, 80),
+  )
+  check(
+    '方案读回：confirmed 没丢（它决定导出）',
+    'project' in back && back.project.notes[0].confirmed === true && back.project.notes[1].confirmed === false,
+  )
+  check('别的应用的 JSON 不认', 'error' in parseProject('{"app":"ijipu","version":1}'))
+  check('方案版本太新不认', 'error' in parseProject(JSON.stringify({ ...(built ?? {}), version: 9 })))
+  const messy = parseProject(
+    JSON.stringify({
+      app: 'ijipu-bp',
+      version: 1,
+      audio: { path: 'D:\\a.wav' },
+      notes: [null, { midi: 60 }, { midi: 61, startMs: 0, endMs: 100 }],
+      settings: { bpm: 999, beatsPerBar: 4 },
+    }),
+  )
+  check(
+    '坏音符丢掉、越界参数钳回来（bpm 999 → 300）',
+    'project' in messy && messy.project.notes.length === 1 && messy.project.notes[0].midi === 61 && messy.project.settings.bpm === 300,
+    'project' in messy ? `${messy.project.notes.length} 个音 / bpm ${messy.project.settings.bpm}` : messy.error,
+  )
 }
 
 /* ---------------- 12. 界面能挂载（SSR 渲染一次，抓初始渲染的崩溃） ---------------- */
