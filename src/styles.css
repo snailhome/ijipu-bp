@@ -715,3 +715,100 @@ a.link {
 .help-what {
   color: var(--fg-dim);
 }
+
+/* ===== 顶栏图标按钮（用户 m06232：顶栏尽量图标化，图标自己画成 noteDigger 那种线性风格） ===== */
+.toolbar .icon-btn {
+  width: 30px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.toolbar .icon-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08131a;
+}
+
+.toolbar .icon-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.toolbar .icon-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(79, 209, 197, 0.14);
+}
+
+.toolbar .seg button {
+  width: 30px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+/* 吸附：磁铁图标 + 下拉，视觉上当一个按钮用 */
+.toolbar .icon-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  height: 26px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--fg-dim);
+}
+
+.toolbar .icon-field select {
+  border: 0;
+  background: transparent;
+  padding: 0 2px;
+  height: 24px;
+  color: var(--fg);
+}
+
+/* 工具条分组之间的细竖线 */
+.tsep {
+  width: 1px;
+  height: 16px;
+  background: var(--line);
+  margin: 0 2px;
+}
+
+/* 顶栏里成组的按钮：淡淡的底 + 圆角，一眼能看出这几颗是一伙的 */
+.tgroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.tgroup .icon-btn,
+.tgroup .seg button {
+  width: 28px;
+  height: 24px;
+}
+
+/* 原生下拉在深色主题下别是白底 */
+:root {
+  color-scheme: dark;
+}
+
+select,
+option {
+  background: var(--panel-2);
+  color: var(--fg);
+}
+
+select option:checked {
+  background: var(--accent);
+  color: #08131a;
+}

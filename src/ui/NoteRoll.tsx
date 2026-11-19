@@ -654,7 +654,8 @@ export function NoteRoll(props: Props) {
     if (!cv || !host) return
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      const wantZoom = (e.shiftKey && e.altKey) || e.ctrlKey || e.metaKey
+      /* 缩放只认 Ctrl（macOS 的 Cmd 也认）；Shift+Alt 那套已按用户 m06188 取消 */
+      const wantZoom = e.ctrlKey || e.metaKey
       if (wantZoom) {
         const rect = cv.getBoundingClientRect()
         const anchorMs = msAt(e.clientX - rect.left)

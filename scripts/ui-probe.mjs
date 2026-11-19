@@ -77,7 +77,11 @@ class Cdp {
   async clickText(text) {
     const box = await this.eval(`(() => {
       const el = [...document.querySelectorAll('button, .seg button, select')]
-        .find((b) => (b.textContent || '').trim().includes(${JSON.stringify(text)}))
+        .find((b) => {
+          const label = (b.getAttribute('aria-label') || '').trim()
+          const txt = (b.textContent || '').trim()
+          return txt.includes(${JSON.stringify(text)}) || label === ${JSON.stringify(text)}
+        })
       if (!el) return null
       const r = el.getBoundingClientRect()
       return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
@@ -200,7 +204,7 @@ try {
 
   const segOn = (label) =>
     cdp.eval(`(() => {
-      const b = [...document.querySelectorAll('.seg button')].find((x) => (x.textContent || '').includes(${JSON.stringify(label)}))
+      const b = [...document.querySelectorAll('.seg button')].find((x) => ((x.getAttribute('aria-label') || '') + ' ' + (x.textContent || '')).includes(${JSON.stringify(label)}))
       return !!b && b.classList.contains('on')
     })()`)
 
@@ -210,7 +214,7 @@ try {
 
   const flagOn = (label) =>
     cdp.eval(`(() => {
-      const b = [...document.querySelectorAll('button')].find((x) => (x.textContent || '').trim().startsWith(${JSON.stringify(label)}))
+      const b = [...document.querySelectorAll('button')].find((x) => ((x.getAttribute('aria-label') || '') + ' ' + (x.textContent || '')).trim().startsWith(${JSON.stringify(label)}))
       return !!b && b.classList.contains('on')
     })()`)
   check('「自动翻页」默认开着', await flagOn('自动翻页'))
@@ -220,13 +224,13 @@ try {
   check('再点一下能开回来', await flagOn('自动翻页'))
 
   const loopDisabled = await cdp.eval(`(() => {
-    const b = [...document.querySelectorAll('button')].find((x) => (x.textContent || '').trim().startsWith('重复区间'))
+    const b = [...document.querySelectorAll('button')].find((x) => ((x.getAttribute('aria-label') || '') + ' ' + (x.textContent || '')).trim().startsWith('重复区间'))
     return !!b && b.disabled
   })()`)
   check('还没画重复区间时「重复区间」是灰的', loopDisabled)
 
   const disabled = await cdp.eval(`(() => {
-    const b = [...document.querySelectorAll('button')].find((x) => (x.textContent || '').includes('导出'))
+    const b = [...document.querySelectorAll('button')].find((x) => ((x.getAttribute('aria-label') || '') + ' ' + (x.textContent || '')).includes('导出'))
     return !!b && b.disabled
   })()`)
   check('没有确认音符时「导出」是灰的', disabled)
@@ -384,7 +388,7 @@ try {
   const loopNow = await cdp.eval(`window.__bp.getState().loop.endMs`)
   check('拖右握柄能把重复区间拉长', loopNow > 2600, String(Math.round(loopNow)))
 
-  // ── Shift+滚轮 = 左右平移；Shift+Alt+滚轮 = 横向缩放 ──
+  // ── Shift+滚轮 = 左右平移；Ctrl+滚轮 = 横向缩放（用户 m06188 取消了 Shift+Alt） ──
   const rollCenter = await cdp.eval(`(() => {
     const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
     return { x: r.x + r.width * 0.6, y: r.y + r.height * 0.5 }
@@ -399,12 +403,12 @@ try {
       modifiers,
     })
   const SHIFT = 8
-  const ALT = 1
+  const CTRL = 2
   const beforePan = await cdp.eval(`({ ...window.__bp.getState().view })`)
-  await wheel(SHIFT | ALT, -120)
+  await wheel(CTRL, -120)
   await sleep(150)
   const afterZoom = await cdp.eval(`({ ...window.__bp.getState().view })`)
-  check('Shift+Alt+滚轮 = 横向放大', afterZoom.zoom > beforePan.zoom, `zoom ${beforePan.zoom}→${afterZoom.zoom}`)
+  check('Ctrl+滚轮 = 横向放大', afterZoom.zoom > beforePan.zoom, `zoom ${beforePan.zoom}→${afterZoom.zoom}`)
   /* 先放大才有的平移：zoom=1 时整首都在视野里，pan 只能是 0 */
   await wheel(SHIFT, 120)
   await sleep(150)
@@ -683,13 +687,13 @@ try {
   await cdp.pressKey('Space', ' ', 32)
   await sleep(200)
 
-  /* ── 滚轮不用先点画布：Shift+Alt 悬停就能缩放 ── */
+  /* ── 滚轮不用先点画布：Ctrl 悬停就能缩放 ── */
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setView({ zoom: 1, panMs: 0 }); s.setLoop(null) })()`)
   await sleep(150)
-  await cdp.wheelAt(rollBox.x, rollBox.y, -120, 8 | 1)
+  await cdp.wheelAt(rollBox.x, rollBox.y, -120, 2)
   await sleep(250)
   const zoomAfterWheel = await cdp.eval(`window.__bp.getState().view.zoom`)
-  check('鼠标悬停直接滚（Shift+Alt）就能缩放', zoomAfterWheel > 1, `zoom=${zoomAfterWheel}`)
+  check('鼠标悬停直接滚（Ctrl）就能缩放', zoomAfterWheel > 1, `zoom=${zoomAfterWheel}`)
 
   /* ── 时间尺上不显示悬浮信息牌 ── */
   const rulerPoint = await cdp.eval(`(() => {
@@ -1083,7 +1087,7 @@ try {
   await cdp.eval(`window.__bp.setState({ history: [] })`)
   await sleep(150)
   const undoDisabled = await cdp.eval(
-    `(() => { const b = [...document.querySelectorAll('button')].find((x) => x.textContent.trim() === '撤销'); return !!b && b.disabled })()`,
+    `(() => { const b = [...document.querySelectorAll('button')].find((x) => (x.getAttribute('aria-label') || '').trim() === '撤销' || x.textContent.trim() === '撤销'); return !!b && b.disabled })()`,
   )
   check('没有历史时撤销按钮是灰的', undoDisabled === true, String(undoDisabled))
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setMode('select') })()`)

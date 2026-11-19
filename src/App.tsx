@@ -29,6 +29,143 @@ function fillStyle(pct: number): Record<string, string> {
   return { ['--fill']: v.toFixed(1) + '%' }
 }
 
+
+/** 顶栏图标：16×16 线性图标，自己画（用户 m06232：顶栏按钮尽量图标化，风格照 noteDigger） */
+function Icon({ name }: { name: string }) {
+  const common = {
+    width: 16,
+    height: 16,
+    viewBox: '0 0 16 16',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 1.4,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+    'aria-hidden': true,
+  }
+  switch (name) {
+    case 'folder':
+      return (
+        <svg {...common}>
+          <path d="M2 4.5h4l1.4 1.6H14v6.4H2z" />
+        </svg>
+      )
+    case 'play':
+      return (
+        <svg {...common}>
+          <path d="M5 3.2l7 4.8-7 4.8z" fill="currentColor" stroke="none" />
+        </svg>
+      )
+    case 'pause':
+      return (
+        <svg {...common}>
+          <rect x="4.6" y="3.4" width="2.4" height="9.2" fill="currentColor" stroke="none" />
+          <rect x="9" y="3.4" width="2.4" height="9.2" fill="currentColor" stroke="none" />
+        </svg>
+      )
+    case 'wave':
+      return (
+        <svg {...common}>
+          <path d="M2 8h2l1.4-3.4L8 12l1.6-6.6L11 8h3" />
+        </svg>
+      )
+    case 'note':
+      return (
+        <svg {...common}>
+          <circle cx="5.6" cy="11.2" r="1.9" />
+          <path d="M7.5 11.2V4l5 1.2v2" />
+        </svg>
+      )
+    case 'pencil':
+      return (
+        <svg {...common}>
+          <path d="M11.2 2.6l2.2 2.2L5.8 12.4 3 13l.6-2.8z" />
+        </svg>
+      )
+    case 'cursor':
+      return (
+        <svg {...common}>
+          <path d="M4 2.8l8.2 4.4-3.6 1.1-1.2 3.6z" />
+        </svg>
+      )
+    case 'magnet':
+      return (
+        <svg {...common}>
+          <path d="M4 12V7a4 4 0 018 0v5" />
+          <path d="M4 12h2.6M9.4 12H12" />
+        </svg>
+      )
+    case 'loop':
+      return (
+        <svg {...common}>
+          <path d="M3.2 7.2A4.2 4.2 0 017.4 3H11" />
+          <path d="M9.4 1.6L11.6 3 9.4 4.4" />
+          <path d="M12.8 8.8A4.2 4.2 0 018.6 13H5" />
+          <path d="M6.6 11.6L4.4 13l2.2 1.4" />
+        </svg>
+      )
+    case 'page':
+      return (
+        <svg {...common}>
+          <path d="M3.4 3.2h5.4l3.8 3.8v5.8H3.4z" />
+          <path d="M8.6 3.4V7h3.6" />
+        </svg>
+      )
+    case 'undo':
+      return (
+        <svg {...common}>
+          <path d="M5.6 5.2H11a3.4 3.4 0 010 6.8H7" />
+          <path d="M7.4 3L5 5.2l2.4 2.2" />
+        </svg>
+      )
+    case 'redo':
+      return (
+        <svg {...common}>
+          <path d="M10.4 5.2H5a3.4 3.4 0 000 6.8h4" />
+          <path d="M8.6 3L11 5.2 8.6 7.4" />
+        </svg>
+      )
+    case 'home':
+      return (
+        <svg {...common}>
+          <path d="M4 3.4v9.2" />
+          <path d="M12 3.6L5.8 8l6.2 4.4z" fill="currentColor" stroke="none" />
+        </svg>
+      )
+    case 'checkAll':
+      return (
+        <svg {...common}>
+          <rect x="2.4" y="3.4" width="8.6" height="8.6" rx="1.6" />
+          <path d="M4.6 7.8l1.9 1.9 3.4-3.6" />
+          <path d="M12.6 4.6v6.8a1.6 1.6 0 01-1.6 1.6H4.8" opacity=".55" />
+        </svg>
+      )
+    case 'checkNone':
+      return (
+        <svg {...common}>
+          <rect x="2.4" y="3.4" width="8.6" height="8.6" rx="1.6" />
+          <path d="M12.6 4.6v6.8a1.6 1.6 0 01-1.6 1.6H4.8" opacity=".55" />
+        </svg>
+      )
+    case 'reset':
+      return (
+        <svg {...common}>
+          <path d="M3.6 8a4.4 4.4 0 104.4-4.4H5.4" />
+          <path d="M7 1.8L4.8 3.6 7 5.4" />
+        </svg>
+      )
+    case 'export':
+      return (
+        <svg {...common}>
+          <path d="M8 2.6v7" />
+          <path d="M5.2 6.8L8 9.6l2.8-2.8" />
+          <path d="M2.8 11.4v1.8h10.4v-1.8" />
+        </svg>
+      )
+    default:
+      return null
+  }
+}
 /** 帮助面板的内容（用户 m05893：顶栏键盘图标点开就能查按键 / 快捷键 / 鼠标操作） */
 const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
   {
@@ -62,7 +199,7 @@ const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
     rows: [
       ['滚轮', '上下换音区（键列上的锁锁住后改成左右平移）'],
       ['Shift + 滚轮', '左右平移'],
-      ['Shift + Alt + 滚轮', '横向缩放（Ctrl + 滚轮也行）'],
+      ['Ctrl + 滚轮', '横向缩放（以光标那一拍为锚点；Mac 上 Cmd 也行）'],
       ['拖时间尺', '框播放区间；点一下 = 取消区间并挪播放头'],
       ['拖区间两端握柄', '改区间起止'],
       ['右栏滑条上滚轮', '微调这条滑条（按住 Shift 五倍步长）'],
@@ -515,38 +652,67 @@ export default function App() {
             </small>
           </span>
         </span>
-        <button className="primary" onClick={() => void openAudio()} disabled={!!busy}>
-          {COPY.openAudio}
+        <span className="tgroup">
+        <button
+          className="primary icon-btn"
+          onClick={() => void openAudio()}
+          disabled={!!busy}
+          title={COPY.openAudio}
+          aria-label={COPY.openAudio}
+        >
+          <Icon name="folder" />
         </button>
-        <button onClick={togglePlay} disabled={!analysis}>
-          {playing ? COPY.pause : COPY.play}
+        <button
+          className="icon-btn"
+          onClick={togglePlay}
+          disabled={!analysis}
+          title={playing ? COPY.pause : COPY.play}
+          aria-label={playing ? COPY.pause : COPY.play}
+        >
+          <Icon name={playing ? 'pause' : 'play'} />
         </button>
         <div className="seg" title={COPY.abTip}>
-          <button className={playMode === 'audio' ? 'on' : ''} onClick={() => switchMode('audio')}>
-            {COPY.sourceAudio}
+          <button
+            className={playMode === 'audio' ? 'on' : ''}
+            onClick={() => switchMode('audio')}
+            aria-label={COPY.sourceAudio}
+            title={COPY.sourceAudio}
+          >
+            <Icon name="wave" />
           </button>
-          <button className={playMode === 'synth' ? 'on' : ''} onClick={() => switchMode('synth')}>
-            {COPY.sourceSynth}
+          <button
+            className={playMode === 'synth' ? 'on' : ''}
+            onClick={() => switchMode('synth')}
+            aria-label={COPY.sourceSynth}
+            title={COPY.sourceSynth}
+          >
+            <Icon name="note" />
           </button>
         </div>
+        </span>
 
+        <span className="tsep" />
         <div className="seg" title={mode === 'draw' ? COPY.modeDrawTip : COPY.modeSelectTip}>
           <button
             className={mode === 'draw' ? 'on' : ''}
             onClick={() => useBp.getState().setMode('draw')}
+            aria-label={COPY.modeDraw}
+            title={COPY.modeDrawTip}
           >
-            {COPY.modeDraw} `
+            <Icon name="pencil" />
           </button>
           <button
             className={mode === 'select' ? 'on' : ''}
             onClick={() => useBp.getState().setMode('select')}
+            aria-label={COPY.modeSelect}
+            title={COPY.modeSelectTip}
           >
-            {COPY.modeSelect} `
+            <Icon name="cursor" />
           </button>
         </div>
 
-        <label className="field" title="画音/拖音时吸附到哪一格">
-          {COPY.snapLabel}
+        <label className="field icon-field" title="画音/拖音时吸附到哪一格">
+          <Icon name="magnet" />
           <select value={snap} onChange={(e) => useBp.getState().setSnap(e.target.value as SnapMode)}>
             {SNAP_CHOICES.map((c) => (
               <option key={c.v} value={c.v}>
@@ -557,19 +723,21 @@ export default function App() {
         </label>
 
         <button
-          className={loopOn ? 'on' : ''}
+          className={loopOn ? 'icon-btn on' : 'icon-btn'}
           onClick={() => useBp.getState().setLoopOn(!loopOn)}
           title={COPY.loopTip}
+          aria-label={COPY.loop}
           disabled={!loop}
         >
-          {COPY.loop}
+          <Icon name="loop" />
         </button>
         <button
-          className={autoPage ? 'on' : ''}
+          className={autoPage ? 'icon-btn on' : 'icon-btn'}
           onClick={() => useBp.getState().setAutoPage(!autoPage)}
           title={COPY.autoPageTip}
+          aria-label={COPY.autoPage}
         >
-          {COPY.autoPage}
+          <Icon name="page" />
         </button>
 
         <div className="spacer" />
@@ -585,42 +753,72 @@ export default function App() {
             {COPY.pitchNumber}
           </button>
         </div>
+        <span className="tsep" />
+        <span className="tgroup">
         <button
+          className="icon-btn"
           onClick={() => useBp.getState().undo()}
           disabled={historyLen === 0}
           title={COPY.undoTip}
+          aria-label={COPY.undo}
         >
-          {COPY.undo}
+          <Icon name="undo" />
         </button>
         <button
+          className="icon-btn"
           onClick={() => useBp.getState().redo()}
           disabled={futureLen === 0}
           title={COPY.redoTip}
+          aria-label={COPY.redo}
         >
-          {COPY.redo}
+          <Icon name="redo" />
         </button>
-        <button onClick={goStart} title={COPY.goStartTip}>
-          {COPY.goStart}
+        <button className="icon-btn" onClick={goStart} title={COPY.goStartTip} aria-label={COPY.goStart}>
+          <Icon name="home" />
         </button>
-        <button onClick={() => useBp.getState().setAllConfirmed(true)} disabled={!notes.length} title={COPY.confirmAllTip}>
-          {COPY.confirmAll}
-        </button>
-        <button onClick={() => useBp.getState().setAllConfirmed(false)} disabled={!notes.length}>
-          {COPY.clearAll}
+        </span>
+        <span className="tgroup">
+        <button
+          className="icon-btn"
+          onClick={() => useBp.getState().setAllConfirmed(true)}
+          disabled={!notes.length}
+          title={COPY.confirmAllTip}
+          aria-label={COPY.confirmAll}
+        >
+          <Icon name="checkAll" />
         </button>
         <button
+          className="icon-btn"
+          onClick={() => useBp.getState().setAllConfirmed(false)}
+          disabled={!notes.length}
+          title={COPY.clearAllTip}
+          aria-label={COPY.clearAll}
+        >
+          <Icon name="checkNone" />
+        </button>
+        <button
+          className="icon-btn"
           onClick={() => {
             useBp.getState().resetNotes()
             setSelectedId(null)
           }}
           disabled={!analysis}
           title={COPY.resetDraftTip}
+          aria-label={COPY.resetDraft}
         >
-          {COPY.resetDraft}
+          <Icon name="reset" />
         </button>
-        <button onClick={() => void exportJps()} disabled={confirmedCount === 0} title="只导出你确认过的音">
-          {COPY.exportJps}
+        <button
+          className="icon-btn"
+          onClick={() => void exportJps()}
+          disabled={confirmedCount === 0}
+          title={COPY.exportJps}
+          aria-label={COPY.exportJps}
+        >
+          <Icon name="export" />
         </button>
+        </span>
+        <span className="tsep" />
         {/* 帮助：按键 / 快捷键 / 鼠标操作（用户 m05893） */}
         <button
           className={helpOpen ? 'icon-btn on' : 'icon-btn'}
@@ -923,7 +1121,7 @@ export default function App() {
         <span className="spacer" />
         {error && <span className="err">{error}</span>}
         {notice && <span className="hint">{notice}</span>}
-        <span className="hint">空格播放 · Tab 原音/合成 · ` 绘制/选择 · L 循环 · Shift+滚轮平移 · Shift+Alt+滚轮缩放</span>
+        <span className="hint">空格播放 · Tab 原音/合成 · ` 绘制/选择 · L 循环 · Shift+滚轮平移 · Ctrl+滚轮缩放</span>
       </div>
     </div>
   )

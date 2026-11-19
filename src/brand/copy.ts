@@ -43,6 +43,7 @@ export const COPY = {
   autoPageTip: '播放时视野跟着播放头走（放大后才感觉得到）',
   confirmAll: '全选',
   clearAll: '全不选',
+  clearAllTip: '把所有音都取消确认（导出与简谱预览都会空掉）',
   confirmAllTip: '把分析出来的音全部当成谱音（之后再逐个取消不对的）',
   undo: '撤销',
   undoTip: '撤销上一步（Ctrl+Z，最多 200 步；一次拖动算一步）',
@@ -61,5 +62,5 @@ export const COPY = {
   harmonicLabel: '去谐波',
   harmonicHint: '把泛音从谱里减掉（0 = 不动，1 = 全减）；松手后会用同一段音频重跑一遍',
   hbarTip: '拖这条横向滚动条（或 Shift+滚轮）来回换时间位置',
-  hbarDisabledTip: '整首都在屏幕里，没得滚 —— 用 Shift+Alt+滚轮 放大后再拖',
+  hbarDisabledTip: '整首都在屏幕里，没得滚 —— 用 Ctrl+滚轮 放大后再拖',
 } as const
