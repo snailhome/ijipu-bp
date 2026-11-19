@@ -94,6 +94,14 @@ class Cdp {
     await sleep(120)
   }
 
+  /** 带修饰键的点击：modifiers 1=Alt / 2=Ctrl / 8=Shift（用户 m05672 的 Alt 临时绘制） */
+  async clickAtMod(x, y, modifiers) {
+    const base = { x, y, button: 'left', clickCount: 1, modifiers }
+    await this.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base, buttons: 1 })
+    await this.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base, buttons: 0 })
+    await sleep(200)
+  }
+
   /** 按住从 (x1,y1) 拖到 (x2,y2)，分几步走，让 React 收到连续 pointermove */
   async dragAt(x1, y1, x2, y2, steps = 6) {
     await this.send('Input.dispatchMouseEvent', {
@@ -331,6 +339,22 @@ try {
   await clickRoll(0.5, 0.5)
   const after = await cdp.eval(`window.__bp.getState().notes.filter((x) => x.confirmed).length`)
   check('选择模式点画布不改确认状态', before === after, before + '→' + after)
+
+  /* ── 选择模式下按住 Alt 临时当绘制用（用户 m05672） ── */
+  await cdp.eval(`window.__bp.getState().setMode('select')`)
+  await sleep(120)
+  const altPt = await cdp.eval(`(() => {
+    const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+    return { x: r.x + r.width * 0.52, y: r.y + r.height * 0.42 }
+  })()`)
+  const altBefore = await cdp.eval(`window.__bp.getState().notes.length`)
+  await cdp.clickAt(altPt.x, altPt.y) // 选择模式下普通点击：不加音
+  const altPlain = await cdp.eval(`window.__bp.getState().notes.length`)
+  await cdp.clickAtMod(altPt.x, altPt.y, 1) // Alt + 点击：当绘制用
+  const altAfter = await cdp.eval(`window.__bp.getState().notes.length`)
+  check('选择模式下点空白不加音', altPlain === altBefore, `${altBefore}→${altPlain}`)
+  check('选择模式下按住 Alt 点空白就加音', altAfter === altBefore + 1, `${altPlain}→${altAfter}`)
+  await cdp.eval(`window.__bp.getState().setMode('draw')`)
 
   // 全选按钮：现在有音符了，它应该是可点的
   await cdp.clickText('全选')

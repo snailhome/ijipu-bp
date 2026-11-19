@@ -144,7 +144,28 @@ export function NoteRoll(props: Props) {
   const [pressMidi, setPressMidi] = useState<number | null>(null)
   /* 鼠标在画布里的 y（用来判断要不要显示悬浮信息；时间尺上不显示） */
   const [hoverY, setHoverY] = useState<number | null>(null)
+  /* 按住 Alt 临时当绘制模式用（用户 m05672）：选择模式下 Alt 一按就能画，松开回到选择 */
+  const [altHeld, setAltHeld] = useState(false)
   const drag = useRef<Drag | null>(null)
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === 'Alt') setAltHeld(true)
+    }
+    const up = (e: KeyboardEvent) => {
+      if (e.key === 'Alt') setAltHeld(false)
+    }
+    const blur = () => setAltHeld(false)
+    window.addEventListener('keydown', down, true)
+    window.addEventListener('keyup', up, true)
+    window.addEventListener('blur', blur)
+    return () => {
+      window.removeEventListener('keydown', down, true)
+      window.removeEventListener('keyup', up, true)
+      window.removeEventListener('blur', blur)
+    }
+  }, [])
+
 
   /* 尺寸跟随容器 */
   useEffect(() => {
@@ -693,6 +714,8 @@ export function NoteRoll(props: Props) {
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
       e.currentTarget.setPointerCapture(e.pointerId)
+      /* Alt 临时绘制：除了 keydown 记的 altHeld，也认事件自带的 altKey（用户 m05672） */
+      const draw = mode === 'draw' || altHeld || e.altKey
 
       if (y < RULER_H) {
         /* 键列右上角那把锁：只切"锁住竖着换音区"，不挪播放头（用户 m05515） */
@@ -733,7 +756,7 @@ export function NoteRoll(props: Props) {
         props.onSelect(hit.id)
         props.onAudition(hit.midi)
         props.onSeek(hit.startMs)
-        if (mode !== 'draw') return
+        if (!draw) return
         if (x >= xAt(hit.endMs) - EDGE_PX) {
           drag.current = { kind: 'resize', id: hit.id, startMs: hit.startMs }
         } else {
@@ -752,7 +775,7 @@ export function NoteRoll(props: Props) {
       props.onSelect(null)
       props.onAudition(midiAt(y))
       props.onSeek(rawMs)
-      if (mode !== 'draw') return
+      if (!draw) return
       const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, firstBeatMs: props.firstBeatMs }
       /* 起点取"光标所在的那一格"（向下取整），不是最近的格点 ——
        * 否则点在格子后半段时，新音会跑到十字准星右边一格，用户看到的就是"偏右上角"。 */
@@ -768,7 +791,7 @@ export function NoteRoll(props: Props) {
       })
       drag.current = { kind: 'create', id, startMs, moved: false }
     },
-    [msAt, midiAt, mode, noteAt, props, xAt],
+    [msAt, midiAt, mode, altHeld, noteAt, props, xAt],
   )
 
   const onPointerMove = useCallback(
