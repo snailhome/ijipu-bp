@@ -419,17 +419,33 @@ export function NoteRoll(props: Props) {
       const y = rowTop(n.midi)
       const h = ROW_H - 1
       const sel = n.id === props.selectedId
-      g.fillStyle = n.confirmed ? 'rgba(45,214,190,0.92)' : 'rgba(120,138,156,0.42)'
-      g.strokeStyle = sel ? '#ffffff' : n.confirmed ? 'rgba(8,40,36,0.85)' : 'rgba(90,104,120,0.7)'
-      g.lineWidth = sel ? 2 : 1
-      const w = Math.max(3, x2 - x1)
+      /* 确认过的音是"我要扒的谱音"，得在彩虹热力图上跳出来（用户 m06417）：
+       * 亮青绿实心 + 深色描边 + 一点外发光，像贴上去的小卡片；没确认的保持灰、别抢眼。 */
+      g.fillStyle = n.confirmed ? '#3dffb8' : 'rgba(120,138,156,0.42)'
+      g.strokeStyle = sel ? '#ffffff' : n.confirmed ? 'rgba(3,26,20,0.95)' : 'rgba(90,104,120,0.7)'
+      g.lineWidth = sel ? 2 : 1.4
+      if (n.confirmed) {
+        g.shadowColor = 'rgba(0,0,0,0.65)'
+        g.shadowBlur = 4
+        g.shadowOffsetY = 1
+      }
+      /* 太短的音（最小格才 30–40ms，折合两三个像素）也要看得见，所以给个最小可视宽度 */
+      const w = Math.max(6, x2 - x1)
       g.beginPath()
       g.rect(x1 + 0.5, y + 0.5, w - 1, h)
       g.fill()
       g.stroke()
+      g.shadowColor = 'transparent'
+      g.shadowBlur = 0
+      g.shadowOffsetY = 0
+      /* 顶上一条 1px 高光，方块不至于糊成一条线 */
+      if (n.confirmed && w > 4) {
+        g.fillStyle = 'rgba(255,255,255,0.35)'
+        g.fillRect(x1 + 1, y + 1, w - 2, 1)
+      }
       const text = label(n.midi)
       if (w > 26 && h >= 11) {
-        g.fillStyle = n.confirmed ? '#05221e' : '#c8d4e0'
+        g.fillStyle = n.confirmed ? '#03251d' : '#c8d4e0'
         g.font = FONT
         g.textBaseline = 'middle'
         g.fillText(text, x1 + 4, y + h / 2 + 0.5, w - 6)

@@ -162,6 +162,23 @@ function Icon({ name }: { name: string }) {
           <path d="M2.8 11.4v1.8h10.4v-1.8" />
         </svg>
       )
+    /* 音名 / 简谱数字：这两颗用文字当图标（A 和 1），比画抽象符号好认 */
+    case 'pitchName':
+      return (
+        <svg {...common}>
+          <text x="8" y="12" textAnchor="middle" fontSize="11.5" fontWeight="600" fill="currentColor" stroke="none">
+            A
+          </text>
+        </svg>
+      )
+    case 'pitchNumber':
+      return (
+        <svg {...common}>
+          <text x="8" y="12" textAnchor="middle" fontSize="11.5" fontWeight="600" fill="currentColor" stroke="none">
+            1
+          </text>
+        </svg>
+      )
     default:
       return null
   }
@@ -743,14 +760,21 @@ export default function App() {
         <div className="spacer" />
 
         <div className="seg" title="表格里写字用音名还是简谱数字（换调号数字跟着变）">
-          <button className={pitchMode === 'name' ? 'on' : ''} onClick={() => useBp.getState().setPitchMode('name')}>
-            {COPY.pitchName}
+          <button
+            className={pitchMode === 'name' ? 'on' : ''}
+            onClick={() => useBp.getState().setPitchMode('name')}
+            aria-label={COPY.pitchName}
+            title={COPY.pitchName}
+          >
+            <Icon name="pitchName" />
           </button>
           <button
             className={pitchMode === 'number' ? 'on' : ''}
             onClick={() => useBp.getState().setPitchMode('number')}
+            aria-label={COPY.pitchNumber}
+            title={COPY.pitchNumber}
           >
-            {COPY.pitchNumber}
+            <Icon name="pitchNumber" />
           </button>
         </div>
         <span className="tsep" />
