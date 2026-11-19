@@ -1,6 +1,6 @@
 [package]
 name = "ijipu-bp"
-version = "0.2.0"
+version = "0.3.0"
 description = "爱扒谱（iJipu BP）—— 音频扒谱，产出 iJipu 的 .jps 脚本乐谱"
 authors = ["iJipu Dev"]
 edition = "2021"
