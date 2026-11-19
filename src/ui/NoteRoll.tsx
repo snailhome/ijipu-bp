@@ -347,7 +347,7 @@ export function NoteRoll(props: Props) {
       /* 3a) 1/4 拍虚线 */
       const quarter = beat / 4
       g.setLineDash([2, 3])
-      g.strokeStyle = 'rgba(180,205,235,0.16)'
+      g.strokeStyle = 'rgba(195,218,245,0.34)'
       g.lineWidth = 1
       const q0 = Math.floor((view.panMs - first) / quarter)
       const q1 = Math.ceil((view.panMs + span - first) / quarter)
@@ -372,7 +372,7 @@ export function NoteRoll(props: Props) {
         const x = Math.round(xAt(ms)) + 0.5
         if (x < metrics.left || x > metrics.w) continue
         const isBar = isBarStartTick(i * 4, barOpt)
-        g.strokeStyle = isBar ? 'rgba(150,200,255,0.50)' : 'rgba(255,255,255,0.16)'
+        g.strokeStyle = isBar ? 'rgba(150,205,255,0.90)' : 'rgba(235,245,255,0.38)'
         g.lineWidth = isBar ? 1.5 : 1
         g.beginPath()
         g.moveTo(x, isBar ? 0 : RULER_H)
