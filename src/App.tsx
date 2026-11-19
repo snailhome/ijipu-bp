@@ -14,7 +14,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keyColor, keyDisplayName } from './analysis/pitchNames'
 import { loadAudioFromPath, pickAndLoadAudio, type LoadedAudio } from './audio/decode'
 import { play, setAudioBuffer, stop, audition, type PlayMode } from './audio/player'
-import { canSeparate, separateStems, sepModelPath, sepModelTarget } from './audio/separate'
+import {
+  canSeparate,
+  downloadModel,
+  onDownloadProgress,
+  openUrl,
+  separateStems,
+  sepModelPath,
+  sepModelTarget,
+  sepReady,
+  type SepReady,
+} from './audio/separate'
 import { computeSpectrum } from './analysis/spectrum'
 import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
@@ -149,6 +159,13 @@ function Icon({ name }: { name: string }) {
           <path d="M12.6 4.6v6.8a1.6 1.6 0 01-1.6 1.6H4.8" opacity=".55" />
         </svg>
       )
+    case 'gear':
+      return (
+        <svg {...common}>
+          <circle cx="8" cy="8" r="2.2" />
+          <path d="M8 1.6v1.8M8 12.6v1.8M1.6 8h1.8M12.6 8h1.8M3.5 3.5l1.3 1.3M11.2 11.2l1.3 1.3M12.5 3.5l-1.3 1.3M4.8 11.2l-1.3 1.3" />
+        </svg>
+      )
     case 'reset':
       return (
         <svg {...common}>
@@ -234,6 +251,40 @@ const SNAP_CHOICES: Array<{ v: SnapMode; label: string }> = [
   { v: 'bar', label: COPY.snapBar },
 ]
 
+const SEP_URL = {
+  mirror: 'https://hf-mirror.com/StemSplitio/htdemucs-ft-vocals-onnx/resolve/main/htdemucs_ft_vocals.onnx',
+  mirrorPage: 'https://hf-mirror.com/StemSplitio/htdemucs-ft-vocals-onnx',
+  officialPage: 'https://huggingface.co/StemSplitio/htdemucs-ft-vocals-onnx',
+}
+
+/** 右侧栏的一个分组：标题可点，收起/展开；组与组之间有分隔线（用户 m06889） */
+function SideGroup({
+  title,
+  children,
+  defaultOpen = true,
+  open: openProp,
+  onToggle,
+}: {
+  title: string
+  children: React.ReactNode
+  defaultOpen?: boolean
+  open?: boolean
+  onToggle?: () => void
+}) {
+  const [selfOpen, setSelfOpen] = useState(defaultOpen)
+  const open = openProp ?? selfOpen
+  const toggle = onToggle ?? (() => setSelfOpen((v) => !v))
+  return (
+    <section className="sgroup">
+      <button className="group-head" onClick={toggle} aria-expanded={open}>
+        <span className="chev">{open ? '▾' : '▸'}</span>
+        <span className="group-title">{title}</span>
+      </button>
+      {open && <div className="group-body">{children}</div>}
+    </section>
+  )
+}
+
 export default function App() {
   const fileName = useBp((s) => s.fileName)
   const durationMs = useBp((s) => s.durationMs)
@@ -272,6 +323,10 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
+  /* 右侧栏两种视图：扒谱用的「编辑」与前期一次性的「设置」（用户 m06889） */
+  const [sideView, setSideView] = useState<'edit' | 'settings'>('edit')
+  /* 模型下载进度：0..1，null 表示没在下 */
+  const [dl, setDl] = useState<number | null>(null)
 
   /* 帮助弹层：Esc 关掉（点外面关在 backdrop 的 onClick 里） */
   useEffect(() => {
@@ -439,7 +494,24 @@ export default function App() {
    * 切「人声/伴奏」只换热力图用的那份频谱，不动音符，也不重算分析。 */
   const stemSpecRef = useRef<{ vocals: Spectrum; instrumental: Spectrum } | null>(null)
   const [stemsReady, setStemsReady] = useState(false)
+  const [sepOk, setSepOk] = useState<SepReady | null>(null)
+  const [sepTarget, setSepTarget] = useState<string | null>(null)
   const [stemMode, setStemMode] = useState<'mix' | 'vocals' | 'instrumental'>('mix')
+  /* 桌面壳里进界面时先问一句：模型和 onnxruntime.dll 都在不在。
+   * 缺东西就显示"装模型包 / 去下载"，而不是等用户点了才报错。 */
+  useEffect(() => {
+    if (!canSeparate()) return
+    let alive = true
+    void sepReady().then((r) => {
+      if (alive) setSepOk(r)
+    })
+    void sepModelTarget().then((p) => {
+      if (alive) setSepTarget(p)
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
   const handleSeparate = useCallback(async () => {
     const src = samplesRef.current
     const st = set.getState()
@@ -486,6 +558,34 @@ export default function App() {
     } catch (e) {
       st.setBusy(null)
       st.setError(e instanceof Error ? e.message : String(e))
+    }
+  }, [set])
+
+  /* 应用内下载模型（用户 m06888）：302 MB，走 hf-mirror，带进度。
+   * 下完自动重新检测一次，用户不用手动点「重新检测」。 */
+  const downloadSepModel = useCallback(async () => {
+    const st = set.getState()
+    if (!canSeparate()) return
+    st.setError(null)
+    setDl(0)
+    setNotice('开始下载分离模型（约 300 MB，镜像 hf-mirror）…')
+    const off = onDownloadProgress((done, total) => {
+      if (total > 0) setDl(Math.min(1, done / total))
+    })
+    try {
+      const path = await downloadModel(SEP_URL.mirror)
+      if (!path) {
+        st.setError('下载没返回路径')
+        return
+      }
+      const r = await sepReady()
+      setSepOk(r)
+      setNotice(`模型已下载到 ${path}`)
+    } catch (e) {
+      st.setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      off()
+      setDl(null)
     }
   }, [set])
 
@@ -901,6 +1001,22 @@ export default function App() {
         </button>
         </span>
         <span className="tsep" />
+        {/* 设置：前期的、一次性的东西都收在这里（模型安装、自动填音…） */}
+        <button
+          className={showSide && sideView === 'settings' ? 'icon-btn on' : 'icon-btn'}
+          onClick={() => {
+            if (showSide && sideView === 'settings') {
+              setSideView('edit')
+            } else {
+              setSideView('settings')
+              setShowSide(true)
+            }
+          }}
+          title="设置"
+          aria-label="设置"
+        >
+          <Icon name="gear" />
+        </button>
         {/* 帮助：按键 / 快捷键 / 鼠标操作（用户 m05893） */}
         <button
           className={helpOpen ? 'icon-btn on' : 'icon-btn'}
@@ -977,16 +1093,74 @@ export default function App() {
           />
         </div>
 
-        <div className={showSide ? "side" : "side off"} ref={sideRef}>
-          <label className="check" title="关着：分析只出频谱/节奏/调性，音符全靠自己在表格里点">
-            <input
-              type="checkbox"
-              checked={autoNotes}
-              onChange={(e) => useBp.getState().setAutoNotes(e.target.checked)}
-            />
-            分析后自动填入音符
-          </label>
+        {/* 设置页：前期/一次性的东西都收在这儿（用户 m06889） */}
+        {sideView === 'settings' && (
+          <div className={showSide ? 'side' : 'side off'}>
+            <div className="side-title">{COPY.settingsTitle}</div>
 
+            <SideGroup title={COPY.settingsAnalyse}>
+              <label className="check" title="关着：分析只出频谱/节奏/调性，音符全靠自己在表格里点">
+                <input
+                  type="checkbox"
+                  checked={autoNotes}
+                  onChange={(e) => useBp.getState().setAutoNotes(e.target.checked)}
+                />
+                分析后自动填入音符
+              </label>
+              <div className="hint">跟具体某首歌无关的行为开关都放这里；改完立刻生效。</div>
+            </SideGroup>
+
+            {canSeparate() && (
+              <SideGroup title={COPY.stemsTitle}>
+                {sepOk && (!sepOk.model || !sepOk.dll) ? (
+                  <div className="warn" style={{ display: 'grid', gap: 8 }}>
+                    <div>
+                      {COPY.stemsMissing}
+                      {sepOk && !sepOk.dll ? `；${COPY.stemsMissingDll}` : ''}
+                    </div>
+                    {dl === null ? (
+                      <button className="primary" onClick={() => void downloadSepModel()} disabled={!!busy}>
+                        {COPY.stemsDownloadNow}
+                      </button>
+                    ) : (
+                      <div className="dl-wrap" title="从 hf-mirror 下载（302 MB）">
+                        <div className="dl-bar">
+                          <i style={{ width: `${Math.round(dl * 100)}%` }} />
+                        </div>
+                        <span className="mono">{Math.round(dl * 100)}%</span>
+                      </div>
+                    )}
+                    <div className="row-gap">
+                      <button onClick={() => void openUrl(SEP_URL.mirrorPage)}>{COPY.stemsDownload}（镜像网页）</button>
+                      <button onClick={() => void openUrl(SEP_URL.officialPage)}>{COPY.stemsDownload}（HuggingFace）</button>
+                      <button onClick={() => void sepReady().then(setSepOk)}>{COPY.stemsRecheck}</button>
+                    </div>
+                    <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>
+                      {COPY.stemsInstallHint}
+                      {'\n'}
+                      {sepTarget ?? ''}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="hint">
+                    模型和 onnxruntime 都就位了，回「编辑」就能用「{COPY.stemsTitle}」里的分离按钮。
+                  </div>
+                )}
+              </SideGroup>
+            )}
+
+            <SideGroup title={COPY.settingsAbout} defaultOpen={false}>
+              <div className="hint">爱扒谱 iJipu BP {APP_VERSION}</div>
+              <div className="hint">分离模型 htdemucs（MIT，Meta AI）只在桌面版可用；网页版不显示分轨。</div>
+            </SideGroup>
+          </div>
+        )}
+
+        <div
+          className={showSide ? "side" : "side off"}
+          ref={sideRef}
+          style={{ display: sideView === 'settings' ? 'none' : undefined }}
+        >
           <div>
             <button className="group-head" onClick={() => setKeyOpen((v) => !v)} aria-expanded={keyOpen}>
               <span className="chev">{keyOpen ? '▾' : '▸'}</span>
@@ -1032,8 +1206,7 @@ export default function App() {
             )}
           </div>
 
-          <div>
-            <h3>{COPY.rhythmTitle}</h3>
+          <SideGroup title={COPY.rhythmTitle}>
             <div className="row-gap">
               <button onClick={() => useBp.getState().runRhythm()} disabled={!analysis}>
                 {COPY.rhythmBtn}
@@ -1064,37 +1237,55 @@ export default function App() {
             <div className="hint" style={{ marginTop: 4 }}>
               {COPY.harmonicHint}
             </div>
-          </div>
+          </SideGroup>
 
           {/* 分轨：桌面专属（重计算），网站/插件端不渲染入口 */}
           {canSeparate() && (
             <div>
               <h3>{COPY.stemsTitle}</h3>
-              <div className="row-gap">
-                <button onClick={() => void handleSeparate()} disabled={!analysis || !!busy}>
-                  {stemsReady ? COPY.stemsAgain : COPY.stemsRun}
-                </button>
-                {stemsReady ? (
-                  <div className="seg" title={COPY.stemsTip}>
-                    {(['mix', 'vocals', 'instrumental'] as const).map((m) => (
-                      <button
-                        key={m}
-                        className={stemMode === m ? 'on' : ''}
-                        onClick={() => setStemMode(m)}
-                      >
-                        {m === 'mix' ? COPY.stemMix : m === 'vocals' ? COPY.stemVocals : COPY.stemInstrumental}
-                      </button>
-                    ))}
+              {sepOk && (!sepOk.model || !sepOk.dll) ? (
+                <div className="warn" style={{ display: 'grid', gap: 6 }}>
+                  <div>
+                    {COPY.stemsMissing}
+                    {sepOk && !sepOk.dll ? `；${COPY.stemsMissingDll}` : ''}
                   </div>
-                ) : (
-                  <span className="hint">{COPY.stemsHint}</span>
-                )}
-              </div>
+                  <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>
+                    {COPY.stemsInstallHint}
+                    {'\n'}
+                    {sepTarget ?? ''}
+                  </div>
+                  <div className="row-gap">
+                    <button onClick={() => void openUrl(SEP_URL.mirror)}>{COPY.stemsDownload}（镜像）</button>
+                    <button onClick={() => void openUrl(SEP_URL.officialPage)}>{COPY.stemsDownload}（HuggingFace）</button>
+                    <button onClick={() => void sepReady().then(setSepOk)}>{COPY.stemsRecheck}</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="row-gap">
+                  <button onClick={() => void handleSeparate()} disabled={!analysis || !!busy}>
+                    {stemsReady ? COPY.stemsAgain : COPY.stemsRun}
+                  </button>
+                  {stemsReady ? (
+                    <div className="seg" title={COPY.stemsTip}>
+                      {(['mix', 'vocals', 'instrumental'] as const).map((m) => (
+                        <button
+                          key={m}
+                          className={stemMode === m ? 'on' : ''}
+                          onClick={() => setStemMode(m)}
+                        >
+                          {m === 'mix' ? COPY.stemMix : m === 'vocals' ? COPY.stemVocals : COPY.stemInstrumental}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="hint">{COPY.stemsHint}</span>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
-          <div>
-            <h3>生成参数</h3>
+          <SideGroup title={"生成参数"}>
             <div style={{ display: 'grid', gap: 6 }}>
               <label className="field">
                 标题
@@ -1137,10 +1328,9 @@ export default function App() {
               </label>
               <div className="hint">改哪一项都只重算"拍轴"，原始秒轴不动。</div>
             </div>
-          </div>
+          </SideGroup>
 
-          <div>
-            <h3>显示</h3>
+          <SideGroup title={"显示"}>
             <div style={{ display: 'grid', gap: 6 }}>
               <label className="field">
                 倍率
@@ -1178,7 +1368,7 @@ export default function App() {
               </label>
               <div className="hint">口径同 noteDigger：颜色深度 = 值 ^ 对比 × 倍率。</div>
             </div>
-          </div>
+          </SideGroup>
 
           {warnings.length > 0 && (
             <div>
@@ -1191,10 +1381,9 @@ export default function App() {
             </div>
           )}
 
-          <div>
-            <h3>{COPY.jpsTitle}</h3>
+          <SideGroup title={COPY.jpsTitle}>
             <pre className="src">{jps || '（还没确认音符）'}</pre>
-          </div>
+          </SideGroup>
         </div>
       </div>
 

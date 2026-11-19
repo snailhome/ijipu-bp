@@ -236,3 +236,11 @@ npm run tauri -- icon "D:\Coding\JianpuScript\矢量图\Logo-bp.png" --fit conta
 3. 打开音频 → 右栏「分轨（实验）」→「分离人声」；完成后可切「混音 / 人声 / 伴奏」看不同热力图。
 
 实测：36 秒真人声 25 秒分离完（RTF 0.5×）；模型首次加载 5–6 秒。
+
+## 分离模型怎么装（二选一）
+
+1. **装模型包**：跑 `dist-model/ijipu-bp-sep-model-setup.exe`（140 MB，NSIS 打的），
+   它把模型和 `onnxruntime.dll` 一起装到 `%APPDATA%\com.ijipu.bp\models`。
+2. **应用内下载**：右上角齿轮 → 设置 → 「分轨（实验）」→ 点「下载模型（302 MB，hf-mirror）」，
+   65 秒左右下完（实测），下完当场可用。
+   也可以点「打开镜像网页 / 打开 HuggingFace」自己下，再手动放到上面那个目录。

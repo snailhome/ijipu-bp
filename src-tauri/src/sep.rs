@@ -54,6 +54,117 @@ pub fn bp_sep_model_target(app: AppHandle) -> Option<String> {
     model_path(&app).ok().map(|p| p.to_string_lossy().to_string())
 }
 
+/// 分离要用的两样东西都在不在：`(model, dll)`。
+/// 少一样前端就显示"装模型包 / 去下载"，不然用户点下去只会看到一句英文报错。
+#[tauri::command]
+pub fn bp_sep_ready(app: AppHandle) -> (bool, bool) {
+    let model = model_path(&app).map(|p| p.is_file()).unwrap_or(false);
+    (model, find_dylib(&app).is_some() || std::env::var_os("ORT_DYLIB_PATH").is_some())
+}
+
+/// 找 onnxruntime 动态库：`models/`（模型包跟 dll 放一起）→ exe 旁边 → exe 的 resources/
+fn find_dylib(app: &AppHandle) -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(dir) = app.path().app_data_dir() {
+        dirs.push(dir.join("models"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            dirs.push(dir.to_path_buf());
+            dirs.push(dir.join("resources"));
+        }
+    }
+    for dir in dirs {
+        for name in ["onnxruntime.dll", "libonnxruntime.so", "libonnxruntime.dylib"] {
+            let cand = dir.join(name);
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    None
+}
+
+/// 应用内下载分离模型（302 MB）：走 hf-mirror（国内可达），带进度事件。
+/// 下到 `<app_data>/models/htdemucs_ft_vocals.onnx.part`，完成再改名，中途断了不会留下半个模型。
+#[tauri::command]
+pub async fn bp_download_model(app: AppHandle, url: String) -> Result<String, String> {
+    if !url.starts_with("https://") {
+        return Err("只允许 https 链接".into());
+    }
+    let dest = model_path(&app)?;
+    let dir = dest.parent().ok_or("拿不到模型目录")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("建目录失败: {e}"))?;
+    let part = dir.join("htdemucs_ft_vocals.onnx.part");
+
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(30))
+        .build();
+    let resp = agent
+        .get(&url)
+        .call()
+        .map_err(|e| format!("下载失败（网络或镜像不可达）: {e}"))?;
+    let total: u64 = resp
+        .header("content-length")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    let mut reader = resp.into_reader();
+    let mut out = std::fs::File::create(&part).map_err(|e| format!("写文件失败: {e}"))?;
+    let mut buf = vec![0u8; 1 << 20];
+    let mut got: u64 = 0;
+    let mut last_emit = 0u64;
+    loop {
+        let n = std::io::Read::read(&mut reader, &mut buf).map_err(|e| format!("读取出错: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        std::io::Write::write_all(&mut out, &buf[..n]).map_err(|e| format!("写入出错: {e}"))?;
+        got += n as u64;
+        if got - last_emit >= 8 << 20 {
+            last_emit = got;
+            let _ = app.emit("bp-sep-download", (got, total));
+        }
+    }
+    drop(out);
+    // 太小说明下到的是错误页（镜像有时候会返回 HTML）
+    if got < 50u64 << 20 {
+        let _ = std::fs::remove_file(&part);
+        return Err(format!("下到的文件只有 {} MB，不像模型（可能镜像返回了错误页）", got / 1024 / 1024));
+    }
+    std::fs::rename(&part, &dest).map_err(|e| format!("改名失败: {e}"))?;
+    let _ = app.emit("bp-sep-download", (got, got));
+    Ok(dest.to_string_lossy().to_string())
+}
+
+/// 用系统默认浏览器打开网址（下载模型页）。不引第三方 crate：
+/// Windows 用 `cmd /C start`，macOS `open`，Linux `xdg-open`。
+#[tauri::command]
+pub fn bp_open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("https://") && !url.starts_with("http://") {
+        return Err("只允许 http(s) 链接".into());
+    }
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("cmd");
+        c.args(["/C", "start", "", &url]);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(&url);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(&url);
+        c
+    };
+    cmd.spawn().map(|_| ()).map_err(|e| format!("打不开浏览器: {e}"))
+}
+
 /// 真正的分离。`samples` 是**交错立体声** f32（L,R,L,R…），`sample_rate` 随便，内部会重采样到 44.1k。
 #[tauri::command]
 pub async fn bp_separate(
@@ -69,18 +180,10 @@ pub async fn bp_separate(
             path.to_string_lossy()
         ));
     }
-    // ONNX Runtime 的动态库：优先环境变量，其次 exe 旁边（打包时随安装包发）
+    // ONNX Runtime 的动态库：优先环境变量，其次 models/、exe 旁边、exe 的 resources/
     if std::env::var_os("ORT_DYLIB_PATH").is_none() {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                for name in ["onnxruntime.dll", "libonnxruntime.so", "libonnxruntime.dylib"] {
-                    let cand = dir.join(name);
-                    if cand.is_file() {
-                        std::env::set_var("ORT_DYLIB_PATH", cand);
-                        break;
-                    }
-                }
-            }
+        if let Some(dylib) = find_dylib(&app) {
+            std::env::set_var("ORT_DYLIB_PATH", dylib);
         }
     }
 

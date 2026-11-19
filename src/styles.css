@@ -812,3 +812,82 @@ select option:checked {
   background: var(--accent);
   color: #08131a;
 }
+
+/* ---------- 右侧栏分组（用户 m06889）：组标题更醒目、组间细线、点标题收起 ---------- */
+.side {
+  padding: 8px 10px 14px;
+}
+
+.side-title {
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+  padding: 2px 2px 8px;
+}
+
+.sgroup {
+  display: block;
+  padding: 8px 0 10px;
+  border-top: 1px solid var(--line);
+}
+
+.sgroup:first-of-type {
+  border-top: 0;
+}
+
+.sgroup > .group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 2px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sgroup > .group-head:hover {
+  color: var(--accent);
+}
+
+.sgroup > .group-head .chev {
+  width: 10px;
+  color: var(--fg-dim);
+  font-size: 10px;
+}
+
+.sgroup > .group-head .group-title {
+  letter-spacing: 0.01em;
+}
+
+.sgroup > .group-body {
+  display: grid;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+/* 模型下载进度 */
+.dl-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dl-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.dl-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}

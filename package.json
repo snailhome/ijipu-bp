@@ -13,6 +13,7 @@
     "inspect": "vite build --config vite.inspect.config.ts && node dist-inspect/inspect.cjs",
     "fixture": "node scripts/make-fixture-wav.mjs .tmp-melody.wav",
     "probe": "node scripts/ui-probe.mjs",
+    "build:model-installer": "node scripts/build-model-installer.mjs",
     "sync:engine": "node scripts/sync-engine.mjs",
     "check:engine": "node scripts/sync-engine.mjs --check",
     "tauri": "tauri",

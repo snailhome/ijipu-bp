@@ -95,6 +95,9 @@ pub fn run() {
             bp_save_jps,
             sep::bp_sep_model,
             sep::bp_sep_model_target,
+            sep::bp_sep_ready,
+            sep::bp_open_url,
+            sep::bp_download_model,
             sep::bp_separate
         ])
         .setup(|app| {

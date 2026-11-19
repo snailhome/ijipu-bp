@@ -70,4 +70,15 @@ export const COPY = {
   stemsTip: '切换看哪一轨的热力图（不影响已画的音符）',
   stemMix: '混音',
   stemVocals: '人声',
-  stemInstrumental: '伴奏',}
+  stemInstrumental: '伴奏',
+  settingsTitle: '设置',
+  settingsAnalyse: '分析',
+  settingsAbout: '关于',
+  stemsDownloadNow: '下载模型（302 MB，hf-mirror）',
+  stemsMissing: '分离模型还没装',
+  stemsMissingDll: '缺 ONNX Runtime 动态库 onnxruntime.dll',
+  stemsInstallHint:
+    '装一次「爱扒谱 分离模型包」最省事；也可以自己去下模型，按下面这个路径放进去，再点「重新检测」。',
+  stemsDownload: '打开下载页',
+  stemsRecheck: '重新检测',
+}
