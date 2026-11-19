@@ -134,7 +134,9 @@ npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM 
 - **exe = Cargo 包名**：本应用 `ijipu-bp` → `ijipu-bp.exe`（不要改成带点的 `iJipuBP.exe`）。
 - **图标文件名 `logo-bp.png`**（小写 logo-），`public/icons/` 下那份被 `index.html`、`App.tsx`、
   `lib.rs` 的 `include_bytes!` 三处引用；改名要三处一起改。
-- **版本号自动升**：`scripts/auto-version.mjs`，SemVer；`feat`→MINOR、修复→PATCH、
-  破坏性→MAJOR、只改文档不升。**打包前跑 `npm run tauri:build` 会自动升**（脚本已接在里面），
+- **版本号自动升**：`scripts/auto-version.mjs`，SemVer；**是否影响功能**决定升不升：
+  `feat`→MINOR、修复→PATCH、破坏性→MAJOR；不影响功能的（文档/日志、版本账本文件
+  `package-lock.json` / `src-tauri/Cargo.lock` / `src/brand/version.ts`、升版脚本本身）不升。
+  **打包前跑 `npm run tauri:build` 会自动升**（脚本已接在里面），
   升完把版本文件一起提交；不要再手改 `package.json` / `tauri.conf.json` / `src/brand/version.ts` 三处号。
   基线：0.2.0（2026-11-19，用户拍板）。
