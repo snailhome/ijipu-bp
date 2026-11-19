@@ -5,8 +5,9 @@
  * 点不进去（SetForegroundWindow 常被系统拒绝）。浏览器版走 CDP，点击是
  * 直接投递给页面的，不受窗口叠放影响，正好用来验"按钮到底有没有接上事件"。
  *
- * 用法：node scripts/ui-probe.mjs [url]
+ * 用法：node scripts/ui-probe.mjs [url] [--shot out.png] [--pickup N]
  *   默认 http://localhost:5175/（先 npm run dev）。
+ *   --shot 截图（配合 --pickup 可截弱起时的小节线）。
  * 退出码 0 = 全部通过；1 = 有失败（会打印哪一条）。
  */
 import { spawn } from 'node:child_process'
@@ -14,7 +15,14 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const URL_ = process.argv[2] ?? 'http://localhost:5175/'
+/* 取参数值，同时避免把 --pickup 后面的数字当成页面 URL */
+const argv = process.argv.slice(2)
+const argValue = (name) => {
+  const i = argv.indexOf(name)
+  return i >= 0 ? argv[i + 1] : undefined
+}
+const positional = argv.filter((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--')))
+const URL_ = positional[0] ?? 'http://localhost:5175/'
 const PORT = 9333
 const CHROME =
   process.env.CHROME_PATH ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
@@ -1137,6 +1145,17 @@ try {
   const afterBarBack = await cdp.eval(`window.__bp.getState().currentMs`)
   check('Ctrl+← 往回跳一个小节', Math.abs(afterBarBack - 0) < 90, String(Math.round(afterBarBack)))
 
+  /* 弱起 1 拍：第 1 小节只有 1 拍（0…500ms），第 2 小节从 500ms 起。
+     从 100ms 按 Ctrl+→ 应落在 500ms，而不是整小节的 2000ms（adj-pickup）。 */
+  await cdp.eval(`(() => { const s = window.__bp.getState(); s.setPickupBeats(1); s.setCurrentMs(100) })()`)
+  await sleep(120)
+  await cdp.pressKey('ArrowRight', 'ArrowRight', 39, 2)
+  await sleep(220)
+  const afterPickupJump = await cdp.eval(`window.__bp.getState().currentMs`)
+  check('弱起 1 拍时 Ctrl+→ 跳到第 2 小节起点', Math.abs(afterPickupJump - 500) < 90, String(Math.round(afterPickupJump)))
+  await cdp.eval(`window.__bp.getState().setPickupBeats(0)`)
+  await sleep(120)
+
   /* ── 帮助弹层（顶栏键盘图标） ── */
   await cdp.eval(`(() => {
     const btn = [...document.querySelectorAll('.toolbar .icon-btn')].find((b) => (b.getAttribute('aria-label') || '').includes('按键'))
@@ -1164,9 +1183,11 @@ try {
   check('页面没有运行时错误', !errs, errs ? String(errs) : '')
 
   /* --shot <path>：把当前界面截一张干净图
-     （顺手灌回一份假的频谱与两个音、全标确认、圈一段区间，谱面才有内容可看） */
-  const shotAt = process.argv.indexOf('--shot')
-  if (shotAt > 0 && process.argv[shotAt + 1]) {
+     （顺手灌回一份假的频谱与两个音、全标确认、圈一段区间，谱面才有内容可看）
+     --pickup N：截图时把弱起设成 N 拍，用来核对小节线位置 */
+  const shotPath = argValue('--shot')
+  if (shotPath) {
+    const pickupN = Math.max(0, Number(argValue('--pickup')) || 0)
     await cdp.eval(`(() => {
       const st = window.__bp
       const s = st.getState()
@@ -1199,14 +1220,15 @@ try {
       s.setView({ zoom: 1, panMs: 0 })
       s.setCurrentMs(800)
       s.setAllConfirmed(true)
+      s.setPickupBeats(${pickupN})
       s.setLoop({ startMs: 500, endMs: 2500 })
       s.setLoopOn(true)
     })()`)
     await sleep(600)
     const png = await cdp.send('Page.captureScreenshot', { format: 'png' })
     const { writeFile } = await import('node:fs/promises')
-    await writeFile(process.argv[shotAt + 1], Buffer.from(png.data, 'base64'))
-    check('截图已保存', true, process.argv[shotAt + 1])
+    await writeFile(shotPath, Buffer.from(png.data, 'base64'))
+    check('截图已保存', true, shotPath)
   }
 } catch (e) {
   check('探测过程本身出错', false, (e && e.stack) || String(e))
