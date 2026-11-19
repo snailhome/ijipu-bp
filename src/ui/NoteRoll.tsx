@@ -23,6 +23,16 @@ import { msToX, pickTickSeconds, spanMs, xToMs } from './timeAxis'
 import type { PitchMode, View } from '../model/store'
 import type { EditMode, LoopRange, RawNote, SnapMode, Spectrum } from '../model/types'
 
+/* 选择模式用「单手指」光标（CSS pointer）；绘制模式换一支笔（用户 m02510）。
+ * 笔尖朝左上、热点就在笔尖（2 2），符合常见"笔"光标的落点习惯（用户 m02583）。 */
+const PEN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 26 26">
+<path d="M2 2l1.4 6.2L17.6 22.4a2.6 2.6 0 0 0 3.7-3.7L7.1 4.5 2 2z" fill="#f4c64f" stroke="#f6f2e6" stroke-width="1.2" stroke-linejoin="round"/>
+<path d="M2 2l1.4 6.2L17.6 22.4a2.6 2.6 0 0 0 3.7-3.7L7.1 4.5 2 2z" fill="none" stroke="#1f232b" stroke-width="0.7" stroke-linejoin="round"/>
+<path d="M2 2l1.4 6.2 3.9-3.9L2 2z" fill="#f6f2e6" stroke="#1f232b" stroke-width="0.7"/>
+<path d="M15.6 20.4l4-4" stroke="#1f232b" stroke-width="1.2"/>
+</svg>`
+const PEN_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(PEN_SVG)}") 2 2, pointer`
+
 interface Props {
   notes: RawNote[]
   spectrum: Spectrum | null
@@ -852,15 +862,17 @@ export function NoteRoll(props: Props) {
       const d = drag.current
       if (!d) {
         /* 没在拖的时候：握柄上是左右箭头；绘制模式下停在音符右缘也是左右箭头（用户 m05780：
-         * 得让用户看得出来这里能调时值）；其余一律普通箭头（m04626 说过不要十字）。 */
+         * 得让用户看得出来这里能调时值）；其余按模式给光标 —— 选择是单手指、绘制是一支笔（m02510）。 */
+        const draw = mode === 'draw' || altHeld || e.altKey
         const lh = loopHit(x)
         const edge =
-          (mode === 'draw' || altHeld) &&
+          draw &&
           (() => {
             const hit = noteAt(x, y)
             return !!hit && x >= xAt(hit.endMs) - EDGE_PX
           })()
-        e.currentTarget.style.cursor = lh === 'l' || lh === 'r' || edge ? 'ew-resize' : 'default'
+        e.currentTarget.style.cursor =
+          lh === 'l' || lh === 'r' || edge ? 'ew-resize' : draw ? PEN_CURSOR : 'pointer'
         return
       }
       const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, pickupBeats: props.pickupBeats, firstBeatMs: props.firstBeatMs }
@@ -966,8 +978,8 @@ export function NoteRoll(props: Props) {
         style={{
           width: metrics.w,
           height: metrics.h,
-          /* 默认箭头（用户 m04626）；握柄上的左右箭头由 pointermove 动态改 */
-          cursor: 'default',
+          /* 选择模式单手指、绘制模式笔形（用户 m02510）；握柄/音符右缘的左右箭头由 pointermove 动态改 */
+          cursor: mode === 'draw' ? PEN_CURSOR : 'pointer',
         }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

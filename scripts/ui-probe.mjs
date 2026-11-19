@@ -554,15 +554,29 @@ try {
   })
   check('时间尺上按住划动时，光标是左右箭头', cursorDuringDrag === 'ew-resize', cursorDuringDrag)
 
-  // ── 绘制模式下光标也是普通箭头（用户 m04626），不再用十字 ──
+  // ── 光标：选择模式是单手指，绘制模式是一支笔（用户 m02510）──
+  const hoverPt = { x: ruler.ox + ruler.x1 + 40, y: ruler.y + 120 }
+  const moveAway = async () => {
+    await cdp.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: hoverPt.x, y: hoverPt.y, button: 'none', buttons: 0,
+    })
+    await sleep(150)
+  }
+  await cdp.eval(`window.__bp.getState().setMode('select')`)
+  await sleep(150)
+  await moveAway()
+  const cursorSelect = await cdp.eval(`document.querySelector('.pane.roll canvas').style.cursor`)
+  check('选择模式下鼠标是单手指', cursorSelect === 'pointer', cursorSelect || '(空)')
+
   await cdp.eval(`window.__bp.getState().setMode('draw')`)
   await sleep(150)
-  await cdp.send('Input.dispatchMouseEvent', {
-    type: 'mouseMoved', x: ruler.ox + ruler.x1 + 40, y: ruler.y + 120, button: 'none', buttons: 0,
-  })
-  await sleep(150)
+  await moveAway()
   const cursorDraw = await cdp.eval(`document.querySelector('.pane.roll canvas').style.cursor`)
-  check('绘制模式下鼠标是普通箭头', cursorDraw === 'default', cursorDraw || '(空)')
+  check(
+    '绘制模式下鼠标是一支笔',
+    cursorDraw.startsWith('url("data:image/svg+xml'),
+    cursorDraw ? cursorDraw.slice(0, 46) : '(空)',
+  )
   await cdp.eval(`window.__bp.getState().setMode('select')`)
   await sleep(100)
   // ── 绘制模式下，新音的起点必须是"光标所在那一格"（不是最近的格点，否则偏右一格）──
