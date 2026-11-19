@@ -63,4 +63,11 @@ export const COPY = {
   harmonicHint: '把泛音从谱里减掉（0 = 不动，1 = 全减）；松手后会用同一段音频重跑一遍',
   hbarTip: '拖这条横向滚动条（或 Shift+滚轮）来回换时间位置',
   hbarDisabledTip: '整首都在屏幕里，没得滚 —— 用 Ctrl+滚轮 放大后再拖',
-} as const
+  stemsTitle: '分轨（实验）',
+  stemsRun: '分离人声',
+  stemsAgain: '重新分离',
+  stemsHint: '用 htdemucs 把歌拆成人声/伴奏，各算一份热力图',
+  stemsTip: '切换看哪一轨的热力图（不影响已画的音符）',
+  stemMix: '混音',
+  stemVocals: '人声',
+  stemInstrumental: '伴奏',}

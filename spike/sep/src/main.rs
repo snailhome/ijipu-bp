@@ -71,10 +71,13 @@ fn main() -> Result<(), String> {
     std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
 
     let t0 = Instant::now();
-    let (l_all, r_all, sr) = read_wav(in_wav)?;
-    if sr != SR {
-        return Err(format!("采样率是 {sr}，这个模型只吃 44100"));
-    }
+    let (l_raw, r_raw, sr) = read_wav(in_wav)?;
+    let (l_all, r_all) = if sr == SR {
+        (l_raw, r_raw)
+    } else {
+        println!("重采样 {sr} → {SR}");
+        (resample(&l_raw, sr, SR), resample(&r_raw, sr, SR))
+    };
     let from = ((start_sec * SR as f32) as usize).min(l_all.len());
     let to = match dur_sec {
         Some(d) => (from + (d * SR as f32) as usize).min(l_all.len()),
@@ -156,6 +159,46 @@ fn main() -> Result<(), String> {
     println!("写出 {out_dir}/vocals.wav 与 instrumental.wav；总耗时 {:.2}s", t0.elapsed().as_secs_f32());
     // ort 的 Environment 在进程退出时偶尔卡住，尖刀里直接 exit
     std::process::exit(0);
+}
+
+/// Lanczos-3 重采样（a=3）。够干净，且不用引第三方库。
+fn resample(src: &[f32], from: u32, to: u32) -> Vec<f32> {
+    if from == to {
+        return src.to_vec();
+    }
+    let ratio = to as f64 / from as f64;
+    let n_out = (src.len() as f64 * ratio).round() as usize;
+    let mut out = Vec::with_capacity(n_out);
+    let taps = 6i64;
+    for i in 0..n_out {
+        let p = i as f64 / ratio;
+        let base = p.floor() as i64;
+        let mut acc = 0f64;
+        let mut wsum = 0f64;
+        for k in -taps + 1..=taps {
+            let idx = base + k;
+            if idx < 0 || idx as usize >= src.len() {
+                continue;
+            }
+            let x = p - idx as f64;
+            let w = lanczos(x, 3.0);
+            acc += src[idx as usize] as f64 * w;
+            wsum += w;
+        }
+        out.push(if wsum.abs() > 1e-9 { (acc / wsum) as f32 } else { 0.0 });
+    }
+    out
+}
+
+fn lanczos(x: f64, a: f64) -> f64 {
+    if x.abs() < 1e-9 {
+        return 1.0;
+    }
+    let pix = std::f64::consts::PI * x;
+    let s = pix.sin() / pix;
+    let pixa = pix / a;
+    let sa = pixa.sin() / pixa;
+    s * sa
 }
 
 /// 交叠区的升余弦权重，边界为 0，避免硬切

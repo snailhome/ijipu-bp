@@ -5,6 +5,8 @@
 //!  · 解码与 DSP 全在前端（纯 TS、Node 里能冒烟），这里只搬运字节，不碰音频格式。
 //! 所有命令都是"要么成、要么带中文原因报错"，前端直接把字符串贴到状态栏。
 
+mod sep;
+
 use std::path::PathBuf;
 
 use tauri::ipc::Response;
@@ -90,7 +92,10 @@ pub fn run() {
             bp_pick_audio,
             bp_read_audio,
             bp_initial_audio,
-            bp_save_jps
+            bp_save_jps,
+            sep::bp_sep_model,
+            sep::bp_sep_model_target,
+            sep::bp_separate
         ])
         .setup(|app| {
             // 窗口图标（标题栏左上角 + 任务栏）= 品牌图，与 public/icons、src-tauri/icons

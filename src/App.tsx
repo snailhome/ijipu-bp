@@ -14,12 +14,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keyColor, keyDisplayName } from './analysis/pitchNames'
 import { loadAudioFromPath, pickAndLoadAudio, type LoadedAudio } from './audio/decode'
 import { play, setAudioBuffer, stop, audition, type PlayMode } from './audio/player'
+import { canSeparate, separateStems, sepModelPath, sepModelTarget } from './audio/separate'
+import { computeSpectrum } from './analysis/spectrum'
 import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
 import { PAGE_MS, useBp } from './model/store'
 import { spanMs } from './ui/timeAxis'
-import type { AnalyzeResult, LoopRange, SnapMode } from './model/types'
+import type { AnalyzeResult, LoopRange, SnapMode, Spectrum } from './model/types'
 import { NoteRoll } from './ui/NoteRoll'
 import { StripPreview } from './ui/StripPreview'
 
@@ -432,6 +434,61 @@ export default function App() {
     },
     [set],
   )
+  /* ---------- 分轨（桌面专属）：人声 / 伴奏 ----------
+   * 前端解码 → PCM 交给 Rust 跑 ONNX → 两轨 wav 落盘再读回来 → 各算一份频谱。
+   * 切「人声/伴奏」只换热力图用的那份频谱，不动音符，也不重算分析。 */
+  const stemSpecRef = useRef<{ vocals: Spectrum; instrumental: Spectrum } | null>(null)
+  const [stemsReady, setStemsReady] = useState(false)
+  const [stemMode, setStemMode] = useState<'mix' | 'vocals' | 'instrumental'>('mix')
+  const handleSeparate = useCallback(async () => {
+    const src = samplesRef.current
+    const st = set.getState()
+    if (!src) {
+      st.setError('先打开一段音频')
+      return
+    }
+    if (!canSeparate()) {
+      st.setError('分离只在桌面版里有')
+      return
+    }
+    st.setError(null)
+    st.setBusy('正在分离人声…')
+    setNotice('分离中：模型第一次加载要几秒，之后每 7.8 秒一段')
+    try {
+      const model = await sepModelPath()
+      if (!model) {
+        const target = await sepModelTarget()
+        st.setBusy(null)
+        st.setError(`还没装分离模型。把 htdemucs_ft_vocals.onnx 放到：${target ?? '应用数据目录/models/'}`)
+        return
+      }
+      // 单声道复制成左右两路：模型要立体声，器乐/人声都在中间，够用
+      const mono = src.samples
+      const inter = new Float32Array(mono.length * 2)
+      for (let i = 0; i < mono.length; i++) {
+        inter[i * 2] = mono[i]
+        inter[i * 2 + 1] = mono[i]
+      }
+      const r = await separateStems(inter, src.sampleRate)
+      if (!r) {
+        st.setBusy(null)
+        st.setError('分离没返回结果')
+        return
+      }
+      stemSpecRef.current = {
+        vocals: computeSpectrum(r.vocals, 44100, {}),
+        instrumental: computeSpectrum(r.instrumental, 44100, {}),
+      }
+      setStemsReady(true)
+      setStemMode('vocals')
+      st.setBusy(null)
+      setNotice(`分离完成（推理 ${r.seconds.toFixed(1)}s）：现在看的是人声音轨，可切「伴奏」或「混音」`)
+    } catch (e) {
+      st.setBusy(null)
+      st.setError(e instanceof Error ? e.message : String(e))
+    }
+  }, [set])
+
   /* ---------- 播放 ----------
    * 注意"先置 playing 再 await"：`play()` 里有 await（AudioContext.resume / 合成器 ready）。
    * 如果等 await 完才 setPlaying(true)，用户在这几十毫秒里连按两次空格，第二次看到的
@@ -876,7 +933,7 @@ export default function App() {
         <div className="main">
           <NoteRoll
             notes={notes}
-            spectrum={analysis?.spectrum ?? null}
+            spectrum={stemMode === 'mix' || !stemSpecRef.current ? (analysis?.spectrum ?? null) : stemSpecRef.current[stemMode]}
             durationMs={durationMs}
             bpm={bpm}
             beatsPerBar={beatsPerBar}
@@ -1008,6 +1065,33 @@ export default function App() {
               {COPY.harmonicHint}
             </div>
           </div>
+
+          {/* 分轨：桌面专属（重计算），网站/插件端不渲染入口 */}
+          {canSeparate() && (
+            <div>
+              <h3>{COPY.stemsTitle}</h3>
+              <div className="row-gap">
+                <button onClick={() => void handleSeparate()} disabled={!analysis || !!busy}>
+                  {stemsReady ? COPY.stemsAgain : COPY.stemsRun}
+                </button>
+                {stemsReady ? (
+                  <div className="seg" title={COPY.stemsTip}>
+                    {(['mix', 'vocals', 'instrumental'] as const).map((m) => (
+                      <button
+                        key={m}
+                        className={stemMode === m ? 'on' : ''}
+                        onClick={() => setStemMode(m)}
+                      >
+                        {m === 'mix' ? COPY.stemMix : m === 'vocals' ? COPY.stemVocals : COPY.stemInstrumental}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="hint">{COPY.stemsHint}</span>
+                )}
+              </div>
+            </div>
+          )}
 
           <div>
             <h3>生成参数</h3>

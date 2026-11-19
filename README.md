@@ -226,3 +226,13 @@ npm run tauri -- icon "D:\Coding\JianpuScript\矢量图\Logo-bp.png" --fit conta
 
 **6. 不要用 shell 改含中文的文件。** 工作区规矩：中文文件只用编辑器工具改，`Get-Content | Set-Content`
 会把编码改坏。
+
+## 分轨（桌面专属）
+
+人声/伴奏分离跑在 Rust 里（`ort` + htdemucs ONNX），网站/插件端不渲染入口。
+
+1. 把 `htdemucs_ft_vocals.onnx` 放到 `%APPDATA%\com.ijipu.bp\models\`（301 MB，MIT）。
+2. 把 `onnxruntime.dll` 放到 exe 旁边（或设 `ORT_DYLIB_PATH`）。
+3. 打开音频 → 右栏「分轨（实验）」→「分离人声」；完成后可切「混音 / 人声 / 伴奏」看不同热力图。
+
+实测：36 秒真人声 25 秒分离完（RTF 0.5×）；模型首次加载 5–6 秒。

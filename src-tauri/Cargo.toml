@@ -23,3 +23,5 @@ serde_json = "1"
 # 为什么不用网页的 <input type=file>：浏览器拿不到磁盘路径，下次还得重选；
 # 桌面壳要的是"打开过的文件能记住路径"。
 tauri-plugin-dialog = "2"
+# 分离模型推理（ONNX Runtime，动态加载 dll，见 src/sep.rs）
+ort = { version = "2.0.0-rc.15", features = ["load-dynamic"] }

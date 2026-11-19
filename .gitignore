@@ -12,3 +12,4 @@ src-tauri/gen/schemas/
 spike/**/target/
 spike/**/target-b/
 .cache/
+spike/**/target-c/
