@@ -16,7 +16,9 @@ import { create } from 'zustand'
 import { quantize } from '../jps/quantize'
 import { analyzeRhythm } from '../analysis/beat'
 import { toJps } from '../jps/toJps'
+import { MIDI_HIGH, MIDI_LOW } from '../analysis/pitchNames'
 import type { PlayMode } from '../audio/player'
+import type { ChordSegment } from '../analysis/chords'
 import type { ProjectFile } from './project'
 import type {
   AnalyzeResult,
@@ -38,6 +40,31 @@ export interface View {
 
 /** 自动翻页 / 默认视野的一屏时长（毫秒）。用户 m03712：默认只显示 20 秒，不是整曲。 */
 export const PAGE_MS = 20000
+
+/** 一屏宽显示几秒（用户 m02483）：默认 20 秒，范围 2–60 秒 —— 再窄看不清时值，再宽看不清拍 */
+export const PAGE_SEC_MIN = 2
+export const PAGE_SEC_MAX = 60
+export const PAGE_SEC_DEFAULT = PAGE_MS / 1000
+
+/** 表格每半音一行的高度（用户 m02483）：太小字叠在一起，太大一屏放不下几个八度 */
+export const ROW_H_MIN = 10
+export const ROW_H_MAX = 26
+export const ROW_H_DEFAULT = 14
+
+/** 默认让第一行落在 C7 附近（原来的 center=76 换算过来就是这里），重开时从 localStorage 恢复 */
+export const TOP_MIDI_DEFAULT = 96
+
+/** localStorage 里记的界面尺寸（非 SSR 环境才读；坏了就用默认值） */
+function lsNum(key: string, def: number, min: number, max: number): number {
+  if (typeof localStorage === 'undefined') return def
+  try {
+    const v = Number(localStorage.getItem(key) ?? '')
+    return Number.isFinite(v) && v >= min && v <= max ? v : def
+  } catch {
+    return def
+  }
+}
+
 
 interface State {
   /* 文件 */
@@ -78,6 +105,16 @@ interface State {
   mode: EditMode
   snap: SnapMode
   view: View
+  /** 一屏宽显示几秒（滑条）；真正的视野仍以 view.zoom 为准，这里只记"用户要的宽度" */
+  pageSec: number
+  /** 表格行高（每半音一行，10–26px） */
+  rowH: number
+  /** 表格第一行的音高（MIDI）；滚轮上下换音区后记在这里，重开时恢复 */
+  topMidi: number
+  /** 和弦识别结果（noteDigger 复刻；只做提示，不写进 jps） */
+  chords: ChordSegment[]
+  /** 要不要把和弦名画在表格底下 */
+  showChords: boolean
   tonic: number
   autoTonic: boolean
   bpm: number
@@ -105,6 +142,11 @@ interface State {
   setMode: (m: EditMode) => void
   setSnap: (s: SnapMode) => void
   setView: (v: View) => void
+  setPageSec: (sec: number) => void
+  setRowH: (h: number) => void
+  setTopMidi: (m: number) => void
+  setChords: (c: ChordSegment[]) => void
+  setShowChords: (b: boolean) => void
   setLoop: (r: LoopRange | null) => void
   setLoopOn: (b: boolean) => void
   setAutoPage: (b: boolean) => void
@@ -244,6 +286,11 @@ export const useBp = create<State>((set, get) => ({
   mode: 'select',
   snap: 'grid', /* 默认吸到最小格（1/16 拍）—— 点哪一格就画哪一格，用户 m04674 */
   view: { zoom: 1, panMs: 0 },
+  pageSec: lsNum('bp.pageSec', PAGE_SEC_DEFAULT, PAGE_SEC_MIN, PAGE_SEC_MAX),
+  rowH: Math.round(lsNum('bp.rowH', ROW_H_DEFAULT, ROW_H_MIN, ROW_H_MAX)),
+  topMidi: Math.round(lsNum('bp.topMidi', TOP_MIDI_DEFAULT, MIDI_LOW, MIDI_HIGH)),
+  chords: [],
+  showChords: true,
   tonic: 0,
   autoTonic: true,
   bpm: 100,
@@ -261,8 +308,9 @@ export const useBp = create<State>((set, get) => ({
   setLoaded: (p) => {
     /* 打开就一屏 20 秒（用户 m04107：打开音频文件，只显示前 20 秒）。
      * 以前这个缩放只在"开始播放"那个 effect 里做，于是刚打开时其实是整曲铺满；
-     * 现在装载时直接把 zoom 算好，比 20 秒短的曲子仍然整首显示。 */
-    const page = Math.max(1, Math.min(p.durationMs || 1, PAGE_MS))
+     * 现在装载时直接把 zoom 算好，比 20 秒短的曲子仍然整首显示。
+     * 一屏几秒是可调的（用户 m02483）：用当前设置 pageSec，不是写死的 20 秒。 */
+    const page = Math.max(1, Math.min(p.durationMs || 1, (get().pageSec || PAGE_SEC_DEFAULT) * 1000))
     const zoom = Math.max(1, (p.durationMs || 1) / page)
     set({
       ...p,
@@ -271,6 +319,7 @@ export const useBp = create<State>((set, get) => ({
       grid: [],
       jps: '',
       warnings: [],
+      chords: [],
       currentMs: 0,
       view: { zoom, panMs: 0 },
       loop: null,
@@ -285,6 +334,8 @@ export const useBp = create<State>((set, get) => ({
     set({
       analysis: a,
       notes: a.notes.map((n) => ({ ...n, confirmed: false })),
+      /* 换了一轮分析（换了轨/去谐波）：上一轮的和弦不再作数，等用户再点「和弦分析」 */
+      chords: [],
       bpm: a.bpm,
       firstBeatMs: a.firstBeatMs,
       tonic: a.keyCandidates[0]?.tonic ?? 0,
@@ -348,6 +399,25 @@ export const useBp = create<State>((set, get) => ({
         panMs: Math.max(0, v.panMs),
       },
     }),
+  setPageSec: (sec) => {
+    /* 滑条要的是"一屏几秒"，换算成 zoom 存；比整首还宽时 zoom 停在 1（整曲铺满） */
+    const s = Math.max(PAGE_SEC_MIN, Math.min(PAGE_SEC_MAX, Math.round(sec * 10) / 10))
+    const dur = get().durationMs
+    const d = Math.max(400, dur)
+    const span = Math.min(d, s * 1000)
+    const zoom = Math.max(1, Math.min(64, d / Math.max(1, span)))
+    const maxPan = Math.max(0, dur - d / zoom)
+    set({
+      pageSec: s,
+      view: { zoom, panMs: Math.max(0, Math.min(maxPan, get().view.panMs)) },
+    })
+  },
+  setRowH: (h) =>
+    set({ rowH: Math.round(Math.max(ROW_H_MIN, Math.min(ROW_H_MAX, h))) }),
+  setTopMidi: (m) =>
+    set({ topMidi: Math.round(Math.max(MIDI_LOW, Math.min(MIDI_HIGH, m))) }),
+  setChords: (c) => set({ chords: c }),
+  setShowChords: (b) => set({ showChords: b }),
   setLoop: (r) => set({ loop: r }),
   setLoopOn: (b) => set({ loopOn: b }),
   setAutoPage: (b) => set({ autoPage: b }),

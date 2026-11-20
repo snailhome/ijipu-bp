@@ -56,6 +56,10 @@ export const COPY = {
   analyze: '分析',
   analyzeTip:
     '对当前这一轨（混音/人声/伴奏）重新分析：自动判音、画到表上、全部当谱音 —— 先出一版初稿，再人工听改',
+  chord: '和弦分析',
+  chordTip:
+    '识别当前这一轨的和弦（从 Note Digger 的 chordEst 复刻）：结果画在表格底部一条带子里，只做提示，不写进 jps',
+  chordOnlyHint: '只做提示，不进谱面',
   clearAll: '全不选',
   clearAllTip: '把所有音都取消确认（导出与简谱预览都会空掉）',
   confirmAllTip: '把分析出来的音全部当成谱音（之后再逐个取消不对的）',

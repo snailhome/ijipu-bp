@@ -62,10 +62,21 @@ npm run smoke
 - 音符有 `confirmed` 一栏：**只有确认过的音**才进 `grid`/`jps`/预览（用户口径"输出以绘制所选的音为准"）。
   新增任何"导出/预览"路径都要经过 `derive()` 里的 `confirmed` 过滤，别绕过它。
 - **键盘形制已冻结**（用户 2026-11-19 明确："按现在的方案固化下来，键盘格的形制不要再随意改动"）：
-  每半音一行、行高一律 `ROW_H`；黑键 I 形贴右、宽 62%；分界只有两种 —— 黑键行在**竖直中心**
+  每半音一行、**同一屏里行高一律相同**（就是 `store.rowH`，默认 14px，设置里 10–26px 可调，
+  用户 m02483 要求能调高矮）；黑键 I 形贴右、宽 62%；分界只有两种 —— 黑键行在**竖直中心**
   画一条短线（从左边界到黑键左缘），E|F 与 B|C 之间在 E / B 的**上边界**通栏；
   高亮白键要按 L / J / T 形状（左块伸进相邻黑键格半格），黑键只染自己那块。
   要动这套几何，先把这条规则改了并说明原因，别直接改画法。
+  **画的时候一律用"一行 = 一个 rowH"来算，不许在组件里写死 14。**
+- **显示尺寸三项**（用户 m02483）：`store.rowH`、`store.pageSec`（一屏几秒，真正的视野仍以
+  `view.zoom` 为准）、`store.topMidi`（表格第一行的音高）。三者都落 localStorage
+  （`bp.rowH` / `bp.pageSec` / `bp.topMidi`），**不进方案文件**；只在 store 里改，别在组件里另存一份。
+  设置页与右栏「显示」组共用同一份 state，两处滑条改的是同一个值。
+- **和弦分析**（用户 m02483，从 noteDigger 的 `plugins/chordEst.js` 复刻）：`src/analysis/chords.ts`
+  是纯函数（频谱 → chroma → 169 个状态的和弦模板匹配 → HMM + Viterbi），在 worker 里以
+  `kind: 'chords'` 跑，结果进 `store.chords`，**只画在表格底部那条带子里当提示，不进 jps、不进方案**。
+  改 chroma / 模板 / 转移规则，必须同步跑 `smoke` 的 C/F 用例和 `probe` 的「C→F 真实和弦」用例；
+  换轨或重新分析时 `setAnalysis` 会清空旧和弦。
 - 键上文字（音名 / 简谱数字）**只写白格行**，位置取白键左块的竖直正中（`(t + b) / 2`）。
 - **流线谱（`src/ui/StripPreview.tsx`）的曲谱字形必须交给引擎**（用户 m02192）：`preview/stripSvg.ts`
   取视窗附近几小节 `toJps` → `parseJps` → `layoutScore`（`noteSpaceLayout:'duration'`）→

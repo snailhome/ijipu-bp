@@ -24,8 +24,8 @@ export interface LogMap {
   map: LogMapBin[]
 }
 
-/** 半音核的半宽（单位：半音）；0.667 ≈ 2/3，noteDigger 的原值 */
-const SEMI_R = 0.667
+/** 半音核的半宽（单位：半音）；0.667 ≈ 2/3，noteDigger 的原值。冒烟里按它验"没有越界权重" */
+export const SEMI_R = 0.667
 
 export function buildLogMap(sampleRate: number, fftSize: number): LogMap {
   const half = fftSize / 2
@@ -34,15 +34,27 @@ export function buildLogMap(sampleRate: number, fftSize: number): LogMap {
   for (let i = 0; i < BIN_COUNT; i++) {
     const center = midiToFreq(MIDI_LOW + i)
     // 覆盖 [-SEMI_R, +SEMI_R] 半音的频率范围，换算成 FFT bin
-    const lo = Math.max(1, Math.floor((center * Math.pow(2, -SEMI_R / 12)) / binHz))
-    const hi = Math.min(half, Math.ceil((center * Math.pow(2, SEMI_R / 12)) / binHz))
+    // 最底下几个半音（A0 一带）的半音间距比 FFT 分辨率还窄，可能一个 bin 中心都落进窗里；
+    // 把"最近的 FFT bin"也纳进来兜底，免得整格是空的（那几格本来就听不出音高）。
+    const near = Math.max(1, Math.min(half, Math.round(center / binHz)))
+    const lo = Math.min(near, Math.max(1, Math.floor((center * Math.pow(2, -SEMI_R / 12)) / binHz)))
+    const hi = Math.max(near, Math.min(half, Math.ceil((center * Math.pow(2, SEMI_R / 12)) / binHz)))
     const weights = new Float64Array(Math.max(1, hi - lo + 1))
     let sum = 0
     for (let k = lo; k <= hi; k++) {
       const semis = 12 * Math.log2((k * binHz) / center)
+      /* 核的支撑只有 ±SEMI_R：边界外必须是 0。
+       * 以前漏了这条判断，余弦过了 π 又绕回正值，于是低频相邻半音的格子互相"吃"对方
+       * 的能量（F2 有近一半落进 F#2），和弦识别会把 F 大三判成 Faug（用户 m02483 实测）。 */
+      if (Math.abs(semis) > SEMI_R) continue
       const w = Math.max(0, Math.cos((semis * Math.PI) / SEMI_R) + 1)
       weights[k - lo] = w
       sum += w
+    }
+    // 低频兜底：没有 bin 落在窗里就退化成"最近的 FFT bin 单独作代表"
+    if (sum <= 0) {
+      weights[near - lo] = 1
+      sum = 1
     }
     // 归一：bin 内的加权平均，避免"窗越宽能量越大"
     if (sum > 0) for (let j = 0; j < weights.length; j++) weights[j] /= sum

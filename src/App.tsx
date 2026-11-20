@@ -26,10 +26,11 @@ import {
   type SepReady,
 } from './audio/separate'
 import { computeSpectrum } from './analysis/spectrum'
+import type { ChordSegment } from './analysis/chords'
 import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
-import { PAGE_MS, useBp } from './model/store'
+import { PAGE_SEC_MAX, PAGE_SEC_MIN, ROW_H_MAX, ROW_H_MIN, useBp } from './model/store'
 import { buildProject, parseProject, projectHasContent, projectPathFor, serializeProject } from './model/project'
 import type { ProjectFile } from './model/project'
 import { barIndexOf, barStartTick } from './jps/bars'
@@ -129,6 +130,16 @@ function Icon({ name }: { name: string }) {
         <svg {...common}>
           <circle cx="5.6" cy="11.2" r="1.9" />
           <path d="M7.5 11.2V4l5 1.2v2" />
+        </svg>
+      )
+    case 'chord':
+      /* 三颗叠起来的音头：和弦识别（从 noteDigger 的 chordEst 复刻） */
+      return (
+        <svg {...common}>
+          <circle cx="5.4" cy="4.6" r="1.6" fill="currentColor" stroke="none" />
+          <circle cx="5.4" cy="8" r="1.6" fill="currentColor" stroke="none" />
+          <circle cx="5.4" cy="11.4" r="1.6" fill="currentColor" stroke="none" />
+          <path d="M7.2 4.6h4.4M7.2 8h4.4M7.2 11.4h4.4" />
         </svg>
       )
     case 'pencil':
@@ -364,6 +375,12 @@ export default function App() {
   const jps = useBp((s) => s.jps)
   const grid = useBp((s) => s.grid)
   const notes = useBp((s) => s.notes)
+  /* 显示尺寸（用户 m02483）：行高、一屏秒数、表格顶行、和弦结果 */
+  const rowH = useBp((s) => s.rowH)
+  const topMidi = useBp((s) => s.topMidi)
+  const pageSec = useBp((s) => s.pageSec)
+  const chords = useBp((s) => s.chords)
+  const showChords = useBp((s) => s.showChords)
 
   const set = useBp
   const [notice, setNotice] = useState<string | null>(null)
@@ -395,6 +412,18 @@ export default function App() {
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [helpOpen])
+
+  /* 行高 / 一屏秒数 / 表格顶行：这是"看谱的习惯"，跟具体某首歌无关，所以不写进方案，
+   * 只落 localStorage（用户 m02483）。下次打开（哪怕没有方案）也照旧。 */
+  useEffect(() => {
+    try {
+      localStorage.setItem('bp.rowH', String(rowH))
+      localStorage.setItem('bp.pageSec', String(pageSec))
+      localStorage.setItem('bp.topMidi', String(topMidi))
+    } catch {
+      /* 隐私模式禁用 localStorage：不影响用，只是记不住 */
+    }
+  }, [rowH, pageSec, topMidi])
   /* 右侧栏（调性/参数/显示/源码）能不能收起来——宽屏看谱时把它关掉能多出一大块 */
   const [showSide, setShowSide] = useState(true)
   /* 调性分析那一组能不能折起来（调号选择挪进组里了） */
@@ -445,13 +474,49 @@ export default function App() {
 
   const confirmedCount = useMemo(() => notes.filter((n) => n.confirmed).length, [notes])
   const warnings = useBp((s) => s.warnings)
+  /* 一屏实际显示几秒（随 Ctrl+滚轮缩放变化）：屏宽滑条绑的是这个值，拖动时换算回 zoom。
+   * 上限 60 秒、下限 2 秒，跟 store 里的常量一致（用户 m02483 第 2 条）。 */
+  const pageSpanSec = useMemo(() => {
+    const s = spanMs(view, durationMs) / 1000
+    return Math.round(Math.max(0.4, Math.min(3600, s)) * 10) / 10
+  }, [view, durationMs])
+  /* 屏宽滑条的值：有音频时跟着实际视野走；没音频时显示"设置里记的那个偏好值" */
+  const pageSliderSec = useMemo(() => {
+    if (!durationMs) return pageSec
+    return Math.max(PAGE_SEC_MIN, Math.min(PAGE_SEC_MAX, Math.round(pageSpanSec)))
+  }, [durationMs, pageSec, pageSpanSec])
 
   /* ---------- 分析 worker ---------- */
   useEffect(() => {
     const w = new Worker(new URL('./worker/analyze.worker.ts', import.meta.url), { type: 'module' })
-    w.onmessage = (e: MessageEvent<{ ok: boolean; result?: AnalyzeResult; error?: string }>) => {
+    w.onmessage = (
+      e: MessageEvent<{
+        ok: boolean
+        kind?: 'analyze' | 'chords'
+        result?: AnalyzeResult
+        chords?: ChordSegment[]
+        error?: string
+      }>,
+    ) => {
       const msg = e.data
       const st = set.getState()
+      /* 和弦识别（用户 m02483 第 3 条）：跟音频分析共用这个线程，回来只更新和弦带 */
+      if (msg.kind === 'chords') {
+        if (msg.ok && msg.chords) {
+          const named = msg.chords.filter((c) => c.name !== 'N').length
+          st.setChords(msg.chords)
+          st.setShowChords(true)
+          setNotice(
+            named > 0
+              ? `和弦识别完成：${named} 段（画在表格底部；${COPY.chordOnlyHint}）`
+              : '没识别出和弦（静音太多或太吵），试试换一轨或调「去谐波」',
+          )
+        } else {
+          st.setError(msg.error ?? '和弦识别失败')
+        }
+        st.setBusy(null)
+        return
+      }
       if (msg.ok && msg.result) {
         const pending = pendingAnalyzeRef.current
         pendingAnalyzeRef.current = null
@@ -818,6 +883,29 @@ export default function App() {
     analyzeSource({ confirm: true, notes: true, suppress: st.suppress })
   }, [analyzeSource, set])
 
+  /** 顶栏「和弦」：对当前看的那一轨识别和弦（Note Digger 的 chordEst 复刻）。
+   * 频谱已经在内存里，直接拷给 worker；不重算频谱、不改音符、不进 jps。 */
+  const runChordAnalysis = useCallback(() => {
+    const st = set.getState()
+    const w = workerRef.current
+    const spec =
+      stemMode === 'mix'
+        ? (mixSpecRef.current ?? st.analysis?.spectrum ?? null)
+        : (stemSpecRef.current?.[stemMode] ?? st.analysis?.spectrum ?? null)
+    if (!spec) {
+      st.setError('先「分析」一遍，有频谱才能识别和弦')
+      return
+    }
+    if (!w) {
+      st.setError('分析线程没起来')
+      return
+    }
+    st.setError(null)
+    st.setBusy('正在识别和弦…')
+    /* 不 transfer：主线程还要用这份频谱画热力图，worker 拿拷贝就够了 */
+    w.postMessage({ kind: 'chords', spectrum: spec })
+  }, [set, stemMode])
+
   /* ---------- 去谐波：把当前这一轨带着新的强度重跑一遍 ---------- */
   const applySuppress = useCallback(
     (v: number) => {
@@ -1030,7 +1118,7 @@ export default function App() {
 
   /* ---------- 自动翻页：播放头碰到右边缘才翻一页 ----------
    * 用户 2026-11-18 的口径：时点线走到视界边上就翻页（不是提前 82% 就推）。
-   * 整首都在视野里时（zoom=1）根本没得推，所以开关一打开就先切到一屏 20 秒。
+   * 整首都在视野里时（zoom=1）根本没得推，所以开关一打开就先切到"一屏那么多秒"（默认 20）。
    * 翻页后把播放头放在左边 6% 的位置，前面留出一点"刚过去"的上下文。
    *
    * 注意（adj 级教训）：这个 effect 的依赖里有 view，而它自己又会 setView ——
@@ -1039,11 +1127,13 @@ export default function App() {
    * 所以每次 setView 之前先比一遍数，没变化就直接 return；整首比一屏还短时干脆不动。 */
   useEffect(() => {
     if (!playing || !autoPage || !durationMs) return
-    /* 整首比一屏（20 秒）还短：翻页没有意义，也不许在这里 setView（会自激） */
-    if (durationMs <= PAGE_MS) return
+    /* 一屏多少秒是设置里的滑条（用户 m02483）；整首比它还短就翻页没有意义，
+     * 也不许在这里 setView（会自激） */
+    const pageMs0 = Math.min(durationMs, Math.max(1000, pageSec * 1000))
+    if (durationMs <= pageMs0) return
     const span = spanMs(view, durationMs)
     if (span >= durationMs - 1) {
-      const pageMs = Math.min(durationMs, PAGE_MS)
+      const pageMs = pageMs0
       const zoom = durationMs / Math.max(1, pageMs)
       const panMs = Math.max(0, Math.min(durationMs - pageMs, currentMs - pageMs * 0.2))
       if (Math.abs(view.zoom - zoom) < 1e-6 && Math.abs(view.panMs - panMs) < 1) return
@@ -1057,7 +1147,7 @@ export default function App() {
       if (Math.abs(panMs - view.panMs) < 1) return
       set.getState().setView({ zoom: view.zoom, panMs })
     }
-  }, [currentMs, playing, autoPage, durationMs, view, set])
+  }, [currentMs, playing, autoPage, durationMs, pageSec, view, set])
 
   /** 删音符：顺手把选中态清掉（否则 Delete 会去删一个已经不存在的 id） */
   const removeNote = useCallback((id: string) => {
@@ -1167,37 +1257,126 @@ export default function App() {
   return (
     <div className="app">
       <div className="toolbar">
-        <span className="brand">
-          {/* 顶栏图标 = 品牌图标（logo-bp.png；窗口/任务栏图标由 src-tauri/icons 决定） */}
-          <img className="brand-logo" src="/icons/logo-bp.png" alt={COPY.appName} />
-          <span className="brand-text">
-            {COPY.appName}
-            <small>
-              {COPY.appNameEn} {APP_VERSION}
-            </small>
+        <div className="tb-side tb-left">
+          <span className="brand">
+            {/* 顶栏图标 = 品牌图标（logo-bp.png；窗口/任务栏图标由 src-tauri/icons 决定） */}
+            <img className="brand-logo" src="/icons/logo-bp.png" alt={COPY.appName} />
+            <span className="brand-text">
+              {COPY.appName}
+              <small>
+                {COPY.appNameEn} {APP_VERSION}
+              </small>
+            </span>
           </span>
-        </span>
-        <span className="tgroup">
+
+          {/* 文件操作（用户 m02483 第 5 条，习惯上放最前面）：
+           * 打开音频 / 打开方案 / 保存方案 / 导出 —— 一个组里，都是"进出一个文件"。 */}
+          <span className="tgroup" title="文件">
+            <button
+              className="primary icon-btn"
+              onClick={() => void openAudio()}
+              disabled={!!busy}
+              title={COPY.openAudio}
+              aria-label={COPY.openAudio}
+            >
+              <Icon name="folder" />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={() => void openProject()}
+              disabled={!!busy}
+              title={COPY.projectOpenTip}
+              aria-label={COPY.projectOpen}
+            >
+              <Icon name="openProject" />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={() => {
+                void saveProject(true)
+                  .then((p) => setNotice(p ? `${COPY.projectSavedTip}：${p}` : null))
+                  .catch((e: unknown) => {
+                    set.getState().setError(`方案存不下来：${e instanceof Error ? e.message : String(e)}`)
+                  })
+              }}
+              disabled={!filePath || !!busy}
+              title={COPY.projectSaveTip}
+              aria-label={COPY.projectSave}
+            >
+              <Icon name="save" />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={() => void exportJps()}
+              disabled={confirmedCount === 0}
+              title={COPY.exportJps}
+              aria-label={COPY.exportJps}
+            >
+              <Icon name="export" />
+            </button>
+          </span>
+
+          {/* 判音 / 谱音（用户 m02483 第 5 条）：自动判音、和弦识别、全当谱音、全不选、丢掉改动 */}
+          <span className="tgroup" title="判音 / 谱音">
+            <button
+              className="icon-btn"
+              onClick={runAnalyze}
+              disabled={!analysis || !!busy}
+              title={COPY.analyzeTip}
+              aria-label={COPY.analyze}
+            >
+              <Icon name="analyze" />
+            </button>
+            <button
+              className={chords.length > 0 ? 'icon-btn on' : 'icon-btn'}
+              onClick={runChordAnalysis}
+              disabled={!analysis || !!busy}
+              title={COPY.chordTip}
+              aria-label={COPY.chord}
+            >
+              <Icon name="chord" />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={() => {
+                /* 用户 m00741/m00810：勾了"分析后自动填入音符"后点这颗按钮，若还没有音，
+                 * 期望的是"分析一遍、把音都当谱音"；有音时仍是原来的"全部当谱音"。 */
+                if (notes.length === 0) runAnalyze()
+                else useBp.getState().setAllConfirmed(true)
+              }}
+              disabled={notes.length === 0 ? !analysis || !!busy : false}
+              title={notes.length === 0 ? COPY.confirmAllEmptyTip : COPY.confirmAllTip}
+              aria-label={COPY.confirmAll}
+            >
+              <Icon name="checkAll" />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={() => useBp.getState().setAllConfirmed(false)}
+              disabled={!notes.length}
+              title={COPY.clearAllTip}
+              aria-label={COPY.clearAll}
+            >
+              <Icon name="checkNone" />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={() => {
+                useBp.getState().resetNotes()
+                setSelectedId(null)
+              }}
+              disabled={!analysis}
+              title={COPY.resetDraftTip}
+              aria-label={COPY.resetDraft}
+            >
+              <Icon name="reset" />
+            </button>
+          </span>
+        </div>
+
+        {/* 播放：单独一颗、放顶栏正中、比别的按钮大（用户 m02483 第 6 条） */}
         <button
-          className="primary icon-btn"
-          onClick={() => void openAudio()}
-          disabled={!!busy}
-          title={COPY.openAudio}
-          aria-label={COPY.openAudio}
-        >
-          <Icon name="folder" />
-        </button>
-        <button
-          className="icon-btn"
-          onClick={runAnalyze}
-          disabled={!analysis || !!busy}
-          title={COPY.analyzeTip}
-          aria-label={COPY.analyze}
-        >
-          <Icon name="analyze" />
-        </button>
-        <button
-          className="icon-btn"
+          className={playing ? 'play-btn on' : 'play-btn'}
           onClick={togglePlay}
           disabled={!analysis}
           title={playing ? COPY.pause : COPY.play}
@@ -1205,233 +1384,171 @@ export default function App() {
         >
           <Icon name={playing ? 'pause' : 'play'} />
         </button>
-        <div className="seg" title={COPY.abTip}>
-          <button
-            className={playMode === 'audio' ? 'on' : ''}
-            onClick={() => switchMode('audio')}
-            aria-label={COPY.sourceAudio}
-            title={COPY.sourceAudio}
-          >
-            <Icon name="wave" />
-          </button>
-          <button
-            className={playMode === 'synth' ? 'on' : ''}
-            onClick={() => switchMode('synth')}
-            aria-label={COPY.sourceSynth}
-            title={COPY.sourceSynth}
-          >
-            <Icon name="note" />
-          </button>
+
+        <div className="tb-side tb-right">
+          {/* 绘制 / 选择（用户 m02483 第 5 条：一组） */}
+          <div className="seg" title={mode === 'draw' ? COPY.modeDrawTip : COPY.modeSelectTip}>
+            <button
+              className={mode === 'draw' ? 'on' : ''}
+              onClick={() => useBp.getState().setMode('draw')}
+              aria-label={COPY.modeDraw}
+              title={COPY.modeDrawTip}
+            >
+              <Icon name="pencil" />
+            </button>
+            <button
+              className={mode === 'select' ? 'on' : ''}
+              onClick={() => useBp.getState().setMode('select')}
+              aria-label={COPY.modeSelect}
+              title={COPY.modeSelectTip}
+            >
+              <Icon name="cursor" />
+            </button>
+          </div>
+
+          <label className="field icon-field" title="画音/拖音时吸附到哪一格">
+            <Icon name="magnet" />
+            <select value={snap} onChange={(e) => useBp.getState().setSnap(e.target.value as SnapMode)}>
+              {SNAP_CHOICES.map((c) => (
+                <option key={c.v} value={c.v}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {/* 音名 / 数字 */}
+          <div className="seg" title="表格里写字用音名还是简谱数字（换调号数字跟着变）">
+            <button
+              className={pitchMode === 'name' ? 'on' : ''}
+              onClick={() => useBp.getState().setPitchMode('name')}
+              aria-label={COPY.pitchName}
+              title={COPY.pitchName}
+            >
+              <Icon name="pitchName" />
+            </button>
+            <button
+              className={pitchMode === 'number' ? 'on' : ''}
+              onClick={() => useBp.getState().setPitchMode('number')}
+              aria-label={COPY.pitchNumber}
+              title={COPY.pitchNumber}
+            >
+              <Icon name="pitchNumber" />
+            </button>
+          </div>
+
+          {/* 原音频 / 合成音（用户 m02483 第 5 条：一组，方便 A/B） */}
+          <div className="seg" title={COPY.abTip}>
+            <button
+              className={playMode === 'audio' ? 'on' : ''}
+              onClick={() => switchMode('audio')}
+              aria-label={COPY.sourceAudio}
+              title={COPY.sourceAudio}
+            >
+              <Icon name="wave" />
+            </button>
+            <button
+              className={playMode === 'synth' ? 'on' : ''}
+              onClick={() => switchMode('synth')}
+              aria-label={COPY.sourceSynth}
+              title={COPY.sourceSynth}
+            >
+              <Icon name="note" />
+            </button>
+          </div>
+
+          {/* 回开头 / 循环 / 跟随（自动翻页）：一组导航（用户 m02483 第 5 条） */}
+          <span className="tgroup" title="导航">
+            <button className="icon-btn" onClick={goStart} title={COPY.goStartTip} aria-label={COPY.goStart}>
+              <Icon name="home" />
+            </button>
+            <button
+              className={loopOn ? 'icon-btn on' : 'icon-btn'}
+              onClick={() => useBp.getState().setLoopOn(!loopOn)}
+              title={COPY.loopTip}
+              aria-label={COPY.loop}
+              disabled={!loop}
+            >
+              <Icon name="loop" />
+            </button>
+            <button
+              className={autoPage ? 'icon-btn on' : 'icon-btn'}
+              onClick={() => useBp.getState().setAutoPage(!autoPage)}
+              title={COPY.autoPageTip}
+              aria-label={COPY.autoPage}
+            >
+              <Icon name="page" />
+            </button>
+          </span>
+
+          {/* 撤销 / 重做 */}
+          <span className="tgroup" title="撤销 / 重做">
+            <button
+              className="icon-btn"
+              onClick={() => useBp.getState().undo()}
+              disabled={historyLen === 0}
+              title={COPY.undoTip}
+              aria-label={COPY.undo}
+            >
+              <Icon name="undo" />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={() => useBp.getState().redo()}
+              disabled={futureLen === 0}
+              title={COPY.redoTip}
+              aria-label={COPY.redo}
+            >
+              <Icon name="redo" />
+            </button>
+          </span>
+
+          {/* 设置 / 帮助 / 右栏开关：三颗只画图标，不画外框线（用户 m02483 第 7 条） */}
+          <span className="tgroup tb-util" title="设置 / 帮助 / 侧栏">
+            {/* 设置：前期的、一次性的东西都收在这里（模型安装、自动填音…） */}
+            <button
+              className={showSide && sideView === 'settings' ? 'icon-btn on' : 'icon-btn'}
+              onClick={() => {
+                if (showSide && sideView === 'settings') {
+                  setSideView('edit')
+                } else {
+                  setSideView('settings')
+                  setShowSide(true)
+                }
+              }}
+              title="设置"
+              aria-label="设置"
+            >
+              <span className="tool-icon gear" aria-hidden="true" />
+            </button>
+            {/* 帮助：按键 / 快捷键 / 鼠标操作（用户 m05893） */}
+            <button
+              className={helpOpen ? 'icon-btn on' : 'icon-btn'}
+              onClick={() => setHelpOpen(true)}
+              title="按键与鼠标操作"
+              aria-label="按键与鼠标操作"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="4" width="13" height="8" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+                <rect x="3.4" y="6" width="1.6" height="1.6" fill="currentColor" />
+                <rect x="6" y="6" width="1.6" height="1.6" fill="currentColor" />
+                <rect x="8.6" y="6" width="1.6" height="1.6" fill="currentColor" />
+                <rect x="11.2" y="6" width="1.6" height="1.6" fill="currentColor" />
+                <rect x="4.6" y="9" width="6.8" height="1.5" rx="0.5" fill="currentColor" />
+              </svg>
+            </button>
+            {/* 右侧栏开关：图标与 iJipu BP 的兄弟项目「爱出片」用同一个
+                （public/icons/右侧边栏.svg，靠 CSS mask 上色，打开=亮、收起=灰） */}
+            <button
+              className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}
+              onClick={() => setShowSide((v) => !v)}
+              title={showSide ? '收起右侧栏' : '展开右侧栏'}
+              aria-label={showSide ? '收起右侧栏' : '展开右侧栏'}
+            >
+              <span className="side-toggle-icon" />
+            </button>
+          </span>
         </div>
-        </span>
-
-        <span className="tsep" />
-        <div className="seg" title={mode === 'draw' ? COPY.modeDrawTip : COPY.modeSelectTip}>
-          <button
-            className={mode === 'draw' ? 'on' : ''}
-            onClick={() => useBp.getState().setMode('draw')}
-            aria-label={COPY.modeDraw}
-            title={COPY.modeDrawTip}
-          >
-            <Icon name="pencil" />
-          </button>
-          <button
-            className={mode === 'select' ? 'on' : ''}
-            onClick={() => useBp.getState().setMode('select')}
-            aria-label={COPY.modeSelect}
-            title={COPY.modeSelectTip}
-          >
-            <Icon name="cursor" />
-          </button>
-        </div>
-
-        <label className="field icon-field" title="画音/拖音时吸附到哪一格">
-          <Icon name="magnet" />
-          <select value={snap} onChange={(e) => useBp.getState().setSnap(e.target.value as SnapMode)}>
-            {SNAP_CHOICES.map((c) => (
-              <option key={c.v} value={c.v}>
-                {c.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <button
-          className={loopOn ? 'icon-btn on' : 'icon-btn'}
-          onClick={() => useBp.getState().setLoopOn(!loopOn)}
-          title={COPY.loopTip}
-          aria-label={COPY.loop}
-          disabled={!loop}
-        >
-          <Icon name="loop" />
-        </button>
-        <button
-          className={autoPage ? 'icon-btn on' : 'icon-btn'}
-          onClick={() => useBp.getState().setAutoPage(!autoPage)}
-          title={COPY.autoPageTip}
-          aria-label={COPY.autoPage}
-        >
-          <Icon name="page" />
-        </button>
-
-        <div className="spacer" />
-
-        <div className="seg" title="表格里写字用音名还是简谱数字（换调号数字跟着变）">
-          <button
-            className={pitchMode === 'name' ? 'on' : ''}
-            onClick={() => useBp.getState().setPitchMode('name')}
-            aria-label={COPY.pitchName}
-            title={COPY.pitchName}
-          >
-            <Icon name="pitchName" />
-          </button>
-          <button
-            className={pitchMode === 'number' ? 'on' : ''}
-            onClick={() => useBp.getState().setPitchMode('number')}
-            aria-label={COPY.pitchNumber}
-            title={COPY.pitchNumber}
-          >
-            <Icon name="pitchNumber" />
-          </button>
-        </div>
-        <span className="tsep" />
-        <span className="tgroup">
-        <button
-          className="icon-btn"
-          onClick={() => useBp.getState().undo()}
-          disabled={historyLen === 0}
-          title={COPY.undoTip}
-          aria-label={COPY.undo}
-        >
-          <Icon name="undo" />
-        </button>
-        <button
-          className="icon-btn"
-          onClick={() => useBp.getState().redo()}
-          disabled={futureLen === 0}
-          title={COPY.redoTip}
-          aria-label={COPY.redo}
-        >
-          <Icon name="redo" />
-        </button>
-        <button className="icon-btn" onClick={goStart} title={COPY.goStartTip} aria-label={COPY.goStart}>
-          <Icon name="home" />
-        </button>
-        </span>
-        <span className="tgroup">
-        <button
-          className="icon-btn"
-          onClick={() => {
-            /* 用户 m00741/m00810：勾了"分析后自动填入音符"后点这颗按钮，若还没有音，
-             * 期望的是"分析一遍、把音都当谱音"；有音时仍是原来的"全部当谱音"。 */
-            if (notes.length === 0) runAnalyze()
-            else useBp.getState().setAllConfirmed(true)
-          }}
-          disabled={notes.length === 0 ? !analysis || !!busy : false}
-          title={notes.length === 0 ? COPY.confirmAllEmptyTip : COPY.confirmAllTip}
-          aria-label={COPY.confirmAll}
-        >
-          <Icon name="checkAll" />
-        </button>
-        <button
-          className="icon-btn"
-          onClick={() => useBp.getState().setAllConfirmed(false)}
-          disabled={!notes.length}
-          title={COPY.clearAllTip}
-          aria-label={COPY.clearAll}
-        >
-          <Icon name="checkNone" />
-        </button>
-        <button
-          className="icon-btn"
-          onClick={() => {
-            useBp.getState().resetNotes()
-            setSelectedId(null)
-          }}
-          disabled={!analysis}
-          title={COPY.resetDraftTip}
-          aria-label={COPY.resetDraft}
-        >
-          <Icon name="reset" />
-        </button>
-        <button
-          className="icon-btn"
-          onClick={() => void exportJps()}
-          disabled={confirmedCount === 0}
-          title={COPY.exportJps}
-          aria-label={COPY.exportJps}
-        >
-          <Icon name="export" />
-        </button>
-        {/* 方案：自动存之外，给一个"现在存"和"打开别的方案"的明确入口（用户 m01794） */}
-        <button
-          className="icon-btn"
-          onClick={() => {
-            void saveProject(true)
-              .then((p) => setNotice(p ? `${COPY.projectSavedTip}：${p}` : null))
-              .catch((e: unknown) => {
-                set.getState().setError(`方案存不下来：${e instanceof Error ? e.message : String(e)}`)
-              })
-          }}
-          disabled={!filePath || !!busy}
-          title={COPY.projectSaveTip}
-          aria-label={COPY.projectSave}
-        >
-          <Icon name="save" />
-        </button>
-        <button
-          className="icon-btn"
-          onClick={() => void openProject()}
-          disabled={!!busy}
-          title={COPY.projectOpenTip}
-          aria-label={COPY.projectOpen}
-        >
-          <Icon name="openProject" />
-        </button>
-        </span>
-        <span className="tsep" />
-        {/* 设置：前期的、一次性的东西都收在这里（模型安装、自动填音…） */}
-        <button
-          className={showSide && sideView === 'settings' ? 'icon-btn on' : 'icon-btn'}
-          onClick={() => {
-            if (showSide && sideView === 'settings') {
-              setSideView('edit')
-            } else {
-              setSideView('settings')
-              setShowSide(true)
-            }
-          }}
-          title="设置"
-          aria-label="设置"
-        >
-          <span className="tool-icon gear" aria-hidden="true" />
-        </button>
-        {/* 帮助：按键 / 快捷键 / 鼠标操作（用户 m05893） */}
-        <button
-          className={helpOpen ? 'icon-btn on' : 'icon-btn'}
-          onClick={() => setHelpOpen(true)}
-          title="按键与鼠标操作"
-          aria-label="按键与鼠标操作"
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-            <rect x="1.5" y="4" width="13" height="8" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
-            <rect x="3.4" y="6" width="1.6" height="1.6" fill="currentColor" />
-            <rect x="6" y="6" width="1.6" height="1.6" fill="currentColor" />
-            <rect x="8.6" y="6" width="1.6" height="1.6" fill="currentColor" />
-            <rect x="11.2" y="6" width="1.6" height="1.6" fill="currentColor" />
-            <rect x="4.6" y="9" width="6.8" height="1.5" rx="0.5" fill="currentColor" />
-          </svg>
-        </button>
-        {/* 右侧栏开关：图标与 iJipu BP 的兄弟项目「爱出片」用同一个
-            （public/icons/右侧边栏.svg，靠 CSS mask 上色，打开=亮、收起=灰） */}
-        <button
-          className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}
-          onClick={() => setShowSide((v) => !v)}
-          title={showSide ? '收起右侧栏' : '展开右侧栏'}
-          aria-label={showSide ? '收起右侧栏' : '展开右侧栏'}
-        >
-          <span className="side-toggle-icon" />
-        </button>
       </div>
 
       <div className={showSide ? "body" : "body noside"} style={showSide ? ({ gridTemplateColumns: `minmax(0,1fr) ${sideW}px`, "--side-w": `${sideW}px` } as React.CSSProperties) : undefined}>
@@ -1502,6 +1619,11 @@ export default function App() {
             onToggleLock={() => useBp.getState().setLockPitch(!lockPitch)}
             onView={(v) => useBp.getState().setView(v)}
             onLoop={setLoop}
+            rowH={rowH}
+            topMidi={topMidi}
+            onTopMidi={(m) => useBp.getState().setTopMidi(m)}
+            chords={chords}
+            showChords={showChords}
             playMs={currentMs}
           />
           <StripPreview
@@ -1574,6 +1696,45 @@ export default function App() {
                 )}
               </SideGroup>
             )}
+
+            {/* 显示尺寸（用户 m02483 第 1、2 条）：设置页也放一份，进来看得见；
+                跟「编辑」页「显示」组是同一个 state，在哪边调都一样。 */}
+            <SideGroup title="显示尺寸">
+              <label className="field" title="表格每半音一行的高度；钢琴键和音符块跟着变（10–26px）">
+                行高
+                <input
+                  type="range"
+                  min={ROW_H_MIN}
+                  max={ROW_H_MAX}
+                  step={1}
+                  value={rowH}
+                  onChange={(e) => useBp.getState().setRowH(Number(e.target.value))}
+                  style={{
+                    width: 140,
+                    ...fillStyle(((rowH - ROW_H_MIN) / (ROW_H_MAX - ROW_H_MIN)) * 100),
+                  }}
+                />
+                <span className="mono">{rowH}px</span>
+              </label>
+              <label className="field" title="时间轴上一屏显示多少秒（默认 20 秒，2–60 秒）">
+                屏宽
+                <input
+                  type="range"
+                  min={PAGE_SEC_MIN}
+                  max={PAGE_SEC_MAX}
+                  step={1}
+                  value={pageSliderSec}
+                  onChange={(e) => useBp.getState().setPageSec(Number(e.target.value))}
+                  disabled={!durationMs}
+                  style={{
+                    width: 140,
+                    ...fillStyle(((pageSliderSec - PAGE_SEC_MIN) / (PAGE_SEC_MAX - PAGE_SEC_MIN)) * 100),
+                  }}
+                />
+                <span className="mono">{Math.round(pageSliderSec)}s</span>
+              </label>
+              <div className="hint">跟「编辑」页「显示」组里那两条是同一个值，两边调都行。</div>
+            </SideGroup>
 
             <SideGroup title={COPY.settingsAbout} defaultOpen={false}>
               <div className="hint">爱扒谱 iJipu BP {APP_VERSION}</div>
@@ -1801,10 +1962,64 @@ export default function App() {
                   {contrast.toFixed(2)}
                 </span>
               </label>
+              <label className="field" title="表格每半音一行的高度；左侧钢琴键和音符块跟着变（10–26px）">
+                行高
+                <input
+                  type="range"
+                  min={ROW_H_MIN}
+                  max={ROW_H_MAX}
+                  step={1}
+                  value={rowH}
+                  onChange={(e) => useBp.getState().setRowH(Number(e.target.value))}
+                  style={{
+                    width: 120,
+                    ...fillStyle(((rowH - ROW_H_MIN) / (ROW_H_MAX - ROW_H_MIN)) * 100),
+                  }}
+                />
+                <span className="hint" style={{ width: 34, textAlign: 'right' }}>
+                  {rowH}px
+                </span>
+              </label>
+              <label className="field" title="时间轴上一屏显示多少秒（默认 20 秒，2–60 秒）；比整首还宽就整曲铺满">
+                屏宽
+                <input
+                  type="range"
+                  min={PAGE_SEC_MIN}
+                  max={PAGE_SEC_MAX}
+                  step={1}
+                  value={pageSliderSec}
+                  onChange={(e) => useBp.getState().setPageSec(Number(e.target.value))}
+                  disabled={!durationMs}
+                  style={{
+                    width: 120,
+                    ...fillStyle(((pageSliderSec - PAGE_SEC_MIN) / (PAGE_SEC_MAX - PAGE_SEC_MIN)) * 100),
+                  }}
+                />
+                <span className="hint" style={{ width: 34, textAlign: 'right' }}>
+                  {Math.round(pageSliderSec)}s
+                </span>
+              </label>
               <label className="check" title="只把 G3–C6（约 196–1047Hz）的格子画亮：伴奏在低音区/高频的泛音会被压暗">
                 <input type="checkbox" checked={bandOnly} onChange={(e) => useBp.getState().setBandOnly(e.target.checked)} />
                 只看人声区（G3–C6）
               </label>
+              <label className="check" title={COPY.chordOnlyHint}>
+                <input
+                  type="checkbox"
+                  checked={showChords}
+                  disabled={chords.length === 0}
+                  onChange={(e) => useBp.getState().setShowChords(e.target.checked)}
+                />
+                显示和弦（表格底部那条带子）
+              </label>
+              {chords.length > 0 && (
+                <div className="row-gap">
+                  <span className="hint">
+                    认出 {chords.filter((c) => c.name !== 'N').length} 段 ·{' '}
+                    <button onClick={() => useBp.getState().setChords([])}>清除</button>
+                  </span>
+                </div>
+              )}
               <div className="hint">颜色深度 = 值 ^ 对比 × 倍率。</div>
             </div>
           </SideGroup>

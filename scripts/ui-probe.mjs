@@ -344,7 +344,7 @@ try {
   const hitRow = await cdp.eval(`(() => {
     const s = window.__bp.getState()
     const m = window.__bpRoll || {}
-    const ROW_H = 14
+    const ROW_H = (window.__bpRoll && window.__bpRoll.rowH) || 14
     const RULER_H = typeof m.rulerH === 'number' ? m.rulerH : 36
     const c = document.querySelector('.pane.roll canvas')
     const r = c.getBoundingClientRect()
@@ -360,7 +360,7 @@ try {
   // 精确点一个已知音符：行高/顶行直接从页面里的 __bpRoll 拿（自己估过一次，差一行就点歪）
   const clickNote = async (id) => {
     const box = await cdp.eval(`(() => {
-      const ROW_H = 14, KEY_W = 66
+      const ROW_H = (window.__bpRoll && window.__bpRoll.rowH) || 14, KEY_W = 66
       const s = window.__bp.getState()
       const n = s.notes.find((x) => x.id === ${JSON.stringify(id)})
       const c = document.querySelector('.pane.roll canvas')
@@ -885,7 +885,7 @@ try {
     const m = window.__bpRoll || {}
     const cv = document.querySelector('.pane.roll canvas')
     const r = cv.getBoundingClientRect()
-    const ROW_H = 14, KEY_W = 66
+    const ROW_H = (window.__bpRoll && window.__bpRoll.rowH) || 14, KEY_W = 66
     const rulerH = typeof m.rulerH === 'number' ? m.rulerH : 36
     /* 挑中间那一行，避开时间尺 */
     const row = Math.floor((m.rows || 20) / 2)
@@ -916,7 +916,7 @@ try {
     const m = window.__bpRoll || {}
     const cv = document.querySelector('.pane.roll canvas')
     const r = cv.getBoundingClientRect()
-    const ROW_H = 14, KEY_W = 66
+    const ROW_H = (window.__bpRoll && window.__bpRoll.rowH) || 14, KEY_W = 66
     const BLACK = new Set([1, 3, 6, 8, 10])
     const rulerH = typeof m.rulerH === 'number' ? m.rulerH : 36
     for (let row = 3; row < (m.rows || 20) - 3; row++) {
@@ -955,7 +955,7 @@ try {
     const c = document.querySelector('.pane.roll canvas')
     const r = c.getBoundingClientRect()
     const m = window.__bpRoll
-    const ROW_H = 14
+    const ROW_H = (window.__bpRoll && window.__bpRoll.rowH) || 14
     /* 从顶行往下找一个 D（音级 2） */
     let midi = null
     for (let d = 0; d < (m.rows || 20); d++) {
@@ -1008,7 +1008,7 @@ try {
     const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
     const m = window.__bpRoll || {}
     const rulerH = typeof m.rulerH === 'number' ? m.rulerH : 36
-    const ROW_H = 14
+    const ROW_H = (window.__bpRoll && window.__bpRoll.rowH) || 14
     return { x: r.x + r.width * 0.55, y: r.y + rulerH + Math.floor((m.rows || 20) * 0.3) * ROW_H + ROW_H / 2 }
   })()`)
   const countBefore = await cdp.eval(`window.__bp.getState().notes.length`)
@@ -1029,7 +1029,7 @@ try {
     const cv = document.querySelector('.pane.roll canvas')
     const r = cv.getBoundingClientRect()
     const RULER_H = typeof m.rulerH === 'number' ? m.rulerH : 36
-    const ROW_H = 14
+    const ROW_H = (window.__bpRoll && window.__bpRoll.rowH) || 14
     const x = r.x + r.width * 0.62
     const want = s.view.panMs + ((x - r.x - m.left) / (m.w - m.left)) * (s.durationMs / s.view.zoom)
     return { x, y: r.y + RULER_H + Math.floor((m.rows || 20) * 0.55) * ROW_H + ROW_H / 2, want, cell: 60000 / s.bpm / 16 }
@@ -1055,7 +1055,7 @@ try {
     const m = window.__bpRoll
     const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
     const RULER_H = typeof m.rulerH === 'number' ? m.rulerH : 36
-    const ROW_H = 14
+    const ROW_H = (window.__bpRoll && window.__bpRoll.rowH) || 14
     const y = r.y + RULER_H + Math.floor((m.rows || 20) * 0.7) * ROW_H + ROW_H / 2
     return { x1: r.x + r.width * 0.3, x2: r.x + r.width * 0.45, y, before: s.notes.length }
   })()`)
@@ -1239,7 +1239,7 @@ try {
   const lanePoint = async (frac) => cdp.eval(`(() => {
     const s = window.__bp.getState()
     const m = window.__bpRoll || {}
-    const ROW_H = 14, KEY_W = 66
+    const ROW_H = (window.__bpRoll && window.__bpRoll.rowH) || 14, KEY_W = 66
     const RULER_H = typeof m.rulerH === 'number' ? m.rulerH : 36
     const top = typeof m.top === 'number' ? m.top : 76
     const c = document.querySelector('.pane.roll canvas')
@@ -1274,6 +1274,236 @@ try {
     JSON.stringify(leftBot),
   )
 
+  /* ── 顶栏：文件组在最前、播放居中、右侧图标不画框（用户 m02483 第 5/6/7 条） ── */
+  const tb = await cdp.eval(`(() => {
+    const bar = document.querySelector('.toolbar')
+    const left = bar.querySelector('.tb-left')
+    const right = bar.querySelector('.tb-right')
+    const byLabel = (root, label) => [...root.querySelectorAll('button')].find((b) => (b.getAttribute('aria-label') || '') === label)
+    const groups = left ? [...left.querySelectorAll(':scope > span.tgroup')] : []
+    const fileGroup = groups[0]
+    const br = bar.getBoundingClientRect()
+    const play = bar.querySelector('.play-btn')
+    const pr = play ? play.getBoundingClientRect() : null
+    const utils = [...bar.querySelectorAll('.tb-util .icon-btn')].map((b) => {
+      const cs = getComputedStyle(b)
+      return { borderColor: cs.borderTopColor, bg: cs.backgroundColor }
+    })
+    return {
+      left: !!left,
+      right: !!right,
+      fileFirst: !!fileGroup && !!byLabel(fileGroup, '打开音频') && !!byLabel(fileGroup, '打开方案') &&
+        !!byLabel(fileGroup, '保存方案') && !!byLabel(fileGroup, '导出 .jps'),
+      scoreGroup: !!byLabel(left || bar, '分析') && !!byLabel(left || bar, '和弦分析'),
+      playW: pr ? pr.width : 0,
+      playDx: pr ? Math.abs(pr.x + pr.width / 2 - (br.x + br.width / 2)) : 999,
+      utilCount: utils.length,
+      utilBordered: utils.filter((u) => u.borderColor !== 'rgba(0, 0, 0, 0)').length,
+      utilFilled: utils.filter((u) => u.bg !== 'rgba(0, 0, 0, 0)').length,
+    }
+  })()`)
+  check('顶栏分左右两簇，播放键单独在中间', tb.left && tb.right, JSON.stringify(tb))
+  check('文件操作组排在第一位（打开音频/打开方案/保存方案/导出）', tb.fileFirst)
+  check('判音/谱音组里有「分析」「和弦分析」', tb.scoreGroup)
+  check(
+    '播放键比图标按钮大、在顶栏正中',
+    tb.playW >= 44 && tb.playDx <= 2,
+    `宽 ${tb.playW}、偏移 ${tb.playDx.toFixed(1)}px`,
+  )
+  check(
+    '右侧三颗图标按钮不画外框线',
+    tb.utilCount === 3 && tb.utilBordered === 0 && tb.utilFilled === 0,
+    JSON.stringify(tb),
+  )
+
+  /* ── 行高滑条 / 屏宽滑条（用户 m02483 第 1、2 条） ── */
+  const rowSlider = await cdp.eval(`(() => {
+    const el = [...document.querySelectorAll('.side input[type=range]')].find((x) => x.min === '10' && x.max === '26')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, value: Number(el.value), rollH: window.__bpRoll.rowH }
+  })()`)
+  check(
+    '「显示」里有行高滑条（10–26px，默认 14）',
+    !!rowSlider && rowSlider.value === 14 && rowSlider.rollH === 14,
+    JSON.stringify(rowSlider),
+  )
+  if (rowSlider) await cdp.wheelAt(rowSlider.x, rowSlider.y, 120) /* 往下滚 = 变矮一格 */
+  await sleep(250)
+  const afterRowH = await cdp.eval(`({
+    rowH: window.__bp.getState().rowH,
+    rollH: window.__bpRoll.rowH,
+    saved: localStorage.getItem('bp.rowH'),
+  })`)
+  check(
+    '滚轮调行高：表格与键盘格跟着变',
+    afterRowH.rowH < 14 && afterRowH.rollH === afterRowH.rowH,
+    JSON.stringify(afterRowH),
+  )
+  check('行高记进 localStorage（重开能恢复）', afterRowH.saved === String(afterRowH.rowH), String(afterRowH.saved))
+  await cdp.eval(`window.__bp.getState().setRowH(14)`)
+  await sleep(150)
+
+  const pageSlider = await cdp.eval(`(() => {
+    const el = [...document.querySelectorAll('.side input[type=range]')].find((x) => x.min === '2' && x.max === '60')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, value: Number(el.value) }
+  })()`)
+  check('「显示」里有屏宽滑条（2–60 秒）', !!pageSlider, JSON.stringify(pageSlider))
+  const zoomBeforePage = await cdp.eval(`window.__bp.getState().view.zoom`)
+  if (pageSlider) await cdp.wheelAt(pageSlider.x, pageSlider.y, 120) /* 往下滚 = 一屏变窄 */
+  await sleep(250)
+  const afterPage = await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    return { pageSec: s.pageSec, zoom: s.view.zoom, span: s.durationMs / s.view.zoom, saved: localStorage.getItem('bp.pageSec') }
+  })()`)
+  check(
+    '滚轮调屏宽：一屏秒数变小、zoom 变大',
+    afterPage.pageSec < 20 && afterPage.zoom > zoomBeforePage,
+    `pageSec ${afterPage.pageSec}s、zoom ${zoomBeforePage}→${afterPage.zoom}`,
+  )
+  check(
+    '屏宽换算自洽：一屏正好 pageSec 秒',
+    Math.abs(afterPage.span - afterPage.pageSec * 1000) < 60,
+    `一屏 ${Math.round(afterPage.span)}ms、pageSec ${afterPage.pageSec}s`,
+  )
+  check('屏宽记进 localStorage（重开能恢复）', afterPage.saved === String(afterPage.pageSec), String(afterPage.saved))
+
+  /* ── 设置页里也有这两条滑条（用户 m02483 说"设置里增一个"） ── */
+  await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '设置')
+    if (b) b.click()
+  })()`)
+  await sleep(300)
+  const settingsSliders = await cdp.eval(`(() => {
+    const side = [...document.querySelectorAll('.side')].find((s) => s.style.display !== 'none' && s.querySelector('input[type=range][min="10"]'))
+    if (!side) return null
+    return {
+      row: !!side.querySelector('input[type=range][min="10"][max="26"]'),
+      page: !!side.querySelector('input[type=range][min="2"][max="60"]'),
+      hasTitle: [...side.querySelectorAll('.group-title')].some((t) => t.textContent.includes('显示尺寸')),
+    }
+  })()`)
+  check(
+    '「设置」页里有行高 / 屏宽两条滑条',
+    !!settingsSliders && settingsSliders.row && settingsSliders.page && settingsSliders.hasTitle,
+    JSON.stringify(settingsSliders),
+  )
+  await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '设置')
+    if (b) b.click()
+  })()`)
+  await sleep(300)
+
+  /* ── 表格顶行记在 store / localStorage（用户 m02483 第 4 条） ── */
+  const topInfo = await cdp.eval(`(() => {
+    const c = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+    return { top: window.__bpRoll.top, stored: window.__bp.getState().topMidi, x: c.x + c.width * 0.5, y: c.y + c.height * 0.5 }
+  })()`)
+  await cdp.wheelAt(topInfo.x, topInfo.y, 120)
+  await sleep(250)
+  const afterTop = await cdp.eval(`({
+    top: window.__bpRoll.top,
+    stored: window.__bp.getState().topMidi,
+    saved: localStorage.getItem('bp.topMidi'),
+  })`)
+  check(
+    '滚轮上下换音区后，第一行音高记进 store',
+    afterTop.top !== topInfo.top && afterTop.stored === afterTop.top,
+    `顶行 ${topInfo.top}→${afterTop.top}、store ${afterTop.stored}`,
+  )
+  check('第一行音高落 localStorage（重开恢复）', afterTop.saved === String(afterTop.top), String(afterTop.saved))
+
+  /* ── 和弦分析按钮（用户 m02483 第 3 条，noteDigger 复刻） ──
+   * 造一段真的"C 大三和弦 2 秒 → F 大三和弦 2 秒"的音频，用应用自己的 computeSpectrum
+   * 算频谱后灌进 store，再点按钮 —— 这样验的是按钮 → worker → detectChords → 画布这条真链路。 */
+  const chordSetup = await cdp.eval(`(async () => {
+    const { computeSpectrum } = await import('/src/analysis/spectrum.ts')
+    const SR = 44100
+    const block = (freqs, ms) => {
+      const n = Math.round((ms / 1000) * SR)
+      const out = new Float32Array(n)
+      const fade = Math.round(0.01 * SR)
+      for (let i = 0; i < n; i++) {
+        const t = i / SR
+        let v = 0
+        for (const f of freqs) v += Math.sin(2 * Math.PI * f * t)
+        v /= freqs.length
+        let g = 1
+        if (i < fade) g = i / fade
+        else if (i > n - fade) g = (n - i) / fade
+        out[i] = v * 0.7 * g
+      }
+      return out
+    }
+    const a = block([261.63, 329.63, 392.0], 2000)
+    const b = block([349.23, 440.0, 523.25], 2000)
+    const samples = new Float32Array(a.length + b.length)
+    samples.set(a, 0)
+    samples.set(b, a.length)
+    const spectrum = computeSpectrum(samples, SR, {})
+    const bp = window.__bp
+    bp.getState().setLoaded({ fileName: 'chords.wav', filePath: null, durationMs: 4000 })
+    bp.getState().setAnalysis({
+      durationMs: 4000,
+      sampleRate: SR,
+      spectrum,
+      notes: [],
+      bpm: 120,
+      firstBeatMs: 0,
+      keyCandidates: [{ tonic: 0, share: 1 }],
+    })
+    return { frames: spectrum.frames, hopMs: spectrum.hopMs }
+  })()`)
+  check('造出 4 秒的 C→F 和弦音频（频谱就绪）', !!chordSetup && chordSetup.frames > 60, JSON.stringify(chordSetup))
+
+  const clickedChord = await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '和弦分析')
+    if (!b) return 'no-btn'
+    b.click()
+    return 'ok'
+  })()`)
+  await sleep(1800)
+  const chordAfter = await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    const at = (ms) => (s.chords.find((c) => c.startMs <= ms && ms < c.endMs) || {}).name
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '和弦分析')
+    const box = [...document.querySelectorAll('.side input[type=checkbox]')].find((x) => x.closest('label') && x.closest('label').textContent.includes('显示和弦'))
+    /* 和弦带真的画上去了：取表格左下角（带子里）一个像素 */
+    const c = document.querySelector('.pane.roll canvas')
+    const r = c.getBoundingClientRect()
+    const dpr = window.devicePixelRatio || 1
+    const px = c.getContext('2d').getImageData(Math.round((66 + 8) * dpr), Math.round((r.height - 8) * dpr), 1, 1).data
+    return {
+      n: s.chords.length,
+      names: s.chords.filter((x) => x.name !== 'N').map((x) => x.name),
+      first: at(800),
+      second: at(2800),
+      on: !!b && b.classList.contains('on'),
+      showChords: s.showChords,
+      hasToggle: !!box && !box.disabled,
+      err: s.error,
+      pixel: [px[0], px[1], px[2]],
+    }
+  })()`)
+  check('点「和弦分析」：C 大三和弦判成 C', chordAfter.first === 'C', JSON.stringify(chordAfter.names))
+  check('点「和弦分析」：F 大三和弦判成 F', chordAfter.second === 'F', `${chordAfter.second}（${JSON.stringify(chordAfter.names)}）`)
+  check(
+    '和弦按钮亮起、面板里有「显示和弦」开关、没有报错',
+    clickedChord === 'ok' && chordAfter.on && chordAfter.hasToggle && chordAfter.showChords && !chordAfter.err,
+    JSON.stringify({ on: chordAfter.on, toggle: chordAfter.hasToggle, err: chordAfter.err }),
+  )
+  check(
+    '和弦带画在表格底部（左下角那块是紫的）',
+    chordAfter.pixel[2] > 55 && chordAfter.pixel[2] > chordAfter.pixel[0],
+    JSON.stringify(chordAfter.pixel),
+  )
+  await cdp.eval(`window.__bp.getState().setChords([])`)
+  await cdp.eval(`window.__bp.getState().setPageSec(20)`)
+  await cdp.eval(`window.__bp.getState().setTopMidi(${topInfo.top})`)
+  await sleep(150)
+
   /* ── 帮助弹层（顶栏键盘图标） ── */
   await cdp.eval(`(() => {
     const btn = [...document.querySelectorAll('.toolbar .icon-btn')].find((b) => (b.getAttribute('aria-label') || '').includes('按键'))
@@ -1299,6 +1529,45 @@ try {
   check('倍率滑条拉满时填充到头（--fill=100%）', gainFill === '100.0%', gainFill)
   const errs = await cdp.eval(`window.__bpErrors || 0`)
   check('页面没有运行时错误', !errs, errs ? String(errs) : '')
+
+  /* ── 刷新后恢复：行高 / 屏宽 / 第一行音高（用户 m02483 第 1、2、4 条） ──
+   * 这三项是"看谱习惯"，存在 localStorage；刷新一次就该原样回来。
+   * 放在最后跑：刷新会把前面的假分析清掉。 */
+  await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    s.setRowH(18)
+    s.setPageSec(12)
+    s.setTopMidi(72)
+  })()`)
+  await sleep(400)
+  await cdp.send('Page.reload', { ignoreCache: false })
+  let restored = null
+  for (let i = 0; i < 60; i++) {
+    await sleep(250)
+    try {
+      restored = await cdp.eval(`(() => {
+        if (!document.querySelector('.toolbar') || !window.__bpRoll) return null
+        const s = window.__bp.getState()
+        return { rowH: s.rowH, pageSec: s.pageSec, top: window.__bpRoll.top, stored: s.topMidi }
+      })()`)
+    } catch {
+      restored = null /* 刷新瞬间执行上下文被销毁，下一轮再来 */
+    }
+    if (restored) break
+  }
+  check(
+    '刷新后行高 / 屏宽 / 第一行音高都恢复',
+    !!restored && restored.rowH === 18 && restored.pageSec === 12 && restored.stored === 72 && restored.top === 72,
+    JSON.stringify(restored),
+  )
+  /* 收尾：把三项调回默认，免得截图/后续跑挂在这个状态上 */
+  await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    s.setRowH(14)
+    s.setPageSec(20)
+    s.setTopMidi(96)
+  })()`)
+  await sleep(250)
 
   /* --shot <path>：把当前界面截一张干净图
      （顺手灌回一份假的频谱与两个音、全标确认、圈一段区间，谱面才有内容可看）
@@ -1343,6 +1612,28 @@ try {
       s.setLoopOn(true)
     })()`)
     await sleep(600)
+    /* 截图辅助：--chords 画一条假和弦带、--rowh N 换行高、--page N 换一屏秒数，
+     * 用来肉眼核对新加的显示项（用户 m02483） */
+    if (argv.includes('--chords')) {
+      await cdp.eval(`window.__bp.getState().setChords([
+        { startMs: 0, endMs: 1000, name: 'C' },
+        { startMs: 1000, endMs: 2000, name: 'Am' },
+        { startMs: 2000, endMs: 3000, name: 'F' },
+        { startMs: 3000, endMs: 4000, name: 'G7' },
+      ])`)
+      await cdp.eval(`window.__bp.getState().setShowChords(true)`)
+      await sleep(250)
+    }
+    const shotRowH = Number(argValue('--rowh'))
+    if (Number.isFinite(shotRowH) && shotRowH > 0) {
+      await cdp.eval(`window.__bp.getState().setRowH(${shotRowH})`)
+      await sleep(250)
+    }
+    const shotPage = Number(argValue('--page'))
+    if (Number.isFinite(shotPage) && shotPage > 0) {
+      await cdp.eval(`window.__bp.getState().setPageSec(${shotPage})`)
+      await sleep(250)
+    }
     const png = await cdp.send('Page.captureScreenshot', { format: 'png' })
     const { writeFile } = await import('node:fs/promises')
     await writeFile(shotPath, Buffer.from(png.data, 'base64'))

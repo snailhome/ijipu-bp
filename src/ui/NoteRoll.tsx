@@ -21,6 +21,7 @@ import { COPY } from '../brand/copy'
 import { assignLanes } from './noteLanes'
 import { msToX, pickTickSeconds, spanMs, xToMs } from './timeAxis'
 import type { PitchMode, View } from '../model/store'
+import type { ChordSegment } from '../analysis/chords'
 import type { EditMode, LoopRange, RawNote, SnapMode, Spectrum } from '../model/types'
 
 /* 选择模式用「单手指」光标（CSS pointer）；绘制模式换一支笔（用户 m02510）。
@@ -49,6 +50,14 @@ interface Props {
   mode: EditMode
   snap: SnapMode
   view: View
+  /** 每半音一行的高度（设置里的滑条，10–26px） */
+  rowH: number
+  /** 第一行的音高（MIDI）：重开时恢复上次滚到的位置（用户 m02483） */
+  topMidi: number
+  onTopMidi: (m: number) => void
+  /** 和弦识别结果（noteDigger 复刻）：画在表格最下面一条带子里 */
+  chords: ChordSegment[]
+  showChords: boolean
   loop: LoopRange | null
   loopOn: boolean
   /** 热力图显示倍率（1 = 原样，越大越亮） */
@@ -76,7 +85,6 @@ interface Props {
 
 const KEY_W = 66
 const RULER_H = 36
-const ROW_H = 14
 const EDGE_PX = 8
 const FONT = '10px ui-monospace, Consolas, monospace'
 
@@ -160,13 +168,17 @@ type Drag =
 
 export function NoteRoll(props: Props) {
   const { notes, spectrum, durationMs, view, playMs, mode, bandOnly } = props
+  /* 行高是设置里的滑条（用户 m02483）：键盘格、音符块、点击命中共用这一个值 */
+  const rowH = props.rowH
   const wrapRef = useRef<HTMLDivElement | null>(null)
   /* 画布自己的容器：尺寸必须按它量，不能按整块面板量（面板里还有标题条和滚动条，
    * 按面板量会让画布被 flex 压扁，点击 y 坐标跟着错行 —— 用户 m04792 第二条） */
   const hostRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
-  const [center, setCenter] = useState(76)
+  /* 第一行的音高（不是"中心音高"）：用户 m02483 要求记住"锁定/上下滑动后第一行是哪一音"，
+   * 所以这里直接以顶行为状态，滚动 / 改行高 / 重开都按它恢复。 */
+  const [topRow, setTopRow] = useState(props.topMidi)
   const [hoverMidi, setHoverMidi] = useState<number | null>(null)
   /* 按下未松的琴键：整格高亮成黄色（用户 m04380） */
   const [pressMidi, setPressMidi] = useState<number | null>(null)
@@ -223,29 +235,37 @@ export function NoteRoll(props: Props) {
     return { lo, span: hi - lo > 1e-6 ? hi - lo : 1 }
   }, [spectrum])
   const metrics = useMemo<Metrics>(() => {
-    const rows = Math.max(8, Math.floor((size.h - RULER_H) / ROW_H))
-    let top = Math.min(MIDI_HIGH, Math.round(center + Math.floor(rows / 2)))
-    if (top - rows + 1 < MIDI_LOW) top = MIDI_LOW + rows - 1
+    const rows = Math.max(4, Math.min(MIDI_HIGH - MIDI_LOW + 1, Math.floor((size.h - RULER_H) / rowH)))
+    /* 顶行不能低到露不出最后一行，也不能高过 C8 */
+    const top = Math.max(MIDI_LOW + rows - 1, Math.min(MIDI_HIGH, Math.round(topRow)))
     return { w: size.w, h: size.h, left: KEY_W, width: Math.max(80, size.w - KEY_W), top, rows }
-  }, [size, center])
+  }, [size, topRow, rowH])
+
+  /* 把"现在第一行是哪一音"记回 store（App 再落到 localStorage / 方案外的界面状态）：
+   * 下次打开时从这里恢复（用户 m02483 第 4 条）。 */
+  const onTopRef = useRef(props.onTopMidi)
+  onTopRef.current = props.onTopMidi
+  useEffect(() => {
+    if (metrics.w > 0) onTopRef.current(metrics.top)
+  }, [metrics.top, metrics.w])
 
   /* dev-only：把行高/顶行暴露出去，`npm run probe` 才能算出某个音的像素位置 */
   useEffect(() => {
     if (import.meta.env.DEV) {
-      ;(window as unknown as { __bpRoll?: unknown }).__bpRoll = { ...metrics, rulerH: RULER_H }
+      ;(window as unknown as { __bpRoll?: unknown }).__bpRoll = { ...metrics, rulerH: RULER_H, rowH }
     }
   }, [metrics])
 
   const rowTop = useCallback(
-    (midi: number) => RULER_H + (metrics.top - midi) * ROW_H,
-    [metrics.top],
+    (midi: number) => RULER_H + (metrics.top - midi) * rowH,
+    [metrics.top, rowH],
   )
   const midiAt = useCallback(
     (y: number) => {
-      const row = Math.floor((y - RULER_H) / ROW_H)
+      const row = Math.floor((y - RULER_H) / rowH)
       return metrics.top - row
     },
-    [metrics.top],
+    [metrics.top, rowH],
   )
   const xAt = useCallback(
     (ms: number) => msToX(ms, view, durationMs, metrics.left, metrics.width),
@@ -279,6 +299,9 @@ export function NoteRoll(props: Props) {
 
     const bottomMidi = metrics.top - metrics.rows + 1
     const beat = beatMs(props.bpm)
+    /* 键名 / 音符标签的字号跟着行高走：行高 10 → 9px，默认 14 → 10px，26 → 13px。
+     * 时间尺的字号不跟着变（刻度读起来要稳定）。 */
+    const keyFont = `${Math.max(9, Math.min(13, Math.round(rowH * 0.72)))}px ui-monospace, Consolas, monospace`
 
     /* 1) 频谱热力图：以"最小绘制格"（1/16 拍 × 一个半音，用户 m04517）为单位
      *   —— 一格之内同一种颜色（阶梯式，不做线性插值），格子里取该格覆盖帧的最大值。
@@ -320,7 +343,7 @@ export function NoteRoll(props: Props) {
           const x0 = Math.max(metrics.left, x)
           const x1 = Math.min(metrics.w, x + cellW)
           if (x1 <= x0) continue
-          g.fillRect(x0, RULER_H + r * ROW_H, x1 - x0, ROW_H)
+          g.fillRect(x0, RULER_H + r * rowH, x1 - x0, rowH)
         }
       }
     }
@@ -329,10 +352,10 @@ export function NoteRoll(props: Props) {
     for (let r = 0; r < metrics.rows; r++) {
       const midi = metrics.top - r
       if (midi < MIDI_LOW) break
-      const y = RULER_H + r * ROW_H
+      const y = RULER_H + r * rowH
       if (BLACK.has(midi % 12)) {
         g.fillStyle = 'rgba(0,0,0,0.30)'
-        g.fillRect(metrics.left, y, metrics.width, ROW_H)
+        g.fillRect(metrics.left, y, metrics.width, rowH)
       }
     }
     /* 八度线（C 行）：实线，比拍线细一点、偏蓝 */
@@ -340,7 +363,7 @@ export function NoteRoll(props: Props) {
       const midi = metrics.top - r
       if (midi < MIDI_LOW - 1) break
       if (((midi % 12) + 12) % 12 !== 0) continue
-      const y = RULER_H + r * ROW_H - 0.5
+      const y = RULER_H + r * rowH - 0.5
       g.strokeStyle = 'rgba(120,180,255,0.30)'
       g.lineWidth = 1
       g.beginPath()
@@ -436,7 +459,7 @@ export function NoteRoll(props: Props) {
       const x2 = Math.max(x1 + 2, xAt(n.endMs))
       if (x2 < metrics.left || x1 > metrics.w) continue
       const spot = lanes.get(n.id)
-      const per = ROW_H / (spot?.lanes ?? 1)
+      const per = rowH / (spot?.lanes ?? 1)
       const y = rowTop(n.midi) + (spot?.lane ?? 0) * per
       const h = Math.max(2, per - 1)
       const sel = n.id === props.selectedId
@@ -467,7 +490,7 @@ export function NoteRoll(props: Props) {
       const text = label(n.midi)
       if (w > 26 && h >= 11) {
         g.fillStyle = n.confirmed ? '#03251d' : '#c8d4e0'
-        g.font = FONT
+        g.font = keyFont
         g.textBaseline = 'middle'
         g.fillText(text, x1 + 4, y + h / 2 + 0.5, w - 6)
       }
@@ -482,14 +505,45 @@ export function NoteRoll(props: Props) {
       if (x2 < metrics.w) g.fillRect(x2, RULER_H, metrics.w - x2, metrics.h - RULER_H)
     }
 
+    /* 5.6) 和弦带（从 noteDigger 的 chordEst 复刻，用户 m02483 第 3 条）：
+     * 最下面一条带子，隔一段换个紫色，写和弦名。**只做提示，不进 jps**。
+     * 高度跟着行高走（14–22px），行高调小也不会把最后一行音全盖住。 */
+    if (props.showChords && props.chords.length > 0) {
+      const bandH = Math.max(14, Math.min(22, Math.round(rowH * 1.1)))
+      const y0 = metrics.h - bandH
+      g.fillStyle = 'rgba(8,10,16,0.72)'
+      g.fillRect(metrics.left, y0, metrics.width, bandH)
+      const visFrom = view.panMs
+      const visTo = view.panMs + spanMs(view, durationMs)
+      let idx = 0
+      for (const c of props.chords) {
+        const i = idx
+        idx += 1
+        if (c.endMs < visFrom || c.startMs > visTo || c.name === 'N') continue
+        const x1 = Math.max(metrics.left, xAt(c.startMs))
+        const x2 = Math.min(metrics.w, xAt(c.endMs))
+        if (x2 <= x1) continue
+        g.fillStyle = i % 2 === 0 ? 'rgba(132,0,255,0.34)' : 'rgba(221,0,255,0.34)'
+        g.fillRect(x1, y0, x2 - x1, bandH)
+        if (x2 - x1 > 18) {
+          g.fillStyle = '#f4ecff'
+          g.font = '700 11px ui-monospace, Consolas, monospace'
+          g.textBaseline = 'middle'
+          g.fillText(c.name, x1 + 3, y0 + bandH / 2 + 0.5, x2 - x1 - 4)
+        }
+      }
+      g.fillStyle = 'rgba(255,255,255,0.16)'
+      g.fillRect(metrics.left, y0 - 1, metrics.width, 1)
+    }
+
     /* 6) 悬停行高亮 + 右上角信息（用户 m04792 第三条：原来 0.05 太淡，看不见） */
     if (hoverMidi !== null) {
       const y = rowTop(hoverMidi)
       g.fillStyle = 'rgba(120,190,255,0.20)'
-      g.fillRect(metrics.left, y, metrics.width, ROW_H)
+      g.fillRect(metrics.left, y, metrics.width, rowH)
       g.strokeStyle = 'rgba(150,210,255,0.45)'
       g.lineWidth = 1
-      g.strokeRect(metrics.left + 0.5, y + 0.5, metrics.width - 1, ROW_H - 1)
+      g.strokeRect(metrics.left + 0.5, y + 0.5, metrics.width - 1, rowH - 1)
     }
 
     /* 7) 时间尺 */
@@ -546,21 +600,21 @@ export function NoteRoll(props: Props) {
     const bandOf = (cls: number, top: number) => {
       const up = (cls + 1) % 12
       const down = (cls + 11) % 12
-      const t = BLACK.has(up) ? top - ROW_H / 2 : top
-      const b = BLACK.has(down) ? top + ROW_H + ROW_H / 2 : top + ROW_H
+      const t = BLACK.has(up) ? top - rowH / 2 : top
+      const b = BLACK.has(down) ? top + rowH + rowH / 2 : top + rowH
       return { t: Math.max(RULER_H, t), b: Math.min(metrics.h, b) }
     }
 
     const fillWhiteKey = (cls: number, y: number) => {
       const { t, b } = bandOf(cls, y)
       g.fillRect(0, t, KEY_BLACK_X, b - t) // 左块（伸进黑键格的一半）
-      g.fillRect(KEY_BLACK_X, y, KEY_BLACK_W, ROW_H) // 本格右边那截（L/J/T 的"脚"）
+      g.fillRect(KEY_BLACK_X, y, KEY_BLACK_W, rowH) // 本格右边那截（L/J/T 的"脚"）
     }
 
     for (let r = 0; r < metrics.rows; r++) {
       const midi = metrics.top - r
       if (midi < MIDI_LOW) break
-      const y = RULER_H + r * ROW_H
+      const y = RULER_H + r * rowH
       const cls = ((midi % 12) + 12) % 12
       /* 当前行（鼠标所在行）/ 按下的琴键：按"键的形状"压黄（用户 m04380、m04987、m05078）。
        * 白键按 L/J/T 的形状压（左块比本格高半格到一格），黑键只有它自己那块变黄。 */
@@ -570,7 +624,7 @@ export function NoteRoll(props: Props) {
         /* 黑键：I 形，右侧贴边、整行高（用户 m04792 第一条） */
         g.fillStyle = lit > 0 ? litFill : '#000000'
         g.beginPath()
-        g.roundRect(KEY_BLACK_X, y, KEY_BLACK_W, ROW_H, [2, 0, 0, 2])
+        g.roundRect(KEY_BLACK_X, y, KEY_BLACK_W, rowH, [2, 0, 0, 2])
         g.fill()
       } else if (lit > 0) {
         g.fillStyle = litFill
@@ -583,20 +637,20 @@ export function NoteRoll(props: Props) {
     for (let r = 0; r < metrics.rows; r++) {
       const midi = metrics.top - r
       if (midi < MIDI_LOW) break
-      const y = RULER_H + r * ROW_H
+      const y = RULER_H + r * rowH
       const cls = ((midi % 12) + 12) % 12
       g.fillStyle = 'rgba(0,0,0,0.45)'
-      if (BLACK.has(cls)) g.fillRect(0, y + ROW_H / 2 - 0.5, KEY_BLACK_X, 1)
+      if (BLACK.has(cls)) g.fillRect(0, y + rowH / 2 - 0.5, KEY_BLACK_X, 1)
       else if (cls === 4 || cls === 11) g.fillRect(0, y - 0.5, KEY_W, 1)
     }
 
     for (let r = 0; r < metrics.rows; r++) {
       const midi = metrics.top - r
       if (midi < MIDI_LOW) break
-      const y = RULER_H + r * ROW_H
+      const y = RULER_H + r * rowH
       const cls = ((midi % 12) + 12) % 12
       const lit = pressMidi === midi ? 1 : hoverMidi === midi ? 0.85 : 0
-      g.font = FONT
+      g.font = keyFont
       g.textBaseline = 'middle'
 
       /* 黑格行：数字写在**黑键块里面**、颜色反相（黑键上浅字、高亮成黄时改回深字），用户 m05415 */
@@ -604,7 +658,7 @@ export function NoteRoll(props: Props) {
         if (props.pitchMode !== 'number') continue
         /* 距黑格左缘的留白跟白格一样（都是 5px），用户 m05580 */
         g.fillStyle = lit > 0 ? 'rgba(30,44,60,0.95)' : '#e8f1fb'
-        g.fillText(midiToNumber(midi, props.tonic).text, KEY_BLACK_X + 5, y + ROW_H / 2)
+        g.fillText(midiToNumber(midi, props.tonic).text, KEY_BLACK_X + 5, y + rowH / 2)
         continue
       }
 
@@ -672,6 +726,9 @@ export function NoteRoll(props: Props) {
     props.selectedId,
     props.tonic,
     props.pitchMode,
+    props.chords,
+    props.showChords,
+    rowH,
     view,
     durationMs,
     playMs,
@@ -724,11 +781,16 @@ export function NoteRoll(props: Props) {
         props.onView({ zoom: view.zoom, panMs })
         return
       }
-      setCenter((c) => Math.max(MIDI_LOW, Math.min(MIDI_HIGH, c - Math.sign(e.deltaY) * 2)))
+      setTopRow((t) =>
+        Math.max(
+          MIDI_LOW + metrics.rows - 1,
+          Math.min(MIDI_HIGH, t - Math.sign(e.deltaY) * 2),
+        ),
+      )
     }
     host.addEventListener('wheel', onWheel, { passive: false })
     return () => host.removeEventListener('wheel', onWheel)
-  }, [durationMs, msAt, props, view])
+  }, [durationMs, metrics.rows, msAt, props, view])
 
   /* ── 指针交互 ── */
   /* 重复区间的三块热区：左握柄 / 右握柄 / 整段（先判它们，再判音符） */
@@ -757,7 +819,7 @@ export function NoteRoll(props: Props) {
         if (x < x1 - 1 || x > x2 + 1) continue
         /* 同一行撞车的音上下错开画，所以还要看点在不在它自己那一条里（用户 m00741） */
         const spot = lanes.get(n.id)
-        const per = ROW_H / (spot?.lanes ?? 1)
+        const per = rowH / (spot?.lanes ?? 1)
         const top = rowTop(midi) + (spot?.lane ?? 0) * per
         if (y >= top - 1 && y <= top + per + 1) return n
       }
@@ -910,7 +972,7 @@ export function NoteRoll(props: Props) {
       }
       if (d.kind === 'move') {
         const delta = msAt(x) - d.grabMs
-        const dRow = Math.round((d.grabY - y) / ROW_H) /* 往上拖 = 升 key，一格一个半音 */
+        const dRow = Math.round((d.grabY - y) / rowH) /* 往上拖 = 升 key，一格一个半音 */
         if (!d.moved && Math.abs(delta) < beatMs(props.bpm) / 8 && dRow === 0) return
         d.moved = true
         const start = snapMs(d.startMs + delta, opt, props.snap)

@@ -66,14 +66,90 @@ button.primary {
   flex-direction: column;
 }
 
+/* 顶栏：左簇 / 播放（正中）/ 右簇，三列等宽 + 中间 auto —— 播放键恒定在正中
+   （用户 m02483 第 5、6 条：按钮按用途分组，播放单独一颗放中间） */
 .toolbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
+}
+
+.tb-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
+}
+
+.tb-right {
+  justify-content: flex-end;
+}
+
+/* 播放：单独一颗、比别的按钮大一号（用户 m02483 第 6 条） */
+.play-btn {
+  width: 46px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  background: rgba(79, 209, 197, 0.16);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.play-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
+.play-btn:hover:not(:disabled) {
+  background: rgba(79, 209, 197, 0.3);
+}
+
+.play-btn.on {
+  background: var(--accent);
+  color: #08131a;
+}
+
+.play-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 设置 / 帮助 / 右栏开关：只画图标，不画外框线（用户 m02483 第 7 条） */
+.tb-util,
+.tb-util .icon-btn,
+.tb-util .icon-btn.on,
+.tb-util .icon-btn:hover,
+.tb-util .icon-btn.side-toggle:hover {
+  border-color: transparent;
+}
+
+.tb-util {
+  background: transparent;
+}
+
+.tb-util .icon-btn {
+  background: transparent;
+  color: var(--fg-dim);
+}
+
+.tb-util .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+}
+
+.tb-util .icon-btn.on {
+  background: rgba(79, 209, 197, 0.14);
+  color: var(--accent);
 }
 
 .brand {

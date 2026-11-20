@@ -12,12 +12,13 @@ import { renderToString } from 'react-dom/server'
 import App from '../src/App'
 import { analyzeSamples } from '../src/analysis/analyze'
 import { analyzeRhythm, estimateTempo } from '../src/analysis/beat'
-import { buildLogMap } from '../src/analysis/logmap'
+import { buildLogMap, SEMI_R } from '../src/analysis/logmap'
 import { suppressHarmonics } from '../src/analysis/harmonics'
 import { computeSpectrum } from '../src/analysis/spectrum'
+import { detectChords } from '../src/analysis/chords'
 import { FFT, hannWindow } from '../src/analysis/fft'
 import { guessKeys } from '../src/analysis/key'
-import { midiToNumber, midiToName } from '../src/analysis/pitchNames'
+import { midiToFreq, midiToNumber, midiToName, MIDI_LOW } from '../src/analysis/pitchNames'
 import { quantize } from '../src/jps/quantize'
 import { marks } from '../src/jps/marks'
 import { snapMs } from '../src/jps/snap'
@@ -103,6 +104,31 @@ function silence(ms: number): Float32Array {
     if (sum > 0.99) nonEmpty++
   }
   check('对数谱 88 个半音 bin 全部有能量核', bins === 88 && map.length === 88 && nonEmpty === 88, `${nonEmpty}/88`)
+
+  /* 半音核的支撑只能到 ±SEMI_R：余弦过了 π 会绕回正值，以前漏了这条判断，
+   * 低频相邻半音互相吃能量（F2 → F#2），和弦识别因此把 F 大三判成 Faug。 */
+  const binHz = SR / 8192
+  let outOfRange = 0
+  let positiveWeights = 0
+  for (let i = 0; i < map.length; i++) {
+    const center = midiToFreq(MIDI_LOW + i)
+    const b = map[i]
+    /* 最底下几个半音（A0 一带）半音间距比 FFT 分辨率还窄，可能没有 bin 落在 ±2/3 半音内，
+     * 这时 logmap 会退化成"最近的 FFT bin 单独作代表"（恰好一个权重 = 1）—— 允许它越界。 */
+    const pos: number[] = []
+    for (let j = 0; j < b.weights.length; j++) if (b.weights[j] > 0) pos.push(j)
+    if (pos.length === 1 && Math.abs(b.weights[pos[0]] - 1) < 1e-9) continue
+    for (const j of pos) {
+      positiveWeights++
+      const semis = Math.abs(12 * Math.log2(((b.start + j) * binHz) / center))
+      if (semis > SEMI_R + 1e-9) outOfRange++
+    }
+  }
+  check(
+    '半音核只覆盖 ±2/3 半音（没有余弦绕回的越界权重）',
+    outOfRange === 0 && positiveWeights > 0,
+    `越界 ${outOfRange} 个 / 共 ${positiveWeights} 个权重`,
+  )
 }
 
 /* ---------------- 4. 音名 / 简谱数字 ---------------- */
@@ -563,6 +589,79 @@ const melody = concat([
   check('节奏分析：跟到足够多的拍点', r.beats.length >= 6, `${r.beats.length} 个`)
   check('节奏分析：可信度不为 0', r.confidence > 0.15, String(r.confidence))
   check('节奏分析：首拍在小节第一拍（<半拍）', r.firstBeatMs % beat < beat / 2, `${r.firstBeatMs}ms`)
+}
+
+/* ---------------- 15. 和弦识别（从 noteDigger 的 chordEst 复刻） ---------------- */
+{
+  const C4 = 261.63
+  const E4 = 329.63
+  const G4 = 392.0
+  const F4 = 349.23
+  const A4 = 440.0
+  const C5 = 523.25
+  /** 一段柱式和弦（几路正弦叠加，带 10ms 淡入淡出） */
+  const chordBlock = (freqs: number[], ms: number): Float32Array => {
+    const n = Math.round((ms / 1000) * SR)
+    const out = new Float32Array(n)
+    const fade = Math.round(0.01 * SR)
+    for (let i = 0; i < n; i++) {
+      const t = i / SR
+      let v = 0
+      for (const f of freqs) v += Math.sin(2 * Math.PI * f * t)
+      v /= freqs.length
+      let g = 1
+      if (i < fade) g = i / fade
+      else if (i > n - fade) g = (n - i) / fade
+      out[i] = v * 0.7 * g
+    }
+    return out
+  }
+  const audio = concat([chordBlock([C4, E4, G4], 1500), chordBlock([F4, A4, C5], 1500)])
+  const spec = computeSpectrum(audio, SR, {})
+  const chords = detectChords(spec)
+  const at = (ms: number) => chords.find((c) => c.startMs <= ms && ms < c.endMs)?.name ?? '?'
+  check('和弦：C 大三和弦判成 C', at(700) === 'C', `${at(700)}（共 ${chords.length} 段）`)
+  check('和弦：F 大三和弦判成 F', at(2200) === 'F', at(2200))
+  check(
+    '和弦：分段一直盖到结尾',
+    chords.length > 0 && chords[chords.length - 1].endMs >= 2900,
+    JSON.stringify(chords[chords.length - 1] ?? null),
+  )
+}
+
+/* ---------------- 16. 显示尺寸：行高 / 屏宽 / 顶行 的上下限 ---------------- */
+{
+  const st = useBp.getState()
+  st.setLoaded({ fileName: 'x.wav', filePath: null, durationMs: 60000 })
+  st.setPageSec(20)
+  check(
+    '屏宽 20 秒 → 60 秒的歌 zoom=3',
+    Math.abs(useBp.getState().view.zoom - 3) < 1e-6,
+    String(useBp.getState().view.zoom),
+  )
+  check(
+    '屏宽 20 秒 → 一屏正好 20 秒',
+    Math.abs(spanMs(useBp.getState().view, 60000) - 20000) < 1,
+    String(spanMs(useBp.getState().view, 60000)),
+  )
+  st.setPageSec(1)
+  check('屏宽下限夹到 2 秒', useBp.getState().pageSec === 2, String(useBp.getState().pageSec))
+  st.setPageSec(999)
+  check('屏宽上限夹到 60 秒', useBp.getState().pageSec === 60, String(useBp.getState().pageSec))
+  st.setRowH(0)
+  check('行高下限 10px', useBp.getState().rowH === 10, String(useBp.getState().rowH))
+  st.setRowH(999)
+  check('行高上限 26px', useBp.getState().rowH === 26, String(useBp.getState().rowH))
+  st.setTopMidi(-5)
+  check('顶行音高下限 A0=21', useBp.getState().topMidi === 21, String(useBp.getState().topMidi))
+  st.setTopMidi(999)
+  check('顶行音高上限 C8=108', useBp.getState().topMidi === 108, String(useBp.getState().topMidi))
+  st.setChords([{ startMs: 0, endMs: 1000, name: 'C' }])
+  check('和弦结果进 store', useBp.getState().chords.length === 1)
+  st.setChords([])
+  st.setRowH(14)
+  st.setTopMidi(96)
+  st.setPageSec(20)
 }
 
 const failed = results.filter((r) => !r.ok)
