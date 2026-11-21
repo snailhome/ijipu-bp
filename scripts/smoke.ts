@@ -27,6 +27,7 @@ import { msToX, spanMs } from '../src/ui/timeAxis'
 import { assignLanes } from '../src/ui/noteLanes'
 import { buildProject, parseProject, projectPathFor, serializeProject } from '../src/model/project'
 import type { ProjectSource } from '../src/model/project'
+import { parseMidi, writeMidi } from '../src/model/midi'
 import { useBp } from '../src/model/store'
 import type { RawNote } from '../src/model/types'
 
@@ -640,6 +641,28 @@ const melody = concat([
   st.setRowH(14)
   st.setTopMidi(96)
   st.setPageSec(20)
+}
+
+/* ---------------- 17. MIDI 读写（用户 m02483：从 noteDigger 复刻的导入/导出） ---------------- */
+{
+  const notes = [
+    { id: 'a', midi: 60, startMs: 0, endMs: 500, velocity: 0.8, confirmed: true },
+    { id: 'b', midi: 64, startMs: 500, endMs: 1000, velocity: 0.6, confirmed: true },
+    { id: 'c', midi: 67, startMs: 1000, endMs: 1500, velocity: 0.7, confirmed: true },
+  ]
+  const bytes = writeMidi(notes, { bpm: 120, beatsPerBar: 4 })
+  const parsed = parseMidi(bytes.buffer as ArrayBuffer)
+  const near = (a: number, b: number) => Math.abs(a - b) <= 2
+  check('MIDI 写出去再读回来：音高都对', parsed.notes.map((n) => n.midi).join(',') === '60,64,67', JSON.stringify(parsed.notes.map((n) => n.midi)))
+  check('MIDI 往返：速度 / 拍号保住了', parsed.bpm === 120 && parsed.beatsPerBar === 4, `${parsed.bpm} / ${parsed.beatsPerBar}`)
+  check(
+    'MIDI 往返：起止时间落在 2ms 内',
+    parsed.notes.length === 3 && near(parsed.notes[0].endMs, 500) && near(parsed.notes[2].startMs, 1000) && near(parsed.notes[2].endMs, 1500),
+    JSON.stringify(parsed.notes.map((n) => [n.startMs, n.endMs])),
+  )
+  const empty = writeMidi([], { bpm: 90, beatsPerBar: 3 })
+  const parsedEmpty = parseMidi(empty.buffer as ArrayBuffer)
+  check('空谱也能写 / 读 MIDI（速度拍号还在）', parsedEmpty.notes.length === 0 && parsedEmpty.bpm === 90 && parsedEmpty.beatsPerBar === 3, JSON.stringify(parsedEmpty))
 }
 
 const failed = results.filter((r) => !r.ok)

@@ -1946,6 +1946,47 @@ try {
     rightOrder.navFirst && rightOrder.pitchAfterSource,
     JSON.stringify(rightOrder.labels),
   )
+  /* MIDI 组放在文件组后面（用户 m02483）：编辑器模式 / 导入 / 导出，再后面才是谱音组 */
+  const midiPlace = await cdp.eval(`(() => {
+    const labels = [...document.querySelectorAll('.tb-left button')].map((b) => b.getAttribute('aria-label') || '')
+    const at = (l) => labels.indexOf(l)
+    return {
+      labels,
+      hasAll: ['MIDI 编辑器', '导入 MIDI', '导出 MIDI'].every((l) => at(l) >= 0),
+      afterFile: at('MIDI 编辑器') > at('导出 .jps'),
+      beforeSelect: at('MIDI 编辑器') < at('全选'),
+    }
+  })()`)
+  check('MIDI 组排在文件组后面、谱音组前面', midiPlace.hasAll && midiPlace.afterFile && midiPlace.beforeSelect, JSON.stringify(midiPlace.labels))
+  await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === 'MIDI 编辑器')
+    b?.click()
+  })()`)
+  await sleep(220)
+  const midiToggle = await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === 'MIDI 编辑器')
+    return { mode: window.__bp.getState().midiMode, on: !!b && b.classList.contains('on') }
+  })()`)
+  check('MIDI 编辑器模式能打开（按钮亮起）', midiToggle.mode === true && midiToggle.on, JSON.stringify(midiToggle))
+  await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === 'MIDI 编辑器')
+    b?.click()
+    window.__bp.getState().setPlayMode('audio')
+  })()`)
+  await sleep(150)
+  check('再点一次关掉 MIDI 编辑器模式', await cdp.eval(`!window.__bp.getState().midiMode`))
+  await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '播放节拍')
+    b?.click()
+  })()`)
+  await sleep(200)
+  const metro = await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '播放节拍')
+    return { on: window.__bp.getState().metronome, cls: !!b && b.classList.contains('on') }
+  })()`)
+  check('播放节拍按钮能开关（按钮亮起）', metro.on === true && metro.cls, JSON.stringify(metro))
+  await cdp.eval(`(() => { const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '播放节拍'); b?.click() })()`)
+  await sleep(150)
   const fileKeys = await cdp.eval(`(() => {
     const byLabel = (l) => [...document.querySelectorAll('.toolbar button')].find((b) => (b.getAttribute('aria-label') || '') === l)
     return {

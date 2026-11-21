@@ -130,6 +130,18 @@ npm run smoke
   `setPlayRate`。播放中改倍率：音频模式改 `BufferSource.playbackRate` 并按当前位置重设基准；
   合成音按当前位置重排一遍。改播放位置算法时记得 tick 的 `* rate` 和合成音的 `/ rate` 两处一起改，
   `probe` 有滑条位置 + 悬浮提示 + 滚轮 + 刷新恢复的用例。
+- **MIDI / 节拍器 / 钢琴音色**（用户 m02483，参照 noteDigger）：
+  - 顶栏文件组后面是 MIDI 组：`MIDI 编辑器` / `导入 MIDI` / `导出 MIDI`。导入用
+    `src/model/midi.ts` 的 `parseMidi`（自己写的 SMF 解析，不引库），导入后进 MIDI 模式、
+    全部当谱音；导出 `writeMidi` 只写确认过的音（format 1、480 ticks/拍）。
+    MIDI 模式（`store.midiMode`）隐藏频谱（NoteRoll 的 `midiMode` prop）、播放强制 synth。
+  - 节拍器：`player.ts` 的 `setMetronome`，按 BPM / 拍号 / 首拍 + 当前倍率排"嗒"，
+    每小节第一拍重音；开关 `store.metronome` 落 `bp.metronome`。**音色直接用 noteDigger 的
+    mp3 采样**（`src/audio/beatClick.ts` 的 `BEAT_CLICK_URI`，来自它的 `CLICK_SOUND_BASE64`），
+    解码失败才退回振荡器。
+  - 合成音不再走引擎 `SynthBackend`，改用 `src/audio/pianoSynth.ts`：从 noteDigger 的
+    `lib/tinySynth.js` 移植的 GM 1 钢琴两层配方（正弦 + 三角波 FM）。noteDigger **没有 .sf2
+    采样库**，128 个 GM 音色都是 TinySynth 用振荡器合成的；别再去找 soundfont 文件。
 - **和弦分析**（用户 m02483，从 noteDigger 的 `plugins/chordEst.js` 复刻）：`src/analysis/chords.ts`
   是纯函数（频谱 → chroma → 169 个状态的和弦模板匹配 → HMM + Viterbi），在 worker 里以
   `kind: 'chords'` 跑，结果进 `store.chords`，**只画在表格底部那条带子里当提示，不进 jps、不进方案**。

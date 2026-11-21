@@ -14,7 +14,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keyColor, keyDisplayName } from './analysis/pitchNames'
 import { loadAudioFromPath, pickAndLoadAudio, type LoadedAudio } from './audio/decode'
-import { play, setAudioBuffer, setStemBuffers, setPlayTrack, makeAudioBuffer, stop, audition, setPlayRate as applyPlayRate, type PlayMode } from './audio/player'
+import { play, setAudioBuffer, setStemBuffers, setPlayTrack, makeAudioBuffer, stop, audition, setPlayRate as applyPlayRate, setMetronome as applyMetronome, type PlayMode } from './audio/player'
+import { parseMidi, writeMidi } from './model/midi'
 import {
   canSeparate,
   downloadModel,
@@ -136,6 +137,41 @@ function Icon({ name }: { name: string }) {
         <svg {...common}>
           <circle cx="8" cy="8" r="2.1" />
           <path d="M8 2.2v1.7M8 12.1v1.7M2.2 8h1.7M12.1 8h1.7M3.9 3.9l1.2 1.2M10.9 10.9l1.2 1.2M12.1 3.9l-1.2 1.2M5.1 10.9l-1.2 1.2" />
+        </svg>
+      )
+    case 'midi':
+      /* 一排钢琴键：MIDI 编辑器模式 */
+      return (
+        <svg {...common}>
+          <rect x="1.5" y="4" width="13" height="8" rx="1.4" />
+          <path d="M4 4v8M6.6 4v8M9.4 4v8M12 4v8" />
+          <path d="M5.1 4v4.4M8 4v4.4M10.8 4v4.4" strokeWidth={2.6} />
+        </svg>
+      )
+    case 'midiIn':
+      /* 文件 + 向下箭头：导入 MIDI */
+      return (
+        <svg {...common}>
+          <path d="M3 2.4h6l3.2 3.2v8H3z" />
+          <path d="M9 2.4v3.2h3.2" />
+          <path d="M7.6 7.6v4.2M5.9 9.9l1.7 1.9 1.7-1.9" />
+        </svg>
+      )
+    case 'midiOut':
+      /* 文件 + 向上箭头：导出 MIDI */
+      return (
+        <svg {...common}>
+          <path d="M3 2.4h6l3.2 3.2v8H3z" />
+          <path d="M9 2.4v3.2h3.2" />
+          <path d="M7.6 11.8V7.6M5.9 9.5l1.7-1.9 1.7 1.9" />
+        </svg>
+      )
+    case 'metro':
+      /* 节拍器：三角 + 摆杆 */
+      return (
+        <svg {...common}>
+          <path d="M8 2.4l4.6 11.2H3.4z" />
+          <path d="M8 11V5.6M8 5.6l2.8-1.8" />
         </svg>
       )
     case 'save':
@@ -540,6 +576,8 @@ export default function App() {
   const topMidi = useBp((s) => s.topMidi)
   const pageSec = useBp((s) => s.pageSec)
   const playRate = useBp((s) => s.playRate)
+  const metronome = useBp((s) => s.metronome)
+  const midiMode = useBp((s) => s.midiMode)
   const chords = useBp((s) => s.chords)
   const showChords = useBp((s) => s.showChords)
 
@@ -602,15 +640,21 @@ export default function App() {
       localStorage.setItem('bp.pageSec', String(pageSec))
       localStorage.setItem('bp.topMidi', String(topMidi))
       localStorage.setItem('bp.playRate', String(playRate))
+      localStorage.setItem('bp.metronome', metronome ? '1' : '0')
     } catch {
       /* 隐私模式禁用 localStorage：不影响用，只是记不住 */
     }
-  }, [rowH, pageSec, topMidi, playRate])
+  }, [rowH, pageSec, topMidi, playRate, metronome])
 
   /* 播放速度写进播放器（用户 m02483）：改滑条时正在播也立刻生效 */
   useEffect(() => {
     applyPlayRate(playRate)
   }, [playRate])
+
+  /* 节拍器参数（用户 m02483）：开关、BPM、拍号、首拍任一变都重排 */
+  useEffect(() => {
+    applyMetronome(metronome, bpm, beatsPerBar, firstBeatMs)
+  }, [metronome, bpm, beatsPerBar, firstBeatMs])
   /* 右侧栏（调性/参数/显示/源码）能不能收起来——宽屏看谱时把它关掉能多出一大块 */
   const [showSide, setShowSide] = useState(true)
   /* 调性分析那一组能不能折起来（调号选择挪进组里了） */
@@ -1425,7 +1469,8 @@ export default function App() {
     const st = set.getState()
     if (!st.analysis) return
     set.getState().setPlaying(true)
-    const ok = await play(fromMs, m, st.notes, st.durationMs, {
+    /* MIDI 编辑器模式下没有音频轨可放，强制用钢琴音色（用户 m02483） */
+    const ok = await play(fromMs, st.midiMode ? 'synth' : m, st.notes, st.durationMs, {
       onTick: (ms) => set.getState().setCurrentMs(ms),
       onEnd: () => set.getState().setPlaying(false),
     })
@@ -1702,6 +1747,96 @@ export default function App() {
     exportRef.current = () => void exportJps()
   }, [exportJps])
 
+  /* ---------- MIDI：导入 / 导出 / 编辑器模式（用户 m02483，参照 noteDigger） ---------- */
+  const midiFileRef = useRef<HTMLInputElement | null>(null)
+
+  const doImportMidi = useCallback(
+    async (file: File) => {
+      const st = set.getState()
+      try {
+        const parsed = parseMidi(await file.arrayBuffer())
+        if (!parsed.notes.length) {
+          st.setError('这个 MIDI 里没有音符')
+          return
+        }
+        stop()
+        setAudioBuffer(null)
+        const duration = Math.max(1000, parsed.durationMs + 1000)
+        st.setLoaded({ fileName: file.name, filePath: null, durationMs: duration })
+        st.setAnalysis({
+          durationMs: duration,
+          sampleRate: 44100,
+          spectrum: {
+            frames: 0,
+            hopMs: 20,
+            sampleRate: 44100,
+            data: new Float32Array(0),
+            frameRms: new Float32Array(0),
+          },
+          notes: parsed.notes,
+          bpm: parsed.bpm,
+          firstBeatMs: 0,
+          keyCandidates: [],
+        })
+        st.setBeatsPerBar(parsed.beatsPerBar)
+        st.setAllConfirmed(true)
+        st.setMidiMode(true)
+        st.setPlayMode('synth')
+        setNotice(`已导入 MIDI：${file.name}（${parsed.notes.length} 个音）`)
+      } catch (err) {
+        st.setError(`MIDI 读不了：${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
+    [set],
+  )
+
+  const openMidiImport = useCallback(() => {
+    const st = set.getState()
+    const pick = () => midiFileRef.current?.click()
+    if (!st.notes.length) {
+      pick()
+      return
+    }
+    setConfirmAsk({
+      title: '导入 MIDI？',
+      body: '会把当前谱替换成 MIDI 文件里的音符。替换前会留一份恢复快照（状态栏可恢复）。',
+      ok: '导入并替换',
+      run: () => {
+        rememberForRecovery('导入 MIDI')
+        pick()
+      },
+    })
+  }, [rememberForRecovery, set])
+
+  const exportMidi = useCallback(() => {
+    const st = set.getState()
+    const notes = st.notes.filter((n) => n.confirmed)
+    if (!notes.length) {
+      st.setError('还没有确认的音：MIDI 只导出确认过的音')
+      return
+    }
+    const data = writeMidi(notes, { bpm: st.bpm, beatsPerBar: st.beatsPerBar })
+    const blob = new Blob([data.buffer as ArrayBuffer], { type: 'audio/midi' })
+    const name = `${st.title || '爱扒谱导出'}.mid`
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = name
+    a.click()
+    URL.revokeObjectURL(a.href)
+    setNotice(`已导出 MIDI：${name}`)
+  }, [set])
+
+  const toggleMidiMode = useCallback(() => {
+    const st = set.getState()
+    const on = !st.midiMode
+    st.setMidiMode(on)
+    if (on) {
+      stop()
+      st.setPlayMode('synth')
+    }
+    setNotice(on ? 'MIDI 编辑器模式：隐藏频谱，用钢琴音色试听' : null)
+  }, [set])
+
   const candidates = analysis?.keyCandidates.slice(0, 6) ?? []
   const setLoop = useCallback(
     (r: LoopRange | null) => {
@@ -1780,6 +1915,37 @@ export default function App() {
             </button>
           </span>
 
+          {/* MIDI（用户 m02483，参照 noteDigger）：放在文件组后面，编辑器模式 / 导入 / 导出 */}
+          <span className="tgroup" title="MIDI">
+            <button
+              className={midiMode ? 'icon-btn on' : 'icon-btn'}
+              onClick={toggleMidiMode}
+              data-name="MIDI 编辑器"
+              title="切换 MIDI 编辑器模式：隐藏频谱、用钢琴音色试听，方便纯 MIDI 编辑"
+              aria-label="MIDI 编辑器"
+            >
+              <Icon name="midi" />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={openMidiImport}
+              data-name="导入 MIDI"
+              title="读入一个 .mid 文件，把音符铺到表格里（当前有谱会先确认并留恢复快照）"
+              aria-label="导入 MIDI"
+            >
+              <Icon name="midiIn" />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={exportMidi}
+              data-name="导出 MIDI"
+              title="把确认过的音导出成 .mid 文件"
+              aria-label="导出 MIDI"
+            >
+              <Icon name="midiOut" />
+            </button>
+          </span>
+
           {/* 谱音：全当谱音 / 全不选（分析、和弦、回到初稿已挪到右栏「分析」页） */}
           <span className="tgroup" title="谱音">
             <button
@@ -1840,6 +2006,32 @@ export default function App() {
         </div>
 
         <div className="tb-side tb-right">
+          {/* 播放节拍（用户 m02483）：按 BPM 打拍子，每小节第一拍重音 */}
+          <span className="tgroup" title="节拍">
+            <button
+              className={metronome ? 'icon-btn on' : 'icon-btn'}
+              onClick={() => useBp.getState().setMetronome(!metronome)}
+              data-name="播放节拍"
+              title="播放时按 BPM 打拍子（每小节第一拍重音），只在播放时响"
+              aria-label="播放节拍"
+            >
+              <Icon name="metro" />
+            </button>
+          </span>
+
+          {/* 导入 MIDI 用的隐藏文件框 */}
+          <input
+            ref={midiFileRef}
+            type="file"
+            accept=".mid,.midi,audio/midi"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              e.target.value = ''
+              if (f) void doImportMidi(f)
+            }}
+          />
+
           {/* 回开头 / 循环 / 跟随（自动翻页）：一组导航（用户 m02483 第 5 条）；
               按用户要求排到「绘制 / 选择」前面 */}
           <span className="tgroup" title="导航">
@@ -2045,6 +2237,7 @@ export default function App() {
             gain={gain}
             contrast={contrast}
             bandOnly={bandOnly}
+            midiMode={midiMode}
             selectedId={selectedId}
             onSelect={setSelectedId}
             onSeek={seek}

@@ -141,6 +141,17 @@
   `buildLinearStrip`（时值优先排版 + 按拍拉伸）→ `renderScoreToSvg`，宿主只按时间轴摆位置
   （左边留 66px 与键盘列同宽）。交出去的仍是 `store.jps`（过引擎 `parseJps` / `layoutScore` 两道闸门）。
 - 播放：**原音频 / 合成音**一键互换（Tab 热键），播放中切换从当前毫秒续上，用来比对扒得准不准。
+- **MIDI**（用户 m02483，参照 noteDigger）：顶栏文件组后面是 MIDI 组
+  （**MIDI 编辑器模式 / 导入 MIDI / 导出 MIDI**）。导入 `.mid` 会把音符铺到表格并进入 MIDI 模式
+  （当前有谱先确认、留恢复快照）；导出写标准 SMF（只导确认过的音，tempo / 拍号一起写）。
+  MIDI 编辑器模式隐藏频谱、播放强制走钢琴音色。
+- **播放节拍**（用户 m02483）：顶栏「节拍器」按钮，播放时按 BPM 打拍子（每小节第一拍重音），
+  跟着播放速度一起变快慢；开关记在 `bp.metronome`。**节拍音色直接用 noteDigger 的采样**
+  （`core/app_midiplayer.js` 里那条 mp3 data URI，`src/audio/beatClick.ts`），没解码好才退回振荡器。
+- **钢琴音色**（用户 m02483）：不再用引擎的 `SynthBackend`，改成从 noteDigger 的
+  `lib/tinySynth.js` 移植的 **GM 1「Acoustic Grand Piano」两层配方**（正弦主体 + 三角波 FM
+  做出击弦的金属感），见 `src/audio/pianoSynth.ts`。**noteDigger 没有加载 .sf2 / 采样音色库**，
+  它的 128 个 GM 音色全是 TinySynth（改自 g200kg/webaudio-tinysynth）用振荡器合成的。
 - 导出 `.jps`（只含**已确认**的音；桌面壳走"另存为 + 写后回读校验"，浏览器直接下载）。
 - 桌面壳支持**命令行带文件**：`ijipu-bp.exe 某曲.mp3` 直接打开（也是自动化验证的入口）。
 - **两种保存**（用户 m02483）：
@@ -155,7 +166,7 @@
   `public/icons/logo-bp.png`（显示名仍是「爱扒谱」，别把安装目录和显示名混了）。
 
 还没做：多声部/临时伴奏轨（现在仍纯单声部）、噪声与打击乐处理、
-AI 转录（basic-pitch）、SF2 音色库试听、`.jps.sync.json` 边车。
+AI 转录（basic-pitch）、`.jps.sync.json` 边车。
 
 ## 怎么跑
 
@@ -192,12 +203,12 @@ npm run tauri:build     # 桌面安装包（本机用 --no-bundle 只出 exe，�
 
 ```powershell
 npm run dev          # 另开一个终端，先把 5175 起起来
-npm run probe        # 168 条断言
+npm run probe        # 172 条断言
 npm run probe -- http://127.0.0.1:5175/ --shot .tmp-ui.png   # 顺便截一张图
 ```
 
-它现在验的（168 条）：界面挂载、绘制/选择模式切换、**悬浮提示（顶栏与右栏都在 320ms 内出现、名称在前、移开消失，有热键的带热键小牌）**、
-**右栏三个带图标的页签（调节页有调号/显示组且显示排在生成参数前、分析页有分析/和弦/回到初稿、设置页有关于）、顶栏顺序（导航 → 绘制/选择 → 原音/合成 → 音名/数字）、Ctrl+] 开关右栏、Ctrl+L / Alt+L / Alt+N / Alt+Z / Alt+S / F1**、
+它现在验的（172 条）：界面挂载、绘制/选择模式切换、**悬浮提示（顶栏与右栏都在 320ms 内出现、名称在前、移开消失，有热键的带热键小牌）**、
+**右栏三个带图标的页签（调节页有调号/显示组且显示排在生成参数前、分析页有分析/和弦/回到初稿、设置页有关于）、顶栏顺序（导航 → 绘制/选择 → 原音/合成 → 音名/数字）、MIDI 组在文件组后面、MIDI 模式与节拍开关、Ctrl+] 开关右栏、Ctrl+L / Alt+L / Alt+N / Alt+Z / Alt+S / F1**、
 **时间轴与键区锁的操作提示、音名牌跟着鼠标走且不带"点一下试听"**、
 **小三角字号、打开音频不再常亮**、**吸附下拉在右栏且能写回状态、音符表顶部没有说明栏**、自动翻页开关、重复区间在没画区间时是灰的、
 导出在没有确认音符时是灰的、灌一段假分析后**点空白画音 / 点音符切确认 / 选择模式不改状态 /
@@ -218,7 +229,7 @@ npm run probe -- http://127.0.0.1:5175/ --shot .tmp-ui.png   # 顺便截一张�
 ```
 src/analysis/   FFT、对数谱、音高名、单声部提取、BPM、调性、和弦识别（纯函数，Node 里可跑）
 src/jps/        量化（秒→拍）与生成 jps 文本
-src/audio/      解码（Web Audio）+ 播放（原音频 / 引擎 SynthBackend）
+src/audio/      解码（Web Audio）+ 播放（原音频 / 本地 PianoSynth 钢琴音色）
 src/ui/         音符表（键盘+热力图+音块）、简谱流线谱、时间轴映射
 src/model/      zustand 唯一状态源（分析结果 → 参数 → grid → jps）
 src/worker/     分析 Worker（不阻塞界面）

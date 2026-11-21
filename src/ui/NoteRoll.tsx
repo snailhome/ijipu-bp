@@ -39,6 +39,8 @@ interface Props {
   spectrum: Spectrum | null
   /** 只看人声区（G3–C6）：区外的格子压暗到 0.12，减少伴奏干扰 */
   bandOnly: boolean
+  /** MIDI 编辑器模式：不画频谱（纯 MIDI 编辑，用户 m02483） */
+  midiMode?: boolean
   durationMs: number
   bpm: number
   beatsPerBar: number
@@ -311,7 +313,7 @@ export function NoteRoll(props: Props) {
      *   —— 一格之内同一种颜色（阶梯式，不做线性插值），格子里取该格覆盖帧的最大值。
      *   一格不足 1 像素时才按整数倍合并（否则整曲铺满要画十几万个方块），
      *   平时就老老实实按 1/16 拍一格画，跟音符的最小格对齐。 */
-    if (spectrum && props.bpm > 0) {
+    if (spectrum && props.bpm > 0 && !props.midiMode) {
       const cellMin = beat / 16 /* 与最小绘制格一致：1/16 拍 */
       const w0 = xAt(props.firstBeatMs + cellMin) - xAt(props.firstBeatMs)
       const merge = Math.max(1, Math.ceil(1 / Math.max(0.01, w0)))
@@ -732,6 +734,7 @@ export function NoteRoll(props: Props) {
     props.pitchMode,
     props.chords,
     props.showChords,
+    props.midiMode,
     rowH,
     view,
     durationMs,
@@ -1100,9 +1103,11 @@ export function NoteRoll(props: Props) {
       </div>
       {notes.length === 0 && (
         <div className="pane-empty">
-          {spectrum
-            ? '还没有音符：切到「绘制」（反引号键）在格子里点几下，或在右侧勾上「分析后自动填入音符」'
-            : '还没有音符：先打开一段音频'}
+          {props.midiMode
+            ? '还没有音符：导入一个 MIDI，或切到「绘制」（反引号键）在格子里点几下'
+            : spectrum
+              ? '还没有音符：切到「绘制」（反引号键）在格子里点几下，或在右侧勾上「分析后自动填入音符」'
+              : '还没有音符：先打开一段音频'}
         </div>
       )}
       <HScroll

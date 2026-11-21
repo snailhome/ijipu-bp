@@ -118,6 +118,10 @@ interface State {
   topMidi: number
   /** 播放速度（0.5×–2×，只改快慢不改音高） */
   playRate: number
+  /** 播放时打拍子（用户 m02483） */
+  metronome: boolean
+  /** MIDI 编辑器模式：隐藏频谱、用钢琴音色试听，方便纯 MIDI 编辑（用户 m02483） */
+  midiMode: boolean
   /** 和弦识别结果（noteDigger 复刻；只做提示，不写进 jps） */
   chords: ChordSegment[]
   /** 要不要把和弦名画在表格底下 */
@@ -153,6 +157,8 @@ interface State {
   setRowH: (h: number) => void
   setTopMidi: (m: number) => void
   setPlayRate: (r: number) => void
+  setMetronome: (b: boolean) => void
+  setMidiMode: (b: boolean) => void
   setChords: (c: ChordSegment[]) => void
   setShowChords: (b: boolean) => void
   setLoop: (r: LoopRange | null) => void
@@ -300,6 +306,8 @@ export const useBp = create<State>((set, get) => ({
   rowH: Math.round(lsNum('bp.rowH', ROW_H_DEFAULT, ROW_H_MIN, ROW_H_MAX)),
   topMidi: Math.round(lsNum('bp.topMidi', TOP_MIDI_DEFAULT, MIDI_LOW, MIDI_HIGH)),
   playRate: lsNum('bp.playRate', PLAY_RATE_DEFAULT, PLAY_RATE_MIN, PLAY_RATE_MAX),
+  metronome: lsNum('bp.metronome', 0, 0, 1) === 1,
+  midiMode: false,
   chords: [],
   showChords: true,
   tonic: 0,
@@ -429,6 +437,8 @@ export const useBp = create<State>((set, get) => ({
     set({ topMidi: Math.round(Math.max(MIDI_LOW, Math.min(MIDI_HIGH, m))) }),
   setPlayRate: (r) =>
     set({ playRate: Math.round(Math.max(PLAY_RATE_MIN, Math.min(PLAY_RATE_MAX, r)) * 100) / 100 }),
+  setMetronome: (b) => set({ metronome: b }),
+  setMidiMode: (b) => set({ midiMode: b }),
   setChords: (c) => set({ chords: c }),
   setShowChords: (b) => set({ showChords: b }),
   setLoop: (r) => set({ loop: r }),

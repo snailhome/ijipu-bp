@@ -5,12 +5,13 @@
  * 不靠 rAF 累加（那样会漂）。切换模式时先停旧的，再按当前位置在新模式里续上，
  * 这就是界面上那个 A/B 按钮（热键 Tab）——用来比较扒得准不准。
  *
- * 合成音走 iJipu 引擎的 `SynthBackend`（Web Audio 泛音叠加，零依赖）。
- * 音色库（spessasynth + SF2）是下一阶段：接上后换 backend 即可，这里不用改。
+ * 合成音走本地 `PianoSynth`（从 noteDigger 的 TinySynth 移植的 GM 1 钢琴音色，
+ * 见 audio/pianoSynth.ts；noteDigger 也没有用 .sf2 采样库）。
  */
-import { createBackend, type AudioBackend } from '@engine'
 import type { RawNote } from '../model/types'
 import { midiToName } from '../analysis/pitchNames'
+import { PianoSynth } from './pianoSynth'
+import { loadBeatClick } from './beatClick'
 
 export type PlayMode = 'audio' | 'synth'
 /** 分轨后播放哪一轨：mix 用原混音，人声/伴奏用分离出来的那一轨 */
@@ -21,7 +22,7 @@ let buffer: AudioBuffer | null = null
 let stems: { vocals: AudioBuffer; instrumental: AudioBuffer } | null = null
 let track: PlayTrack = 'mix'
 let source: AudioBufferSourceNode | null = null
-let synth: AudioBackend | null = null
+let synth: PianoSynth | null = null
 let raf = 0
 let startAt = 0 // ctx 时间 / performance 时间 的基准
 let startMs = 0
@@ -33,6 +34,15 @@ let onEnd: (() => void) | null = null
 let rate = 1
 /** 合成音改倍率时要按当前位置重排，得留着这一轮的音符 */
 let playNotes: RawNote[] = []
+/* 节拍器（用户 m02483）：播放时按 BPM 打拍子，每小节第一拍重音 */
+let metronomeOn = false
+let metroBpm = 120
+let metroBeats = 4
+let metroFirst = 0
+let metroBeat = 0
+let metroTimer = 0
+/* 节拍器音色：noteDigger 的 mp3 采样；没解码好就先退回振荡器 */
+let beatBuffer: AudioBuffer | null = null
 /**
  * 每次 play/stop 都递增。异步 play() 里 `await ctx.resume()` / `await synth.ready()`
  * 之后要拿自己的号比对：号变了说明期间又被 stop/play 过一次，这一路就作废。
@@ -83,13 +93,12 @@ function activeBuffer(): AudioBuffer | null {
  * 和播放共用同一个 AudioContext，但用**独立的 backend 实例**：
  * 试听时正在播的曲子不该被打断（`synth.stop()` 会停掉正在播的合成音）。
  */
-let auditionBackend: AudioBackend | null = null
+let auditionSynth: PianoSynth | null = null
 export async function audition(midi: number, durMs = 320): Promise<void> {
   const c = audioCtx()
   await c.resume()
-  if (!auditionBackend) auditionBackend = createBackend('synth')
-  await auditionBackend.ready?.()
-  await auditionBackend.play(midiToName(midi), 0, durMs, 0.5)
+  if (!auditionSynth) auditionSynth = new PianoSynth(c)
+  auditionSynth.play(midiToName(midi), 0, durMs, 0.5)
 }
 
 /** 把播放头停在某处（拖动进度、点频谱都用它） */
@@ -100,6 +109,7 @@ export function seek(ms: number): void {
 
 export function stop(): void {
   runId++ // 让所有在途的 play()/tick 作废
+  stopMetronome()
   if (source) {
     try {
       source.stop()
@@ -121,6 +131,85 @@ export function stop(): void {
 
 export function isPlaying(): boolean {
   return raf !== 0
+}
+
+/* ---------- 节拍器：播放时按 BPM 打拍子（用户 m02483） ---------- */
+function stopMetronome(): void {
+  if (metroTimer) {
+    window.clearInterval(metroTimer)
+    metroTimer = 0
+  }
+}
+
+/** 在指定 AudioContext 时刻排一个"嗒"：优先用 noteDigger 的采样，没解码好就用振荡器 */
+function clickAt(at: number, accent: boolean): void {
+  const c = audioCtx()
+  const t = Math.max(c.currentTime, at)
+  if (beatBuffer) {
+    const s = c.createBufferSource()
+    s.buffer = beatBuffer
+    const g = c.createGain()
+    g.gain.value = accent ? 0.95 : 0.75
+    s.connect(g)
+    g.connect(c.destination)
+    s.start(t)
+    return
+  }
+  const o = c.createOscillator()
+  const g = c.createGain()
+  o.type = 'square'
+  o.frequency.value = accent ? 1568 : 1046
+  g.gain.setValueAtTime(0, t)
+  g.gain.linearRampToValueAtTime(accent ? 0.2 : 0.11, t + 0.003)
+  g.gain.exponentialRampToValueAtTime(0.0001, t + 0.07)
+  o.connect(g)
+  g.connect(c.destination)
+  o.start(t)
+  o.stop(t + 0.09)
+}
+
+/** 每 80ms 排一次未来 0.3 秒内的拍子：按 BPM/首拍算拍点，再按当前倍率换算成声卡时间 */
+function scheduleMetronome(): void {
+  if (!metronomeOn || !isPlaying()) return
+  const c = audioCtx()
+  const now = c.currentTime
+  const beatLen = 60000 / metroBpm
+  for (;;) {
+    const beatMs = metroFirst + metroBeat * beatLen
+    if (beatMs > endMs) break
+    const pos = currentMs()
+    const at = c.currentTime + (beatMs - pos) / (1000 * rate)
+    if (at > now + 0.3) break
+    if (at >= now - 0.02) clickAt(at, metroBeat % metroBeats === 0)
+    metroBeat++
+  }
+}
+
+function startMetronome(): void {
+  stopMetronome()
+  if (!metronomeOn) return
+  const beatLen = 60000 / metroBpm
+  metroBeat = Math.max(0, Math.ceil((currentMs() - metroFirst) / beatLen))
+  metroTimer = window.setInterval(scheduleMetronome, 80)
+  scheduleMetronome()
+}
+
+/**
+ * 开关节拍器（打开着播放时立即生效）。
+ * 改 BPM / 拍号 / 首拍时 App 会再调一次，按新参数重排。
+ */
+export function setMetronome(on: boolean, bpm: number, beatsPerBar: number, firstBeatMs: number): void {
+  metronomeOn = on
+  metroBpm = Math.max(20, Math.min(300, bpm || 120))
+  metroBeats = Math.max(1, Math.min(16, Math.round(beatsPerBar) || 4))
+  metroFirst = Math.max(0, firstBeatMs || 0)
+  if (on) {
+    void loadBeatClick(audioCtx()).then((b) => {
+      beatBuffer = b
+    })
+  }
+  if (on && isPlaying()) startMetronome()
+  else stopMetronome()
 }
 
 /** 当前播放位置（毫秒）：音频模式看 AudioContext 时钟，合成音看 performance.now */
@@ -147,6 +236,7 @@ export function setPlayRate(r: number): void {
     startMs = pos
     startAt = audioCtx().currentTime
     source.playbackRate.value = rate
+    if (metronomeOn) startMetronome()
     return
   }
   const hooks = { onTick: onTick ?? (() => {}), onEnd: onEnd ?? undefined }
@@ -203,8 +293,8 @@ export async function play(
       onEnd?.()
     }
   } else {
-    synth = createBackend('synth')
-    await synth.ready?.()
+    synth = new PianoSynth(ctxNow)
+    await synth.ready()
     if (my !== runId) return false
     startAt = performance.now() / 1000
     for (const n of notes) {
@@ -223,6 +313,7 @@ export async function play(
     if (pos >= endMs) {
       onTick(endMs)
       raf = 0
+      stopMetronome()
       if (my === runId) onEnd?.()
       return
     }
@@ -230,5 +321,6 @@ export async function play(
     raf = requestAnimationFrame(tick)
   }
   raf = requestAnimationFrame(tick)
+  if (metronomeOn) startMetronome()
   return true
 }
