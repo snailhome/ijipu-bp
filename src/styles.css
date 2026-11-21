@@ -152,6 +152,35 @@ button.primary {
   color: var(--accent);
 }
 
+/* 状态栏保存状态（用户 m02483）：橙点 = 有修改未保存，绿点 = 已保存 */
+.save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+}
+
+.save-state .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f0a020;
+  box-shadow: 0 0 6px rgba(240, 160, 32, 0.65);
+}
+
+.save-state.dirty {
+  color: #ffb353;
+}
+
+.save-state.clean {
+  color: #5fd598;
+}
+
+.save-state.clean .dot {
+  background: #38d17a;
+  box-shadow: 0 0 6px rgba(56, 209, 122, 0.55);
+}
+
 /* 顶栏悬浮提示（用户 m02483）：120ms 就出来，第一行按钮名称、第二行功能说明 */
 .tb-tip {
   position: fixed;
@@ -725,9 +754,10 @@ a.link {
 }
 
 .group-head .chev {
-  width: 10px;
-  font-size: 10px;
-  opacity: 0.8;
+  width: 16px;
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.85;
 }
 
 .group-body {
@@ -903,6 +933,17 @@ a.link {
   color: var(--fg-dim);
 }
 
+/* 保存按钮：有修改时描橙边（用户 m02483） */
+.toolbar .icon-btn.dirty {
+  border-color: #f0a020;
+  color: #ffb353;
+}
+
+.toolbar .icon-btn.dirty:hover:not(:disabled) {
+  border-color: #ffc670;
+  color: #ffd08a;
+}
+
 /* ===== 顶栏图标按钮（用户 m06232：顶栏尽量图标化，图标自己画成 noteDigger 那种线性风格） ===== */
 .toolbar .icon-btn {
   width: 30px;
@@ -1042,9 +1083,10 @@ select option:checked {
 }
 
 .sgroup > .group-head .chev {
-  width: 10px;
+  width: 16px;
   color: var(--fg-dim);
-  font-size: 10px;
+  font-size: 15px;
+  line-height: 1;
 }
 
 .sgroup > .group-head .group-title {

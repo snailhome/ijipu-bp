@@ -66,6 +66,21 @@ function clockOfIso(iso: string): string {
   return `${p(t.getHours())}:${p(t.getMinutes())}:${p(t.getSeconds())}`
 }
 
+/** 「有没有未保存的修改」的指纹（用户 m02483）：只看谱面内容（音符 + 生成参数）；
+ *  视野/循环/播放模式这些"导航"不算，免得滚一下表格、圈个练习区间就变橙。 */
+function contentSig(s: ReturnType<typeof useBp.getState>): string {
+  return JSON.stringify({
+    notes: s.notes,
+    bpm: s.bpm,
+    beatsPerBar: s.beatsPerBar,
+    pickupBeats: s.pickupBeats,
+    firstBeatMs: s.firstBeatMs,
+    tonic: s.tonic,
+    autoTonic: s.autoTonic,
+    title: s.title,
+  })
+}
+
 
 /** 顶栏图标：16×16 线性图标，自己画（用户 m06232：顶栏按钮尽量图标化，风格照 noteDigger） */
 function Icon({ name }: { name: string }) {
@@ -264,14 +279,15 @@ function Icon({ name }: { name: string }) {
 }
 
 /**
- * 顶栏的悬浮提示（用户 m02483）：比浏览器原生 title 快得多（120ms 就出来），
- * 内容固定是"按钮名称"在上、"功能说明"在下；名称取 aria-label，说明取 title。
+ * 悬浮提示（用户 m02483）：比浏览器原生 title 快得多（120ms 就出来），
+ * 内容固定是"控件名称"在上、"功能说明"在下；名称取 aria-label / data-name，说明取 title。
+ * 顶栏和左右侧栏的按钮/滑条/输入框都走同一套。
  *
- * 为什么不给每个按钮套一层组件：顶栏几十颗按钮，加包裹会改一堆 DOM 结构，而且
- * `.seg` 里 overflow:hidden 会把浮层裁掉。这里用事件委托 + 固定定位的顶层浮层，
- * 新加按钮只要照旧写 aria-label / title 就自动有提示。
+ * 为什么不给每个控件套一层组件：顶栏几十颗按钮、侧栏几十个控件，加包裹会改一堆 DOM 结构，
+ * 而且 `.seg` 里 overflow:hidden 会把浮层裁掉。这里用事件委托 + 固定定位的顶层浮层，
+ * 新加控件只要照旧写 aria-label / data-name / title 就自动有提示。
  */
-function ToolbarTip() {
+function HoverTip() {
   const [tip, setTip] = useState<{ name: string; desc: string; x: number; y: number; above: boolean } | null>(null)
   useEffect(() => {
     let target: HTMLElement | null = null
@@ -306,8 +322,10 @@ function ToolbarTip() {
       setTip({ name, desc: desc === name ? '' : desc, x, y: above ? r.top - 8 : r.bottom + 8, above })
     }
 
-    const hit = (e: Event) =>
-      (e.target as HTMLElement | null)?.closest?.('.toolbar button, .toolbar .icon-field') as HTMLElement | null
+    /* 顶栏按钮 + 左右侧栏的按钮 / 滑条 / 输入框 / 复选框；分组标题（小三角）不弹，免得挡视线 */
+    const TIP_SEL =
+      '.toolbar button, .toolbar .icon-field, .side button:not(.group-head), .side .field, .side .check'
+    const hit = (e: Event) => (e.target as HTMLElement | null)?.closest?.(TIP_SEL) as HTMLElement | null
 
     const onOver = (e: PointerEvent) => {
       const el = hit(e)
@@ -318,8 +336,10 @@ function ToolbarTip() {
     }
     const onOut = (e: PointerEvent) => {
       if (!target) return
-      /* 在按钮内部从 svg 挪到 button 也会触发 pointerout，那种不算离开 */
-      const to = (e.relatedTarget as HTMLElement | null)?.closest?.('.toolbar button, .toolbar .icon-field')
+      /* 在控件内部从 svg 挪到 button 也会触发 pointerout，那种不算离开 */
+      const to = (e.relatedTarget as HTMLElement | null)?.closest?.(
+        '.toolbar button, .toolbar .icon-field, .side button:not(.group-head), .side .field, .side .check',
+      )
       if (!to || to !== target) hide()
     }
     document.addEventListener('pointerover', onOver)
@@ -488,6 +508,10 @@ export default function App() {
   } | null>(null)
   /* 上一次危险操作前的快照（状态栏给一个「恢复」入口） */
   const [recovery, setRecovery] = useState<{ label: string; at: string; count: number } | null>(null)
+  /* 有修改未保存（用户 m02483）：橙点 / 绿点，保存按钮描橙边 */
+  const [dirty, setDirty] = useState(false)
+  /* 上次真正存盘时的内容指纹；null = 这首还没存过盘 */
+  const savedSigRef = useRef<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   /* 右侧栏两种视图：扒谱用的「编辑」与前期一次性的「设置」（用户 m06889） */
@@ -635,8 +659,15 @@ export default function App() {
           st.setBusy(null)
           /* 从缓存恢复就显示"缓存"，从 .bp.json 恢复就显示"已存"（用户 m02483） */
           const fromCache = restoreKindRef.current === 'cache'
-          if (fromCache) setCachedAt(restore.savedAt || null)
-          else setSavedAt(restore.savedAt || null)
+          if (fromCache) {
+            savedSigRef.current = null
+            setDirty(true) /* 缓存里的改动还没写进 .bp.json */
+            setCachedAt(restore.savedAt || null)
+          } else {
+            savedSigRef.current = contentSig(set.getState())
+            setDirty(false)
+            setSavedAt(restore.savedAt || null)
+          }
           setNotice(
             `已恢复${fromCache ? '本机缓存' : '方案'}：${restore.audio.name}${
               restore.savedAt ? `（上次存于 ${clockOfIso(restore.savedAt)}）` : ''
@@ -755,6 +786,9 @@ export default function App() {
       /* 换歌：上一首的"已存/缓存"时间先清掉，等恢复完再按来源补上 */
       setSavedAt(null)
       setCachedAt(null)
+      /* 换歌/重新装载：指纹作废（恢复成功时由 worker 回来的分支重新对齐） */
+      savedSigRef.current = null
+      setDirty(false)
       st.setLoaded({ fileName: loaded.name, filePath: loaded.path, durationMs: loaded.durationMs })
       setAudioBuffer(loaded.buffer)
       st.setBusy(COPY.analyzing)
@@ -822,6 +856,9 @@ export default function App() {
       localStorage.setItem('bp.lastProject', path)
       localStorage.setItem(CACHE_KEY, text)
     }
+    /* 真正存过盘了：指纹对齐、状态栏变绿 */
+    savedSigRef.current = contentSig(set.getState())
+    setDirty(false)
     setSavedAt(p.savedAt)
     return path
   }, [set])
@@ -1010,6 +1047,20 @@ export default function App() {
    * currentMs 故意不列进依赖：播放时它每帧都在变，不然会一直在写；
    * 暂停时（下面那个 effect）再补存一次，把播放头位置记下来。 */
   useEffect(() => {
+    /* 顺手更新"有没有未保存的修改"（用户 m02483）：跟上次真正存盘的指纹比 */
+    if (filePath) {
+      if (!busy && !pendingRestoreRef.current) {
+        const sig = contentSig(set.getState())
+        if (savedSigRef.current === null) {
+          savedSigRef.current = sig
+          setDirty(true) /* 这首还没真正存过盘 */
+        } else {
+          setDirty(sig !== savedSigRef.current)
+        }
+      }
+    } else {
+      setDirty(false)
+    }
     scheduleSave()
   }, [
     notes,
@@ -1035,7 +1086,9 @@ export default function App() {
     playMode,
     view,
     busy,
+    filePath,
     scheduleSave,
+    set,
   ])
 
   useEffect(() => {
@@ -1572,7 +1625,7 @@ export default function App() {
            * 打开音频 / 打开方案 / 保存方案 / 导出 —— 一个组里，都是"进出一个文件"。 */}
           <span className="tgroup" title="文件">
             <button
-              className="primary icon-btn"
+              className="icon-btn"
               onClick={() => void openAudio()}
               disabled={!!busy}
               title="选一段音频（wav / mp3 / m4a / flac…）打开，马上开始分析"
@@ -1590,7 +1643,7 @@ export default function App() {
               <Icon name="openProject" />
             </button>
             <button
-              className="icon-btn"
+              className={dirty ? 'icon-btn dirty' : 'icon-btn'}
               onClick={() => {
                 void saveProject()
                   .then((p) => setNotice(p ? `${COPY.projectSavedTip}：${p}` : null))
@@ -1599,7 +1652,7 @@ export default function App() {
                   })
               }}
               disabled={!filePath || !!busy}
-              title={COPY.projectSaveTip}
+              title={dirty ? '有修改未保存：点一下写进 .bp.json（Ctrl+S）' : COPY.projectSaveTip}
               aria-label={COPY.projectSave}
             >
               <Icon name="save" />
@@ -1943,7 +1996,11 @@ export default function App() {
             <div className="side-title">{COPY.settingsTitle}</div>
 
             <SideGroup title={COPY.settingsAnalyse}>
-              <label className="check" title="关着：分析只出频谱/节奏/调性，音符全靠自己在表格里点">
+              <label
+                className="check"
+                data-name="分析后自动填入音符"
+                title="关着：分析只出频谱/节奏/调性，音符全靠自己在表格里点；开着：分析完先垫一版灰色的参考音"
+              >
                 <input
                   type="checkbox"
                   checked={autoNotes}
@@ -1963,7 +2020,13 @@ export default function App() {
                       {sepOk && !sepOk.dll ? `；${COPY.stemsMissingDll}` : ''}
                     </div>
                     {dl === null ? (
-                      <button className="primary" onClick={() => void downloadSepModel()} disabled={!!busy}>
+                      <button
+                        className="primary"
+                        data-name="下载分离模型"
+                        title="应用内下载 htdemucs 人声分离模型（302 MB，走 hf-mirror，带进度）"
+                        onClick={() => void downloadSepModel()}
+                        disabled={!!busy}
+                      >
                         {COPY.stemsDownloadNow}
                       </button>
                     ) : (
@@ -1975,9 +2038,27 @@ export default function App() {
                       </div>
                     )}
                     <div className="row-gap">
-                      <button onClick={() => void openUrl(SEP_URL.mirrorPage)}>{COPY.stemsDownload}（镜像网页）</button>
-                      <button onClick={() => void openUrl(SEP_URL.officialPage)}>{COPY.stemsDownload}（HuggingFace）</button>
-                      <button onClick={() => void sepReady().then(setSepOk)}>{COPY.stemsRecheck}</button>
+                      <button
+                        data-name="下载分离模型"
+                        title="打开镜像网页手动下载同一个模型"
+                        onClick={() => void openUrl(SEP_URL.mirrorPage)}
+                      >
+                        {COPY.stemsDownload}（镜像网页）
+                      </button>
+                      <button
+                        data-name="下载分离模型"
+                        title="打开 HuggingFace 官方页面手动下载"
+                        onClick={() => void openUrl(SEP_URL.officialPage)}
+                      >
+                        {COPY.stemsDownload}（HuggingFace）
+                      </button>
+                      <button
+                        data-name={COPY.stemsRecheck}
+                        title="重新检查模型文件和 onnxruntime.dll 在不在"
+                        onClick={() => void sepReady().then(setSepOk)}
+                      >
+                        {COPY.stemsRecheck}
+                      </button>
                     </div>
                     <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>
                       {COPY.stemsInstallHint}
@@ -2011,7 +2092,12 @@ export default function App() {
             </button>
             {keyOpen && (
               <div className="group-body">
-                <label className="field" style={{ marginBottom: 8 }}>
+                <label
+                  className="field"
+                  data-name={COPY.keyLabel}
+                  title="改调号会重算表里的简谱数字，也决定 jps 的 D: 行"
+                  style={{ marginBottom: 8 }}
+                >
                   {COPY.keyLabel}
                   <select value={tonic} onChange={(e) => useBp.getState().setTonic(Number(e.target.value))}>
                     {KEY_CHOICES.map((k) => (
@@ -2051,7 +2137,12 @@ export default function App() {
 
           <SideGroup title={COPY.rhythmTitle}>
             <div className="row-gap">
-              <button onClick={() => useBp.getState().runRhythm()} disabled={!analysis}>
+              <button
+                data-name={COPY.rhythmBtn}
+                title="按当前谱重新找拍点与重拍，把 BPM / 首拍写回去"
+                onClick={() => useBp.getState().runRhythm()}
+                disabled={!analysis}
+              >
                 {COPY.rhythmBtn}
               </button>
               <span className="hint">
@@ -2061,7 +2152,12 @@ export default function App() {
               </span>
             </div>
             <div className="row-gap" style={{ marginTop: 8 }}>
-              <label className="field" style={{ flex: 1 }}>
+              <label
+                className="field"
+                data-name={COPY.harmonicLabel}
+                title="把泛音从谱里减掉（0 = 不动，1 = 全减）；松手后会用同一段音频重跑一遍"
+                style={{ flex: 1 }}
+              >
                 {COPY.harmonicLabel}
                 <input
                   type="range"
@@ -2098,14 +2194,37 @@ export default function App() {
                     {sepTarget ?? ''}
                   </div>
                   <div className="row-gap">
-                    <button onClick={() => void openUrl(SEP_URL.mirror)}>{COPY.stemsDownload}（镜像）</button>
-                    <button onClick={() => void openUrl(SEP_URL.officialPage)}>{COPY.stemsDownload}（HuggingFace）</button>
-                    <button onClick={() => void sepReady().then(setSepOk)}>{COPY.stemsRecheck}</button>
+                    <button
+                      data-name="下载分离模型"
+                      title="从 hf-mirror 下载 htdemucs 人声分离模型（302 MB）"
+                      onClick={() => void openUrl(SEP_URL.mirror)}
+                    >
+                      {COPY.stemsDownload}（镜像）
+                    </button>
+                    <button
+                      data-name="下载分离模型"
+                      title="从 HuggingFace 官方地址下载同一个模型"
+                      onClick={() => void openUrl(SEP_URL.officialPage)}
+                    >
+                      {COPY.stemsDownload}（HuggingFace）
+                    </button>
+                    <button
+                      data-name={COPY.stemsRecheck}
+                      title="重新检查模型文件和 onnxruntime.dll 在不在"
+                      onClick={() => void sepReady().then(setSepOk)}
+                    >
+                      {COPY.stemsRecheck}
+                    </button>
                   </div>
                 </div>
               ) : (
                 <div className="row-gap">
-                  <button onClick={() => void handleSeparate()} disabled={!analysis || !!busy}>
+                  <button
+                    data-name={stemsReady ? COPY.stemsAgain : COPY.stemsRun}
+                    title="跑 htdemucs 把这首歌拆成人声 / 伴奏（第一次要加载模型，约 10 秒）"
+                    onClick={() => void handleSeparate()}
+                    disabled={!analysis || !!busy}
+                  >
                     {stemsReady ? COPY.stemsAgain : COPY.stemsRun}
                   </button>
                   {stemsReady ? (
@@ -2114,6 +2233,8 @@ export default function App() {
                         <button
                           key={m}
                           className={stemMode === m ? 'on' : ''}
+                          data-name={m === 'mix' ? COPY.stemMix : m === 'vocals' ? COPY.stemVocals : COPY.stemInstrumental}
+                          title="热力图和播放都切到这一轨（只看/只听，不改音符）"
                           onClick={() => setStemMode(m)}
                         >
                           {m === 'mix' ? COPY.stemMix : m === 'vocals' ? COPY.stemVocals : COPY.stemInstrumental}
@@ -2130,7 +2251,7 @@ export default function App() {
 
           <SideGroup title={"生成参数"}>
             <div style={{ display: 'grid', gap: 6 }}>
-              <label className="field">
+              <label className="field" data-name="标题" title="导出的 .jps 里 B: 那一行，也是默认文件名">
                 标题
                 <input
                   style={{ width: 150 }}
@@ -2138,7 +2259,7 @@ export default function App() {
                   onChange={(e) => useBp.getState().setTitle(e.target.value)}
                 />
               </label>
-              <label className="field">
+              <label className="field" data-name={COPY.bpmLabel} title="每分钟拍数；改它会重算整张拍轴">
                 {COPY.bpmLabel}
                 <input
                   type="number"
@@ -2148,7 +2269,7 @@ export default function App() {
                   onChange={(e) => useBp.getState().setBpm(Number(e.target.value))}
                 />
               </label>
-              <label className="field">
+              <label className="field" data-name={COPY.meterLabel} title="每小节几拍（x/4）；弱起必须比它小">
                 {COPY.meterLabel}
                 <input
                   type="number"
@@ -2159,7 +2280,7 @@ export default function App() {
                 />
                 / 4
               </label>
-              <label className="field" title={COPY.pickupTip}>
+              <label className="field" data-name={COPY.pickupLabel} title={COPY.pickupTip}>
                 {COPY.pickupLabel}
                 <select
                   value={pickupBeats}
@@ -2172,7 +2293,7 @@ export default function App() {
                   ))}
                 </select>
               </label>
-              <label className="field">
+              <label className="field" data-name={COPY.firstBeatLabel} title="音频里第 1 拍的位置（毫秒）：谱面从这里开始对齐">
                 {COPY.firstBeatLabel}
                 <input
                   type="number"
@@ -2188,7 +2309,7 @@ export default function App() {
 
           <SideGroup title={"显示"}>
             <div style={{ display: 'grid', gap: 6 }}>
-              <label className="field" title="表格每半音一行的高度；左侧钢琴键和音符块跟着变（10–26px）">
+              <label className="field" data-name="行高" title="表格每半音一行的高度；左侧钢琴键和音符块跟着变（10–26px）">
                 行高
                 <input
                   type="range"
@@ -2206,7 +2327,7 @@ export default function App() {
                   {rowH}px
                 </span>
               </label>
-              <label className="field" title="时间轴上一屏显示多少秒（默认 20 秒，2–60 秒）；比整首还宽就整曲铺满">
+              <label className="field" data-name="屏宽" title="时间轴上一屏显示多少秒（默认 20 秒，2–60 秒）；比整首还宽就整曲铺满">
                 屏宽
                 <input
                   type="range"
@@ -2225,7 +2346,7 @@ export default function App() {
                   {Math.round(pageSliderSec)}s
                 </span>
               </label>
-              <label className="field">
+              <label className="field" data-name="倍率" title="热力图的亮度倍率：颜色深度 = 值 ^ 对比 × 倍率">
                 倍率
                 <input
                   type="range"
@@ -2240,7 +2361,7 @@ export default function App() {
                   {gain.toFixed(1)}
                 </span>
               </label>
-              <label className="field">
+              <label className="field" data-name="对比" title="热力图的对比（指数）：越大，强弱差距拉得越开">
                 对比
                 <input
                   type="range"
@@ -2255,11 +2376,11 @@ export default function App() {
                   {contrast.toFixed(2)}
                 </span>
               </label>
-              <label className="check" title="只把 G3–C6（约 196–1047Hz）的格子画亮：伴奏在低音区/高频的泛音会被压暗">
+              <label className="check" data-name="只看人声区" title="只把 G3–C6（约 196–1047Hz）的格子画亮：伴奏在低音区/高频的泛音会被压暗">
                 <input type="checkbox" checked={bandOnly} onChange={(e) => useBp.getState().setBandOnly(e.target.checked)} />
                 只看人声区（G3–C6）
               </label>
-              <label className="check" title={COPY.chordOnlyHint}>
+              <label className="check" data-name="显示和弦" title={COPY.chordOnlyHint}>
                 <input
                   type="checkbox"
                   checked={showChords}
@@ -2272,7 +2393,13 @@ export default function App() {
                 <div className="row-gap">
                   <span className="hint">
                     认出 {chords.filter((c) => c.name !== 'N').length} 段 ·{' '}
-                    <button onClick={() => useBp.getState().setChords([])}>清除</button>
+                    <button
+                      data-name="清除和弦"
+                      title="把表格底部那条和弦带清掉（不影响音符）"
+                      onClick={() => useBp.getState().setChords([])}
+                    >
+                      清除
+                    </button>
                   </span>
                 </div>
               )}
@@ -2360,8 +2487,8 @@ export default function App() {
         </div>
       )}
 
-      {/* 顶栏悬浮提示（用户 m02483）：快、名称在前、说明在后 */}
-      <ToolbarTip />
+      {/* 悬浮提示（用户 m02483）：快、名称在前、说明在后；顶栏和侧栏共用 */}
+      <HoverTip />
 
       <div className="status">
         <span>{fileName ?? COPY.empty}</span>
@@ -2369,6 +2496,20 @@ export default function App() {
         <span>
           {analysis ? `确认 ${confirmedCount} / 共 ${notes.length} 个音` : ''}
         </span>
+        {/* 保存状态（用户 m02483）：橙点 = 有修改没写进 .bp.json，绿点 = 已存 */}
+        {filePath && (
+          <span
+            className={dirty ? 'save-state dirty' : 'save-state clean'}
+            title={
+              dirty
+                ? '有修改还没写进 .bp.json：按 Ctrl+S 或点顶栏「保存方案」'
+                : '当前内容已经存进 .bp.json'
+            }
+          >
+            <i className="dot" />
+            {dirty ? '未保存' : '已保存'}
+          </span>
+        )}
         {/* 两种保存各显示一个时间（用户 m02483）：缓存 = 随时保存，已存 = 真的写了 .bp.json */}
         {cachedAt && <span className="hint" title={COPY.projectCacheTip}>缓存 {clockOfIso(cachedAt)}</span>}
         {savedAt && <span className="hint" title={COPY.projectSaveTip}>已存 {clockOfIso(savedAt)}</span>}

@@ -22,7 +22,7 @@ const argValue = (name) => {
   return i >= 0 ? argv[i + 1] : undefined
 }
 const positional = argv.filter((a, i) => !a.startsWith('--') && !(i > 0 && argv[i - 1].startsWith('--')))
-const URL_ = positional[0] ?? 'http://localhost:5175/'
+const URL_ = positional[0] ?? 'http://127.0.0.1:5175/'
 const PORT = 9333
 const CHROME =
   process.env.CHROME_PATH ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
@@ -240,6 +240,48 @@ try {
   await sleep(260)
   check('鼠标移开后提示立刻消失', await cdp.eval(`!document.querySelector('.tb-tip')`))
 
+  /* ── 右栏控件也有同样的提示（用户 m02483） ── */
+  const sideTipPos = await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.side button')].find((x) => (x.textContent || '').trim() === '节奏分析')
+    if (!b) return null
+    const r = b.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  })()`)
+  if (sideTipPos) {
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: sideTipPos.x, y: sideTipPos.y, button: 'none', buttons: 0 })
+  }
+  await sleep(320)
+  const sideTip = await cdp.eval(`(() => {
+    const el = document.querySelector('.tb-tip')
+    if (!el) return null
+    return { name: el.querySelector('.tb-tip-name')?.textContent || '', desc: el.querySelector('.tb-tip-desc')?.textContent || '' }
+  })()`)
+  check(
+    '右栏按钮悬浮也弹名称+说明的提示',
+    !!sideTip && sideTip.name === '节奏分析' && sideTip.desc.includes('拍点'),
+    JSON.stringify(sideTip),
+  )
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 420, button: 'none', buttons: 0 })
+  await sleep(200)
+
+  /* ── 小三角放大到约 2/3 文字高度、打开音频不再常高亮（用户 m02483） ── */
+  const chevInfo = await cdp.eval(`(() => {
+    const el = document.querySelector('.side .group-head .chev')
+    if (!el) return null
+    const head = el.closest('.group-head')
+    return { font: parseFloat(getComputedStyle(el).fontSize), headFont: parseFloat(getComputedStyle(head).fontSize) }
+  })()`)
+  check(
+    '分组小三角够大（字号 ≥ 文字字号）',
+    !!chevInfo && chevInfo.font >= 14 && chevInfo.font >= chevInfo.headFont,
+    JSON.stringify(chevInfo),
+  )
+  const openBtnCls = await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '打开音频')
+    return b ? b.className : null
+  })()`)
+  check('「打开音频」不再常高亮（去掉 primary）', !!openBtnCls && !openBtnCls.includes('primary'), String(openBtnCls))
+
   const segOn = (label) =>
     cdp.eval(`(() => {
       const b = [...document.querySelectorAll('.seg button')].find((x) => ((x.getAttribute('aria-label') || '') + ' ' + (x.textContent || '')).includes(${JSON.stringify(label)}))
@@ -384,6 +426,46 @@ try {
     ctrlSaved.saved && ctrlSaved.notes === ctrlSaved.stateNotes && ctrlSaved.statusSaved,
     JSON.stringify(ctrlSaved),
   )
+
+  /* ── 保存状态：改了内容 → 橙点 + 保存按钮橙边；存盘 → 绿点（用户 m02483） ── */
+  const readSaveState = () =>
+    cdp.eval(`(() => {
+      const dot = document.querySelector('.status .save-state')
+      const btn = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '保存方案')
+      return {
+        cls: dot ? dot.className : null,
+        text: dot ? (dot.textContent || '').trim() : null,
+        btn: btn ? btn.className : null,
+      }
+    })()`)
+  await cdp.eval(`(() => {
+    const bp = window.__bp
+    bp.setState({ filePath: '/tmp/dirty-test.wav', fileName: 'dirty-test.wav' })
+    bp.getState().setTitle('dirty test')
+  })()`)
+  await sleep(300)
+  const dirtyNow = await readSaveState()
+  check(
+    '有修改未保存：状态栏橙点「未保存」+ 保存按钮描橙边',
+    dirtyNow.cls?.includes('dirty') && dirtyNow.text === '未保存' && dirtyNow.btn?.includes('dirty'),
+    JSON.stringify(dirtyNow),
+  )
+  await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '保存方案')
+    if (b) b.click()
+  })()`)
+  await sleep(500)
+  const cleanNow = await readSaveState()
+  check(
+    '存盘后：状态栏绿点「已保存」、保存按钮不再描橙边',
+    cleanNow.cls?.includes('clean') && cleanNow.text === '已保存' && !cleanNow.btn?.includes('dirty'),
+    JSON.stringify(cleanNow),
+  )
+  await cdp.eval(`(() => {
+    window.__bp.getState().setTitle('爱扒谱导出')
+    window.__bp.setState({ filePath: null })
+  })()`)
+  await sleep(200)
 
   const savedProj = await cdp.eval(`(async () => {
     const bp = window.__bp
