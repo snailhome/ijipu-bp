@@ -433,31 +433,6 @@ button.primary {
   pointer-events: none;
 }
 
-.pane-head {
-  flex: none;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  padding: 5px 12px;
-  font-size: 11px;
-  color: var(--fg-dim);
-  border-bottom: 1px solid var(--line);
-  background: var(--panel-2);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pane-head > span:first-child {
-  color: var(--fg);
-  font-weight: 600;
-}
-
-.pane-head .dim {
-  color: var(--fg-dim);
-  opacity: 0.85;
-}
-
 .playhead {
   position: absolute;
   top: 0;
@@ -999,27 +974,6 @@ a.link {
   align-items: center;
   justify-content: center;
   padding: 0;
-}
-
-/* 吸附：磁铁图标 + 下拉，视觉上当一个按钮用 */
-.toolbar .icon-field {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 4px;
-  height: 26px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel-2);
-  color: var(--fg-dim);
-}
-
-.toolbar .icon-field select {
-  border: 0;
-  background: transparent;
-  padding: 0 2px;
-  height: 24px;
-  color: var(--fg);
 }
 
 /* 工具条分组之间的细竖线 */

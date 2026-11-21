@@ -282,6 +282,31 @@ try {
   })()`)
   check('「打开音频」不再常高亮（去掉 primary）', !!openBtnCls && !openBtnCls.includes('primary'), String(openBtnCls))
 
+  /* ── 吸附下拉从顶栏挪到右栏（用户 m02483） ── */
+  const snapPlace = await cdp.eval(`(() => {
+    const sideSel = [...document.querySelectorAll('.side select')].find((s) => [...s.options].some((o) => o.value === 'grid'))
+    return {
+      inBar: !!document.querySelector('.toolbar select'),
+      side: !!sideSel,
+      value: sideSel ? sideSel.value : null,
+    }
+  })()`)
+  check('吸附下拉在右栏、顶栏不再有它', snapPlace.side && !snapPlace.inBar, JSON.stringify(snapPlace))
+  const snapChanged = await cdp.eval(`(() => {
+    const sel = [...document.querySelectorAll('.side select')].find((s) => [...s.options].some((o) => o.value === 'grid'))
+    if (!sel) return null
+    const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set
+    setter.call(sel, 'beat')
+    sel.dispatchEvent(new Event('change', { bubbles: true }))
+    return window.__bp.getState().snap
+  })()`)
+  check('右栏改吸附能写回状态', snapChanged === 'beat', String(snapChanged))
+  await cdp.eval(`window.__bp.getState().setSnap('grid')`)
+  await sleep(120)
+
+  /* ── 画布上方那条"音符表 + 操作说明"已撤掉（用户 m02483：省空间） ── */
+  check('音符表顶部不再占一条说明栏', await cdp.eval(`!document.querySelector('.pane-head')`))
+
   const segOn = (label) =>
     cdp.eval(`(() => {
       const b = [...document.querySelectorAll('.seg button')].find((x) => ((x.getAttribute('aria-label') || '') + ' ' + (x.textContent || '')).includes(${JSON.stringify(label)}))
@@ -1265,8 +1290,12 @@ try {
     const r = cv.getBoundingClientRect()
     const ROW_H = (window.__bpRoll && window.__bpRoll.rowH) || 14, KEY_W = 66
     const rulerH = typeof m.rulerH === 'number' ? m.rulerH : 36
-    /* 挑中间那一行，避开时间尺 */
-    const row = Math.floor((m.rows || 20) / 2)
+    const BLACK = new Set([1, 3, 6, 8, 10])
+    /* 挑中间附近的白键行：黑键行的左半边本来就不会变色，拿它验不出来 */
+    let row = Math.floor((m.rows || 20) / 2)
+    for (let i = row; i < (m.rows || 20); i++) {
+      if (!BLACK.has((((m.top - i) % 12) + 12) % 12)) { row = i; break }
+    }
     return { x: r.x + KEY_W * 0.35, y: r.y + rulerH + row * ROW_H + ROW_H / 2, wx: KEY_W * 0.35, wy: rulerH + row * ROW_H + ROW_H / 2 }
   })()`)
   const keyPixel = `(() => {

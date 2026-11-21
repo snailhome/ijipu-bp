@@ -1028,11 +1028,6 @@ export function NoteRoll(props: Props) {
     [altHeld, mode, noteAt, props],
   )
 
-  const hint =
-    mode === 'draw'
-      ? '绘制：点空格子画音（按住拖长）、点已有的音=确认/取消确认、拖音符=移音高/位置、拖右边缘改时值、右键删'
-      : '选择：点一下试听；拖音符=移音高/位置、拖右边缘改时值（画音 / 删音 / 确认要切绘制）'
-
   /* 时间尺 / 键区锁的悬浮提示（用户 m02483）：画布是整块 canvas，没法像按钮那样挂 title，
    * 就在 pointermove 里按命中区域算一句"这里能干什么"，跟鼠标一起走。 */
   const hoverTip = useMemo(() => {
@@ -1051,11 +1046,8 @@ export function NoteRoll(props: Props) {
 
   return (
     <div className="pane roll" ref={wrapRef}>
-      {/* 说明放画布上方一条窄头里，不压时间尺（时间尺上只留刻度和第几小节） */}
-      <div className="pane-head">
-        <span>音符表</span>
-        <span className="dim">{hint}</span>
-      </div>
+      {/* 顶上那条"音符表 + 操作说明"占一行高度、信息又跟帮助弹层重复，用户 m02483 让撤掉，
+          把纵向空间全留给表格（操作说明见帮助弹层 / 各处的悬浮提示） */}
       <div className="roll-host" ref={hostRef}>
       <canvas
         ref={canvasRef}

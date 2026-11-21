@@ -323,8 +323,7 @@ function HoverTip() {
     }
 
     /* 顶栏按钮 + 左右侧栏的按钮 / 滑条 / 输入框 / 复选框；分组标题（小三角）不弹，免得挡视线 */
-    const TIP_SEL =
-      '.toolbar button, .toolbar .icon-field, .side button:not(.group-head), .side .field, .side .check'
+    const TIP_SEL = '.toolbar button, .side button:not(.group-head), .side .field, .side .check'
     const hit = (e: Event) => (e.target as HTMLElement | null)?.closest?.(TIP_SEL) as HTMLElement | null
 
     const onOver = (e: PointerEvent) => {
@@ -338,7 +337,7 @@ function HoverTip() {
       if (!target) return
       /* 在控件内部从 svg 挪到 button 也会触发 pointerout，那种不算离开 */
       const to = (e.relatedTarget as HTMLElement | null)?.closest?.(
-        '.toolbar button, .toolbar .icon-field, .side button:not(.group-head), .side .field, .side .check',
+        '.toolbar button, .side button:not(.group-head), .side .field, .side .check',
       )
       if (!to || to !== target) hide()
     }
@@ -1755,17 +1754,6 @@ export default function App() {
             </button>
           </div>
 
-          <label className="field icon-field" data-name="吸附" title="画音 / 拖音时吸附到哪一格">
-            <Icon name="magnet" />
-            <select value={snap} onChange={(e) => useBp.getState().setSnap(e.target.value as SnapMode)}>
-              {SNAP_CHOICES.map((c) => (
-                <option key={c.v} value={c.v}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
           {/* 音名 / 数字 */}
           <div className="seg" title="表格里写字用音名还是简谱数字（换调号数字跟着变）">
             <button
@@ -2085,6 +2073,23 @@ export default function App() {
           className={showSide ? "side" : "side off"}
           style={{ display: sideView === 'settings' ? 'none' : undefined, width: sideW }}
         >
+          {/* 吸附：从顶栏挪到右栏（用户 m02483：顶栏省点地方），位置放在编辑页最上面 */}
+          <label
+            className="field"
+            data-name="吸附"
+            title="画音 / 拖音时吸附到哪一格（默认 1/16 拍）"
+            style={{ marginBottom: 10 }}
+          >
+            吸附
+            <select value={snap} onChange={(e) => useBp.getState().setSnap(e.target.value as SnapMode)}>
+              {SNAP_CHOICES.map((c) => (
+                <option key={c.v} value={c.v}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
           <div>
             <button className="group-head" onClick={() => setKeyOpen((v) => !v)} aria-expanded={keyOpen}>
               <span className="chev">{keyOpen ? '▾' : '▸'}</span>
