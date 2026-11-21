@@ -273,12 +273,40 @@ try {
   await sleep(320)
   const rateTip = await cdp.eval(`(() => {
     const el = document.querySelector('.tb-tip')
-    return el ? { name: el.querySelector('.tb-tip-name')?.textContent || '', desc: el.querySelector('.tb-tip-desc')?.textContent || '' } : null
+    if (!el) return null
+    const k = el.querySelector('.tb-tip-name .tip-key')
+    return {
+      name: el.querySelector('.tb-tip-name')?.textContent || '',
+      key: k ? k.textContent : '',
+      desc: el.querySelector('.tb-tip-desc')?.textContent || '',
+    }
   })()`)
   check(
-    '播放速度滑条悬浮出名称+说明',
-    !!rateTip && rateTip.name === '播放速度' && (rateTip.desc || '').includes('音高'),
+    '播放速度滑条悬浮出名称、热键和说明',
+    !!rateTip && rateTip.name.startsWith('播放速度') && rateTip.key === 'Alt+S' && (rateTip.desc || '').includes('音高'),
     JSON.stringify(rateTip),
+  )
+  /* 有热键的控件：名称后面跟一枚热键小牌（用户 m02483） */
+  const keyTipPos = await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '收起右侧栏')
+    if (!b) return null
+    const r = b.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  })()`)
+  if (keyTipPos) {
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: keyTipPos.x, y: keyTipPos.y, button: 'none', buttons: 0 })
+  }
+  await sleep(320)
+  const keyTip = await cdp.eval(`(() => {
+    const el = document.querySelector('.tb-tip')
+    if (!el) return null
+    const k = el.querySelector('.tb-tip-name .tip-key')
+    return { name: el.querySelector('.tb-tip-name')?.textContent || '', key: k ? k.textContent : '' }
+  })()`)
+  check(
+    '提示名称后面显示热键（侧栏开关 → Ctrl+]）',
+    !!keyTip && keyTip.key === 'Ctrl+]',
+    JSON.stringify(keyTip),
   )
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 420, button: 'none', buttons: 0 })
   await sleep(200)
@@ -1249,13 +1277,34 @@ try {
   await sleep(220)
   const lockTip = await cdp.eval(`(() => {
     const el = document.querySelector('.canvas-tip')
-    return el ? { name: el.querySelector('strong')?.textContent || '', desc: el.querySelector('span')?.textContent || '' } : null
+    if (!el) return null
+    const k = el.querySelector('.tip-key')
+    return {
+      name: el.querySelector('strong')?.textContent || '',
+      key: k ? k.textContent : '',
+      desc: el.querySelector('span')?.textContent || '',
+    }
   })()`)
   check(
-    '键区锁上有操作提示（锁住后滚轮改平移）',
-    !!lockTip && lockTip.name.includes('键区锁') && lockTip.desc.includes('滚轮'),
+    '键区锁上有操作提示（锁住后滚轮改平移，带 Alt+L）',
+    !!lockTip && lockTip.name.includes('键区锁') && lockTip.desc.includes('滚轮') && lockTip.key === 'Alt+L',
     JSON.stringify(lockTip),
   )
+
+  /* Alt+L 锁定 / 解锁键盘；Alt+S 把焦点移到播放速度滑条（用户 m02483） */
+  const lockBefore = await cdp.eval(`window.__bp.getState().lockPitch`)
+  await cdp.pressKey('KeyL', 'l', 76, 1)
+  await sleep(200)
+  const lockAfter = await cdp.eval(`window.__bp.getState().lockPitch`)
+  check('Alt+L 锁定 / 解锁钢琴键盘', lockAfter !== lockBefore, `${lockBefore} → ${lockAfter}`)
+  await cdp.pressKey('KeyL', 'l', 76, 1)
+  await sleep(150)
+  await cdp.pressKey('KeyS', 's', 83, 1)
+  await sleep(250)
+  const altSFocus = await cdp.eval(
+    `!!document.activeElement && document.activeElement.classList.contains('rate-slider')`,
+  )
+  check('Alt+S 把焦点移到播放速度滑条', altSFocus === true, String(altSFocus))
 
   /* ── 音名·简谱信息牌跟着鼠标走，且不再带"（点一下试听）" ── */
   const badgeAt = (fx, fy) =>
@@ -1833,6 +1882,21 @@ try {
     `宽 ${tb.playW}、偏移 ${tb.playDx.toFixed(1)}px`,
   )
   check('播放速度滑条在播放键右边', tb.rateRightOfPlay, JSON.stringify(tb))
+  const fileKeys = await cdp.eval(`(() => {
+    const byLabel = (l) => [...document.querySelectorAll('.toolbar button')].find((b) => (b.getAttribute('aria-label') || '') === l)
+    return {
+      open: byLabel('打开音频')?.getAttribute('data-key') || null,
+      project: byLabel('打开方案')?.getAttribute('data-key') || null,
+      save: byLabel('保存方案')?.getAttribute('data-key') || null,
+      exp: byLabel('导出 .jps')?.getAttribute('data-key') || null,
+    }
+  })()`)
+  check(
+    '文件按钮带热键（Ctrl+O / Ctrl+J / Ctrl+S / Ctrl+E）',
+    fileKeys.open === 'Ctrl+O' && fileKeys.project === 'Ctrl+J' &&
+      fileKeys.save === 'Ctrl+S' && fileKeys.exp === 'Ctrl+E',
+    JSON.stringify(fileKeys),
+  )
   check(
     '右侧两颗图标按钮（帮助 + 侧栏）不画外框线',
     tb.utilCount === 2 && tb.utilBordered === 0 && tb.utilFilled === 0,

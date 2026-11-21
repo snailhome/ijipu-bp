@@ -1035,11 +1035,13 @@ export function NoteRoll(props: Props) {
     if (hoverX >= KEY_W - 22 && hoverX <= KEY_W - 2) {
       return {
         name: props.lockPitch ? '键区锁（已锁住）' : '键区锁（未锁）',
+        key: 'Alt+L',
         desc: '锁定后滚轮改成左右平移，不再上下换音区；点一下切换',
       }
     }
     return {
       name: '时间轴',
+      key: '',
       desc: '按住往右拖：圈出播放区间（自动循环）；点一下：挪播放头并取消区间',
     }
   }, [hoverX, hoverY, props.lockPitch])
@@ -1088,7 +1090,10 @@ export function NoteRoll(props: Props) {
             top: Math.max(4, Math.min(metrics.h - 70, hoverY + 16)),
           }}
         >
-          <strong>{hoverTip.name}</strong>
+          <strong>
+            {hoverTip.name}
+            {hoverTip.key && <kbd className="tip-key">{hoverTip.key}</kbd>}
+          </strong>
           <span>{hoverTip.desc}</span>
         </div>
       )}

@@ -316,7 +316,7 @@ function Icon({ name }: { name: string }) {
  * 新加控件只要照旧写 aria-label / data-name / title 就自动有提示。
  */
 function HoverTip() {
-  const [tip, setTip] = useState<{ name: string; desc: string; x: number; y: number; above: boolean } | null>(null)
+  const [tip, setTip] = useState<{ name: string; key: string; desc: string; x: number; y: number; above: boolean } | null>(null)
   useEffect(() => {
     let target: HTMLElement | null = null
     let timer = 0
@@ -338,6 +338,7 @@ function HoverTip() {
     const show = () => {
       if (!target) return
       const name = (target.getAttribute('aria-label') || target.getAttribute('data-name') || '').trim()
+      const key = (target.getAttribute('data-key') || '').trim()
       const desc = (target.getAttribute('title') || target.dataset.tip || '').trim()
       if (savedTitle === null) {
         savedTitle = target.getAttribute('title')
@@ -347,7 +348,7 @@ function HoverTip() {
       const r = target.getBoundingClientRect()
       const above = r.top > 96
       const x = Math.max(150, Math.min(window.innerWidth - 150, r.left + r.width / 2))
-      setTip({ name, desc: desc === name ? '' : desc, x, y: above ? r.top - 8 : r.bottom + 8, above })
+      setTip({ name, key, desc: desc === name ? '' : desc, x, y: above ? r.top - 8 : r.bottom + 8, above })
     }
 
     /* 顶栏按钮 + 左右侧栏的按钮 / 滑条 / 输入框 / 复选框；分组标题（小三角）不弹，免得挡视线 */
@@ -389,13 +390,27 @@ function HoverTip() {
   if (!tip) return null
   return (
     <div className={tip.above ? 'tb-tip above' : 'tb-tip'} style={{ left: tip.x, top: tip.y }} role="tooltip">
-      {tip.name && <strong className="tb-tip-name">{tip.name}</strong>}
+      {tip.name && (
+        <strong className="tb-tip-name">
+          {tip.name}
+          {tip.key && <kbd className="tip-key">{tip.key}</kbd>}
+        </strong>
+      )}
       {tip.desc && <span className="tb-tip-desc">{tip.desc}</span>}
     </div>
   )
 }
 /** 帮助面板的内容（用户 m05893：顶栏键盘图标点开就能查按键 / 快捷键 / 鼠标操作） */
 const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
+  {
+    title: '文件',
+    rows: [
+      ['Ctrl + O', '打开音频'],
+      ['Ctrl + J', '打开方案'],
+      ['Ctrl + S', '保存方案（真正写 .bp.json）'],
+      ['Ctrl + E', '导出 .jps（只导确认过的音）'],
+    ],
+  },
   {
     title: '播放',
     rows: [
@@ -433,6 +448,8 @@ const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
       ['拖区间两端握柄', '改区间起止'],
       ['右栏滑条上滚轮', '微调这条滑条（按住 Shift 五倍步长）'],
       ['Ctrl + ]', '收起 / 展开右侧栏'],
+      ['Alt + L', '锁定 / 解锁钢琴键盘的上下换音区'],
+      ['Alt + S', '把焦点移到播放速度滑条（再用 ← → 调）'],
       ['点钢琴键', '试听该音高'],
     ],
   },
@@ -610,6 +627,8 @@ export default function App() {
   const restoreKindRef = useRef<'cache' | 'file'>('file')
   /* 自动（缓存）保存的节流定时器（同一时间只挂一个，连续拖动最多每 1.2 秒写一次） */
   const saveTimerRef = useRef<number | null>(null)
+  /* 导出函数定义在热键 effect 后面（Ctrl+E 要用），用 ref 间接拿最新的一份 */
+  const exportRef = useRef<(() => void) | null>(null)
 
   /* 所有滑条：鼠标悬浮在上面滚轮就能调，而且那一刻不滚动面板（用户 m05454、m02483）。
    * React 的 onWheel 是 passive 的，preventDefault 拦不住滚动，所以这里挂原生监听。
@@ -1545,7 +1564,13 @@ export default function App() {
         tag === 'TEXTAREA' ||
         tag === 'SELECT' ||
         (tag === 'INPUT' && !['range', 'checkbox', 'radio', 'button', 'submit'].includes((el as HTMLInputElement).type))
-      if (typing) return
+      if (typing && !(e.code === 'KeyS' && e.altKey)) return
+      /* Alt+S = 把焦点移到播放速度滑条（用户 m02483）；在输入框里也让它生效 */
+      if (e.code === 'KeyS' && e.altKey) {
+        e.preventDefault()
+        document.querySelector<HTMLInputElement>('.rate-slider')?.focus()
+        return
+      }
       const st = set.getState()
       if (e.code === 'Space') {
         /* 关键：按钮/滑条上有焦点时，空格还会触发它们自己的激活（按钮 = 再来一次 click），
@@ -1562,7 +1587,13 @@ export default function App() {
         e.preventDefault()
         st.setMode(st.mode === 'draw' ? 'select' : 'draw')
       } else if (e.code === 'KeyL') {
-        st.setLoopOn(!st.loopOn)
+        if (e.altKey) {
+          /* Alt+L = 锁定 / 解锁钢琴键盘的上下换音区（用户 m02483） */
+          e.preventDefault()
+          st.setLockPitch(!st.lockPitch)
+        } else {
+          st.setLoopOn(!st.loopOn)
+        }
       } else if (e.code === 'Delete' || e.code === 'Backspace') {
         /* 删音只在绘制模式（用户 m02483）；选择模式只挪不改数量 */
         if (selectedId && st.mode === 'draw') {
@@ -1599,6 +1630,18 @@ export default function App() {
       } else if (e.code === 'KeyA' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
         st.setAllConfirmed(true)
+      } else if (e.code === 'KeyO' && (e.ctrlKey || e.metaKey)) {
+        /* Ctrl+O = 打开音频（用户 m02483） */
+        e.preventDefault()
+        if (!st.busy) void openAudio()
+      } else if (e.code === 'KeyJ' && (e.ctrlKey || e.metaKey)) {
+        /* Ctrl+J = 打开方案（用户 m02483） */
+        e.preventDefault()
+        if (!st.busy) void openProject()
+      } else if (e.code === 'KeyE' && (e.ctrlKey || e.metaKey)) {
+        /* Ctrl+E = 导出 .jps（用户 m02483）；exportJps 定义在下面，用 ref 拿最新的 */
+        e.preventDefault()
+        if (st.notes.some((n) => n.confirmed)) exportRef.current?.()
       } else if (e.code === 'KeyS' && (e.ctrlKey || e.metaKey)) {
         /* Ctrl+S = 真正保存（写 .bp.json）；平时那 1.2 秒一次只是本机缓存（用户 m02483） */
         e.preventDefault()
@@ -1619,7 +1662,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey, true) // 捕获阶段：先于控件自己的默认行为
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [goStart, jumpBar, removeNote, saveProject, selectedId, set, switchMode, togglePlay])
+  }, [goStart, jumpBar, openAudio, openProject, removeNote, saveProject, selectedId, set, switchMode, togglePlay])
 
   /* ---------- 导出 ---------- */
   const exportJps = useCallback(async () => {
@@ -1638,6 +1681,11 @@ export default function App() {
     URL.revokeObjectURL(a.href)
     setNotice(`已下载：${name}`)
   }, [set])
+
+  /* Ctrl+E（热键 effect 里）要调导出；ref 里始终是最新这份 */
+  useEffect(() => {
+    exportRef.current = () => void exportJps()
+  }, [exportJps])
 
   const candidates = analysis?.keyCandidates.slice(0, 6) ?? []
   const setLoop = useCallback(
@@ -1675,6 +1723,7 @@ export default function App() {
               disabled={!!busy}
               title="选一段音频（wav / mp3 / m4a / flac…）打开，马上开始分析"
               aria-label={COPY.openAudio}
+              data-key="Ctrl+O"
             >
               <Icon name="folder" />
             </button>
@@ -1684,6 +1733,7 @@ export default function App() {
               disabled={!!busy}
               title={COPY.projectOpenTip}
               aria-label={COPY.projectOpen}
+              data-key="Ctrl+J"
             >
               <Icon name="openProject" />
             </button>
@@ -1699,6 +1749,7 @@ export default function App() {
               disabled={!filePath || !!busy}
               title={dirty ? '有修改未保存：点一下写进 .bp.json（Ctrl+S）' : COPY.projectSaveTip}
               aria-label={COPY.projectSave}
+              data-key="Ctrl+S"
             >
               <Icon name="save" />
             </button>
@@ -1708,6 +1759,7 @@ export default function App() {
               disabled={confirmedCount === 0}
               title="只导出确认过的音，存成 .jps 文本"
               aria-label={COPY.exportJps}
+              data-key="Ctrl+E"
             >
               <Icon name="export" />
             </button>
@@ -1744,6 +1796,7 @@ export default function App() {
               disabled={notes.length === 0 ? !analysis || !!busy : false}
               title={notes.length === 0 ? COPY.confirmAllEmptyTip : COPY.confirmAllTip}
               aria-label={COPY.confirmAll}
+              data-key="Ctrl+A"
             >
               <Icon name="checkAll" />
             </button>
@@ -1775,8 +1828,9 @@ export default function App() {
             className={playing ? 'play-btn on' : 'play-btn'}
             onClick={togglePlay}
             disabled={!analysis}
-            title={playing ? '暂停（空格）' : '播放（空格）'}
+            title={playing ? '暂停' : '播放'}
             aria-label={playing ? COPY.pause : COPY.play}
+            data-key="空格"
           >
             <Icon name={playing ? 'pause' : 'play'} />
           </button>
@@ -1791,6 +1845,7 @@ export default function App() {
             data-name="播放速度"
             title={`只改播放快慢，不改音高；当前 ${playRate.toFixed(2)}×（0.5×–2×）`}
             aria-label="播放速度"
+            data-key="Alt+S"
             style={fillStyle(((playRate - PLAY_RATE_MIN) / (PLAY_RATE_MAX - PLAY_RATE_MIN)) * 100)}
           />
         </div>
@@ -1802,6 +1857,7 @@ export default function App() {
               className={mode === 'draw' ? 'on' : ''}
               onClick={() => useBp.getState().setMode('draw')}
               aria-label={COPY.modeDraw}
+              data-key="`"
               title={COPY.modeDrawTip}
             >
               <Icon name="pencil" />
@@ -1810,6 +1866,7 @@ export default function App() {
               className={mode === 'select' ? 'on' : ''}
               onClick={() => useBp.getState().setMode('select')}
               aria-label={COPY.modeSelect}
+              data-key="`"
               title={COPY.modeSelectTip}
             >
               <Icon name="cursor" />
@@ -1842,6 +1899,7 @@ export default function App() {
               className={playMode === 'audio' ? 'on' : ''}
               onClick={() => switchMode('audio')}
               aria-label={COPY.sourceAudio}
+              data-key="Tab"
               title="听原音频（跟合成音对比着听，Tab 切换）"
             >
               <Icon name="wave" />
@@ -1850,6 +1908,7 @@ export default function App() {
               className={playMode === 'synth' ? 'on' : ''}
               onClick={() => switchMode('synth')}
               aria-label={COPY.sourceSynth}
+              data-key="Tab"
               title="听合成音（按当前谱子发声，Tab 切换）"
             >
               <Icon name="note" />
@@ -1858,7 +1917,7 @@ export default function App() {
 
           {/* 回开头 / 循环 / 跟随（自动翻页）：一组导航（用户 m02483 第 5 条） */}
           <span className="tgroup" title="导航">
-            <button className="icon-btn" onClick={goStart} title={COPY.goStartTip} aria-label={COPY.goStart}>
+            <button className="icon-btn" onClick={goStart} title={COPY.goStartTip} aria-label={COPY.goStart} data-key="Home">
               <Icon name="home" />
             </button>
             <button
@@ -1866,6 +1925,7 @@ export default function App() {
               onClick={() => useBp.getState().setLoopOn(!loopOn)}
               title={COPY.loopTip}
               aria-label={COPY.loop}
+              data-key="L"
               disabled={!loop}
             >
               <Icon name="loop" />
@@ -1888,6 +1948,7 @@ export default function App() {
               disabled={historyLen === 0}
               title={COPY.undoTip}
               aria-label={COPY.undo}
+              data-key="Ctrl+Z"
             >
               <Icon name="undo" />
             </button>
@@ -1897,6 +1958,7 @@ export default function App() {
               disabled={futureLen === 0}
               title={COPY.redoTip}
               aria-label={COPY.redo}
+              data-key="Ctrl+Shift+Z"
             >
               <Icon name="redo" />
             </button>
@@ -1927,6 +1989,7 @@ export default function App() {
               onClick={() => setShowSide((v) => !v)}
               title={showSide ? '把右侧栏收起来，给看谱多留点地方' : '把右侧栏展开（调节 / 分析 / 设置）'}
               aria-label={showSide ? '收起右侧栏' : '展开右侧栏'}
+              data-key="Ctrl+]"
             >
               <span className="side-toggle-icon" />
             </button>
