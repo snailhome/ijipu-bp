@@ -49,6 +49,9 @@ const PROJECT_LS_PREFIX = 'bp.project:'
 /** 「随时保存」那份本机缓存（不是方案文件，用户 m02483） */
 const CACHE_KEY = 'bp.cache'
 
+/** 危险操作（清空确认 / 回到初稿 / 重新分析）之前的恢复快照（用户 m02483：辛苦识别的谱要能找回来） */
+const RECOVERY_KEY = 'bp.recovery'
+
 /** range 滑条的"已填充"比例（CSS 里 --fill 决定渐变停在哪；值到顶时颜色真的顶到尽头） */
 function fillStyle(pct: number): Record<string, string> {
   const v = Math.max(0, Math.min(100, pct))
@@ -476,6 +479,15 @@ export default function App() {
   /* 两种保存各记一个时间（用户 m02483）：缓存 = 随时保存那份，已存 = 真正写了 .bp.json */
   const [savedAt, setSavedAt] = useState<string | null>(null)
   const [cachedAt, setCachedAt] = useState<string | null>(null)
+  /* 危险操作的二次确认（用户 m02483：清掉辛苦识别的谱不能一点就没） */
+  const [confirmAsk, setConfirmAsk] = useState<{
+    title: string
+    body: string
+    ok: string
+    run: () => void
+  } | null>(null)
+  /* 上一次危险操作前的快照（状态栏给一个「恢复」入口） */
+  const [recovery, setRecovery] = useState<{ label: string; at: string; count: number } | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   /* 右侧栏两种视图：扒谱用的「编辑」与前期一次性的「设置」（用户 m06889） */
@@ -852,6 +864,77 @@ export default function App() {
     [applyLoaded, set],
   )
 
+  /* ---------- 危险操作的恢复快照（用户 m02483：辛苦识别的谱不能一点就没） ----------
+   * 清空确认 / 回到初稿 / 重新分析之前，先把当前整份方案存到 `bp.recovery`；
+   * 状态栏会出现「恢复」入口，点它先确认再铺回去。Ctrl+Z 也仍然有效（store 里另存了撤销步）。 */
+  const readRecovery = useCallback((): { label: string; project: ProjectFile } | null => {
+    if (typeof localStorage === 'undefined') return null
+    try {
+      const text = localStorage.getItem(RECOVERY_KEY)
+      if (!text) return null
+      const o = JSON.parse(text) as { label?: unknown; project?: unknown }
+      const r = parseProject(JSON.stringify(o.project))
+      if ('error' in r) return null
+      return { label: typeof o.label === 'string' && o.label ? o.label : '上次操作', project: r.project }
+    } catch {
+      return null
+    }
+  }, [])
+
+  const rememberForRecovery = useCallback(
+    (label: string) => {
+      const p = buildProject(set.getState())
+      if (!p) return
+      if (typeof localStorage !== 'undefined') {
+        try {
+          localStorage.setItem(RECOVERY_KEY, JSON.stringify({ label, at: p.savedAt, project: p }))
+        } catch {
+          /* 配额满：至少还有 Ctrl+Z */
+        }
+      }
+      setRecovery({ label, at: p.savedAt, count: p.notes.length })
+    },
+    [set],
+  )
+
+  const applyRecovery = useCallback(() => {
+    const slot = readRecovery()
+    const st = set.getState()
+    if (!slot) {
+      st.setError('没有可恢复的快照')
+      return
+    }
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(RECOVERY_KEY)
+    setRecovery(null)
+    if (st.filePath && slot.project.audio.path === st.filePath) {
+      /* 同一首：直接铺回音符/参数，不用重新分析 */
+      st.applyProject(slot.project)
+      setNotice(`已恢复：${slot.label}`)
+    } else {
+      /* 换过歌了：按快照里的音频路径重新打开再恢复 */
+      void restoreProject(slot.project, 'cache')
+    }
+  }, [readRecovery, restoreProject, set])
+
+  /* 重启后也把上一次的快照挂在状态栏（点的时候还会再确认一次） */
+  useEffect(() => {
+    const slot = readRecovery()
+    if (slot) setRecovery({ label: slot.label, at: slot.project.savedAt, count: slot.project.notes.length })
+  }, [readRecovery])
+
+  /* 确认弹层：Esc 关掉 */
+  useEffect(() => {
+    if (!confirmAsk) return
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        ev.preventDefault()
+        setConfirmAsk(null)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [confirmAsk])
+
   const openProject = useCallback(async () => {
     if (!isTauriShell()) return
     try {
@@ -1003,6 +1086,8 @@ export default function App() {
         return
       }
       st.setError(null)
+      /* 重新分析会整张换掉音符表：先记一步撤销，别让手工改动一点就没（用户 m02483） */
+      st.snapshotNotes()
       st.setBusy(COPY.analyzing)
       pendingAnalyzeRef.current = { confirm: opts.confirm, source }
       /* 复制一份再 transfer：ref 里那份要留着给下一次分析 / 去谐波用 */
@@ -1026,6 +1111,63 @@ export default function App() {
     const st = set.getState()
     analyzeSource({ confirm: true, notes: true, suppress: st.suppress })
   }, [analyzeSource, set])
+
+  /* ---------- 会"清谱"的三颗按钮：先问一句，并留一份恢复快照（用户 m02483） ---------- */
+
+  /** 「全不选」：有确认过的音才值得问 */
+  const doClearAll = useCallback(() => {
+    const st = set.getState()
+    const n = st.notes.filter((x) => x.confirmed).length
+    if (n === 0) {
+      st.setAllConfirmed(false)
+      return
+    }
+    setConfirmAsk({
+      title: COPY.clearAllTitle,
+      body: `确认过的 ${n} 个音会从导出和简谱预览里消失（音还在表上，只是变灰）。\n可以用状态栏的「恢复」或 Ctrl+Z 找回来。`,
+      ok: COPY.clearAllOk,
+      run: () => {
+        rememberForRecovery('取消全部确认')
+        set.getState().setAllConfirmed(false)
+      },
+    })
+  }, [rememberForRecovery, set])
+
+  /** 「回到初稿」：手画的音和确认全会被分析初稿替换 */
+  const doResetDraft = useCallback(() => {
+    const st = set.getState()
+    if (st.notes.length === 0) return
+    const conf = st.notes.filter((x) => x.confirmed).length
+    setConfirmAsk({
+      title: COPY.resetDraftTitle,
+      body: `当前 ${st.notes.length} 个音（确认 ${conf} 个）会被分析初稿替换。\n可以用状态栏的「恢复」或 Ctrl+Z 找回来。`,
+      ok: COPY.resetDraftOk,
+      run: () => {
+        rememberForRecovery('回到初稿')
+        set.getState().resetNotes()
+        setSelectedId(null)
+      },
+    })
+  }, [rememberForRecovery, set])
+
+  /** 「分析」：重新判音会把整张音符表换成机器初稿 */
+  const doAnalyze = useCallback(() => {
+    const st = set.getState()
+    if (st.notes.length === 0) {
+      runAnalyze()
+      return
+    }
+    const conf = st.notes.filter((x) => x.confirmed).length
+    setConfirmAsk({
+      title: COPY.analyzeOverwriteTitle,
+      body: `重新判音会把整张音符表换成机器初稿（现在 ${st.notes.length} 个音、确认 ${conf} 个）。\n可以用状态栏的「恢复」或 Ctrl+Z 找回来。`,
+      ok: COPY.analyzeOverwriteOk,
+      run: () => {
+        rememberForRecovery('重新分析之前')
+        runAnalyze()
+      },
+    })
+  }, [rememberForRecovery, runAnalyze, set])
 
   /** 顶栏「和弦」：对当前看的那一轨识别和弦（Note Digger 的 chordEst 复刻）。
    * 频谱已经在内存里，直接拷给 worker；不重算频谱、不改音符、不进 jps。 */
@@ -1477,7 +1619,7 @@ export default function App() {
           <span className="tgroup" title="判音 / 谱音">
             <button
               className="icon-btn"
-              onClick={runAnalyze}
+              onClick={doAnalyze}
               disabled={!analysis || !!busy}
               title={COPY.analyzeTip}
               aria-label={COPY.analyze}
@@ -1509,7 +1651,7 @@ export default function App() {
             </button>
             <button
               className="icon-btn"
-              onClick={() => useBp.getState().setAllConfirmed(false)}
+              onClick={doClearAll}
               disabled={!notes.length}
               title={COPY.clearAllTip}
               aria-label={COPY.clearAll}
@@ -1518,10 +1660,7 @@ export default function App() {
             </button>
             <button
               className="icon-btn"
-              onClick={() => {
-                useBp.getState().resetNotes()
-                setSelectedId(null)
-              }}
+              onClick={doResetDraft}
               disabled={!analysis}
               title={COPY.resetDraftTip}
               aria-label={COPY.resetDraft}
@@ -2159,7 +2298,8 @@ export default function App() {
       </div>
 
       {/* 帮助弹层：点外面或按 Esc 关掉 */}
-      {helpOpen && (        <div className="modal-backdrop" onClick={() => setHelpOpen(false)}>
+      {helpOpen && (
+        <div className="modal-backdrop" onClick={() => setHelpOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="按键与鼠标操作">
             <div className="modal-head">
               <strong>按键 · 快捷键 · 鼠标</strong>
@@ -2184,6 +2324,42 @@ export default function App() {
         </div>
       )}
 
+      {/* 危险操作的确认弹层（用户 m02483）：清确认 / 回初稿 / 重新分析都先问一句 */}
+      {confirmAsk && (
+        <div className="modal-backdrop" onClick={() => setConfirmAsk(null)}>
+          <div
+            className="modal modal-confirm"
+            role="dialog"
+            aria-label={confirmAsk.title}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-head">
+              <strong>{confirmAsk.title}</strong>
+            </div>
+            <div className="modal-body">
+              {confirmAsk.body.split('\n').map((line, i) => (
+                <p className="confirm-line" key={i}>
+                  {line}
+                </p>
+              ))}
+            </div>
+            <div className="modal-foot">
+              <button onClick={() => setConfirmAsk(null)}>{COPY.confirmCancel}</button>
+              <button
+                className="primary"
+                onClick={() => {
+                  const run = confirmAsk.run
+                  setConfirmAsk(null)
+                  run()
+                }}
+              >
+                {confirmAsk.ok}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 顶栏悬浮提示（用户 m02483）：快、名称在前、说明在后 */}
       <ToolbarTip />
 
@@ -2196,6 +2372,24 @@ export default function App() {
         {/* 两种保存各显示一个时间（用户 m02483）：缓存 = 随时保存，已存 = 真的写了 .bp.json */}
         {cachedAt && <span className="hint" title={COPY.projectCacheTip}>缓存 {clockOfIso(cachedAt)}</span>}
         {savedAt && <span className="hint" title={COPY.projectSaveTip}>已存 {clockOfIso(savedAt)}</span>}
+        {/* 上一次危险操作前的快照（用户 m02483）：点它先确认再铺回去 */}
+        {recovery && (
+          <span className="hint" title={`${recovery.label}时共 ${recovery.count} 个音（${clockOfIso(recovery.at)}）`}>
+            <button
+              className="link-btn"
+              onClick={() => {
+                setConfirmAsk({
+                  title: COPY.recoveryTitle,
+                  body: `会把当前音符表换成「${recovery.label}」之前的快照（那时 ${recovery.count} 个音）。`,
+                  ok: COPY.recoveryOk,
+                  run: applyRecovery,
+                })
+              }}
+            >
+              恢复「{recovery.label}」
+            </button>
+          </span>
+        )}
         <span>{busy ?? ''}</span>
         <span className="spacer" />
         {error && <span className="err">{error}</span>}

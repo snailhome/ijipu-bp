@@ -610,9 +610,59 @@ try {
   })()`)
   check('点「全选」把所有音标成确认', allConf)
 
+  /* 全不选 / 回到初稿都是"清谱"操作（用户 m02483）：先弹确认，并且留可恢复的快照。
+   * 恢复快照要靠 buildProject，浏览器里得有 filePath 才建得出来。 */
+  await cdp.eval(`window.__bp.setState({ filePath: '/tmp/probe.wav', fileName: 'probe.wav' })`)
   await cdp.clickText('全不选')
+  await sleep(220)
+  const askShown = await cdp.eval(`(() => {
+    const m = document.querySelector('.modal-confirm')
+    return m ? { title: m.querySelector('.modal-head strong')?.textContent || '', ok: m.querySelector('.modal-foot .primary')?.textContent || '' } : null
+  })()`)
+  check('点「全不选」先弹确认框', !!askShown && askShown.ok === '取消全部确认', JSON.stringify(askShown))
+  check('确认框还开着时，音符没被清', await cdp.eval(`window.__bp.getState().notes.every((x) => x.confirmed)`))
+
+  await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.modal-confirm .modal-foot button')].find((x) => (x.textContent || '').trim() === '取消')
+    if (b) b.click()
+  })()`)
+  await sleep(200)
+  const afterCancel = await cdp.eval(`({ conf: window.__bp.getState().notes.every((x) => x.confirmed), modal: !!document.querySelector('.modal-confirm') })`)
+  check('点「取消」关掉确认框、确认状态不变', afterCancel.conf && !afterCancel.modal, JSON.stringify(afterCancel))
+
+  await cdp.clickText('全不选')
+  await sleep(180)
+  await cdp.eval(`(() => { const b = document.querySelector('.modal-confirm .modal-foot .primary'); if (b) b.click() })()`)
+  await sleep(260)
   const noneConf = await cdp.eval(`window.__bp.getState().notes.every((x) => !x.confirmed)`)
   check('点「全不选」能清回来', noneConf)
+  check('清完之后状态栏有「恢复」入口', await cdp.eval(`!!document.querySelector('.status .link-btn')`))
+
+  await cdp.eval(`document.querySelector('.status .link-btn').click()`)
+  await sleep(220)
+  const recoverAsk = await cdp.eval(`(() => { const m = document.querySelector('.modal-confirm'); return m ? m.querySelector('.modal-head strong')?.textContent : null })()`)
+  check('点「恢复」也先确认', recoverAsk === '恢复上一次的谱？', String(recoverAsk))
+  await cdp.eval(`(() => { const b = document.querySelector('.modal-confirm .modal-foot .primary'); if (b) b.click() })()`)
+  await sleep(350)
+  const recovered = await cdp.eval(`({
+    all: window.__bp.getState().notes.every((x) => x.confirmed),
+    link: !!document.querySelector('.status .link-btn'),
+  })`)
+  check('恢复后所有音又变回确认、恢复入口收起', recovered.all && !recovered.link, JSON.stringify(recovered))
+
+  /* 回到初稿：确认框在，取消不动音符 */
+  const beforeReset = await cdp.eval(`window.__bp.getState().notes.length`)
+  await cdp.clickText('回到初稿')
+  await sleep(220)
+  const resetAsk = await cdp.eval(`(() => { const m = document.querySelector('.modal-confirm'); return m ? m.querySelector('.modal-head strong')?.textContent : null })()`)
+  check('点「回到初稿」也先弹确认框', resetAsk === '丢掉手工改动，回到分析初稿？', String(resetAsk))
+  await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.modal-confirm .modal-foot button')].find((x) => (x.textContent || '').trim() === '取消')
+    if (b) b.click()
+  })()`)
+  await sleep(200)
+  check('取消「回到初稿」后音符还在', (await cdp.eval(`window.__bp.getState().notes.length`)) === beforeReset)
+  await cdp.eval(`window.__bp.setState({ filePath: null })`)
 
   // ── 重复区间：造一个 500–2500ms 的区间，拖右握柄，验证能改长短 ──
   const loopBox = await cdp.eval(`(() => {

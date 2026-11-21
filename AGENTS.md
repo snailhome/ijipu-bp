@@ -60,6 +60,12 @@ npm run smoke
 - **两种模式的边界**（用户 m02483）：**选择**模式可以拖音符改音高/位置、拖右缘改时值；
   **画新音、删音（右键 / Delete）、点音符改确认只在绘制模式**。改指针交互时别把"删音"漏回选择模式；
   `probe` 里有"选择模式拖音符/改时值可以，右键与 Delete 不删"的用例守着。
+- **会整张换掉音符表的操作必须先确认 + 留快照**（用户 m02483：清掉辛苦识别的谱太坑）：
+  「全不选」「回到初稿」「分析（重新判音）」分别走 `doClearAll` / `doResetDraft` / `doAnalyze`，
+  执行前 `rememberForRecovery(label)` 把整份方案写进 localStorage 的 `bp.recovery`，
+  状态栏出现「恢复」入口（`applyRecovery`，点的时候再确认一次）；重新分析另在 `analyzeSource`
+  里调 `store.snapshotNotes()` 记一步撤销。新增任何"整张换音符表"的入口照这个来，
+  **别直接 `setAnalysis` / `resetNotes` 绕过确认**。
 - **顶栏按钮的 title 拆两半**（用户 m02483）：`aria-label` = 按钮名称，`title` = 一句功能说明；
   悬浮提示由 `App.tsx` 的 `ToolbarTip` 统一画（120ms、名称在前、说明在后、移开即消失）。
   新加顶栏按钮照这个写就自动有提示，**不要只写原生 title 当唯一信息来源**。

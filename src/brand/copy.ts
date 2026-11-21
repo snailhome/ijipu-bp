@@ -29,6 +29,16 @@ export const COPY = {
   projectAutoTip: '自动保存：改动 1 秒多后写回音频旁边的 .bp.json，下次打开接着干',
   projectCacheTip:
     '缓存保存：改动 1 秒多后只写本机缓存（不写 .bp.json），下次打开先接着它；要存成文件请按 Ctrl+S 或点「保存方案」',
+  /* 会清谱的三颗按钮先确认，并留可恢复的快照（用户 m02483） */
+  confirmCancel: '取消',
+  clearAllTitle: '取消所有确认？',
+  clearAllOk: '取消全部确认',
+  resetDraftTitle: '丢掉手工改动，回到分析初稿？',
+  resetDraftOk: '回到初稿',
+  analyzeOverwriteTitle: '重新分析会覆盖当前谱？',
+  analyzeOverwriteOk: '重新分析',
+  recoveryTitle: '恢复上一次的谱？',
+  recoveryOk: '恢复',
   copyJps: '复制 .jps',
   analyzing: '分析中…',
   empty: '还没有音频。点「打开音频」开始。',

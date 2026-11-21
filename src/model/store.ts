@@ -182,6 +182,8 @@ interface State {
   toggleConfirmed: (id: string) => void
   /** 全选 / 全不选 */
   setAllConfirmed: (b: boolean) => void
+  /** 手动记一步撤销：重新分析这类"直接换掉整张音符表"的操作，先存一份好让 Ctrl+Z 找回来 */
+  snapshotNotes: () => void
   /** 丢掉人工改动，回到分析初稿 */
   resetNotes: () => void
   /* ── 撤销（用户 m05736：50 步） ── */
@@ -533,6 +535,10 @@ export const useBp = create<State>((set, get) => ({
     pushUndo(set, get)
     set({ notes: get().notes.map((n) => ({ ...n, confirmed: b })) })
     applyDerived(set, get)
+  },
+  snapshotNotes: () => {
+    if (get().notes.length === 0) return
+    pushUndo(set, get)
   },
   resetNotes: () => {
     const a = get().analysis

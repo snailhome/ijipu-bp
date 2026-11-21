@@ -839,6 +839,46 @@ a.link {
   overflow-y: auto;
 }
 
+/* 危险操作确认（用户 m02483）：比帮助弹层窄，底部一排按钮 */
+.modal-confirm {
+  width: min(420px, 92vw);
+}
+
+.modal-confirm .modal-body {
+  padding: 14px 16px 6px;
+}
+
+.confirm-line {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--fg-dim);
+}
+
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--line);
+}
+
+/* 状态栏里的文字按钮（恢复快照） */
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link-btn:hover {
+  filter: brightness(1.15);
+}
+
 .modal-body h4 {
   margin: 12px 0 6px;
   font-size: 12px;
