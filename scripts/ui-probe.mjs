@@ -210,6 +210,28 @@ try {
   check('界面挂载（出现 .toolbar）', mounted)
   if (!mounted) throw new Error('界面没起来，后面的点击没意义')
 
+  /* 右栏三种视图（编辑 / 分析 / 设置，用户 m02483）：点顶栏图标切换。
+   * 读侧栏标题判断当前在哪一页，测试里用它切到需要的页。 */
+  const sideViewNow = () =>
+    cdp.eval(`(() => {
+      const t = document.querySelector('.side .side-title')
+      const s = t ? (t.textContent || '').trim() : ''
+      return s === '分析' ? 'analysis' : s === '设置' ? 'settings' : 'edit'
+    })()`)
+  const setSideView = async (view) => {
+    for (let i = 0; i < 4; i++) {
+      const now = await sideViewNow()
+      if (now === view) return true
+      const label = view === 'edit' ? (now === 'settings' ? '设置' : '分析面板') : view === 'settings' ? '设置' : '分析面板'
+      await cdp.eval(`(() => {
+        const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === ${JSON.stringify(label)})
+        if (b) b.click()
+      })()`)
+      await sleep(220)
+    }
+    return (await sideViewNow()) === view
+  }
+
   /* ── 顶栏悬浮提示：快（120ms）且"名称在前、说明在后"（用户 m02483） ── */
   const tipPos = await cdp.eval(`(() => {
     const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '设置')
@@ -241,6 +263,14 @@ try {
   check('鼠标移开后提示立刻消失', await cdp.eval(`!document.querySelector('.tb-tip')`))
 
   /* ── 右栏控件也有同样的提示（用户 m02483） ── */
+  check('右栏能切到「分析」页', await setSideView('analysis'))
+  check(
+    '「分析」页里有调性 / 节奏（分轨只在桌面壳渲染）',
+    await cdp.eval(`(() => {
+      const t = document.querySelector('.side').textContent || ''
+      return t.includes('调性分析') && t.includes('节奏与谐波')
+    })()`),
+  )
   const sideTipPos = await cdp.eval(`(() => {
     const b = [...document.querySelectorAll('.side button')].find((x) => (x.textContent || '').trim() === '节奏分析')
     if (!b) return null
@@ -263,8 +293,7 @@ try {
   )
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 420, button: 'none', buttons: 0 })
   await sleep(200)
-
-  /* ── 小三角放大到约 2/3 文字高度、打开音频不再常高亮（用户 m02483） ── */
+  await setSideView('edit')
   const chevInfo = await cdp.eval(`(() => {
     const el = document.querySelector('.side .group-head .chev')
     if (!el) return null
@@ -989,7 +1018,16 @@ try {
   check('流线谱画布在', stripHint)
 
   /* ── 倍率/对比真有作用：同一块画布取样，调滑条后颜色必须变 ──
-   * 这两个滑条一开始"看着没效果"，因为绘制 effect 的依赖漏了它们（不会重绘）。 */
+   * 这两个滑条一开始"看着没效果"，因为绘制 effect 的依赖漏了它们（不会重绘）。
+   * 它们现在在「设置」页的「显示」组里（用户 m02483）。 */
+  check('右栏能切到「设置」页', await setSideView('settings'))
+  check(
+    '「设置」页里有显示组、没有生成参数',
+    await cdp.eval(`(() => {
+      const t = document.querySelector('.side').textContent || ''
+      return t.includes('行高') && t.includes('屏宽') && !t.includes('生成参数')
+    })()`),
+  )
   const sampleHeat = async () =>
     cdp.eval(`(() => {
       const cv = [...document.querySelectorAll('canvas')].find((c) => c.width > 600 && c.height > 300)
@@ -1063,6 +1101,7 @@ try {
   await sleep(250)
   const stoppedAfterSpace = await cdp.eval(`window.__bp.getState().playing`)
   check('再按空格能停下', stoppedAfterSpace === false, String(stoppedAfterSpace))
+  await setSideView('edit')
 
   /* ── 焦点在「播放」按钮上按空格：只能切换一次 ──
    * 之前只 preventDefault，按钮自己的空格激活仍会再 click 一次 ⇒ 一次空格切两遍，
@@ -1708,6 +1747,7 @@ try {
       utilCount: utils.length,
       utilBordered: utils.filter((u) => u.borderColor !== 'rgba(0, 0, 0, 0)').length,
       utilFilled: utils.filter((u) => u.bg !== 'rgba(0, 0, 0, 0)').length,
+      utilOrder: [...bar.querySelectorAll('.tb-util .icon-btn')].map((b) => b.getAttribute('aria-label')),
     }
   })()`)
   check('顶栏分左右两簇，播放键单独在中间', tb.left && tb.right, JSON.stringify(tb))
@@ -1719,12 +1759,22 @@ try {
     `宽 ${tb.playW}、偏移 ${tb.playDx.toFixed(1)}px`,
   )
   check(
-    '右侧三颗图标按钮不画外框线',
-    tb.utilCount === 3 && tb.utilBordered === 0 && tb.utilFilled === 0,
+    '右侧四颗图标按钮不画外框线',
+    tb.utilCount === 4 && tb.utilBordered === 0 && tb.utilFilled === 0,
     JSON.stringify(tb),
   )
+  check(
+    '右上角图标顺序：热键 → 分析 → 设置 → 侧栏',
+    Array.isArray(tb.utilOrder) &&
+      tb.utilOrder[0] === '按键与鼠标操作' &&
+      tb.utilOrder[1] === '分析面板' &&
+      tb.utilOrder[2] === '设置' &&
+      /右侧栏/.test(tb.utilOrder[3] || ''),
+    JSON.stringify(tb.utilOrder),
+  )
 
-  /* ── 行高滑条 / 屏宽滑条（用户 m02483 第 1、2 条） ── */
+  /* ── 行高滑条 / 屏宽滑条（用户 m02483 第 1、2 条）：在「设置」页的「显示」组里 ── */
+  await setSideView('settings')
   const rowSlider = await cdp.eval(`(() => {
     const el = [...document.querySelectorAll('.side input[type=range]')].find((x) => x.min === '10' && x.max === '26')
     if (!el) return null
@@ -1804,12 +1854,30 @@ try {
   const sliderAfter = await cdp.eval(`[...document.querySelectorAll('.side input[type=range]')].filter((el) => !el.disabled).map((el) => Number(el.value))`)
   const stuck = sliders.map((s, i) => (sliderAfter[i] === sliderBefore[i] ? s.key : null)).filter(Boolean)
   check(
-    `右栏 ${sliders.length} 条滑条全都能悬浮滚轮调`,
-    sliders.length >= 5 && stuck.length === 0,
+    `设置页 ${sliders.length} 条滑条全都能悬浮滚轮调`,
+    sliders.length >= 4 && stuck.length === 0,
     `没动：${stuck.join('、') || '无'}（前：${sliderBefore.join(',')}）`,
   )
 
+  /* 分析页里那条「去谐波」滑条也要能滚 */
+  await setSideView('analysis')
+  const harmSlider = await cdp.eval(`(() => {
+    const el = [...document.querySelectorAll('.side input[type=range]')].find((x) => x.min === '0' && x.max === '1')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, before: Number(el.value) }
+  })()`)
+  if (harmSlider) await cdp.wheelAt(harmSlider.x, harmSlider.y, harmSlider.before >= 1 ? 120 : -120)
+  await sleep(220)
+  const harmAfter = await cdp.eval(`window.__bp.getState().suppress`)
+  check(
+    '分析页的「去谐波」滑条也能悬浮滚轮调',
+    !!harmSlider && harmAfter !== harmSlider.before,
+    `${harmSlider?.before} → ${harmAfter}`,
+  )
+
   /* 行高那条：鼠标指在"行高 14px"这行文字上滚，也要能调（命中区是整行） */
+  await setSideView('settings')
   const rowLabelWheel = await cdp.eval(`(() => {
     const el = document.querySelector('.side input[type=range][min="10"][max="26"]')
     if (!el) return null
@@ -1840,6 +1908,7 @@ try {
     s.setSuppress(0)
   })()`)
   await sleep(200)
+  await setSideView('edit')
 
   /* ── 表格顶行记在 store / localStorage（用户 m02483 第 4 条） ── */
   const topInfo = await cdp.eval(`(() => {
@@ -1910,6 +1979,7 @@ try {
     return 'ok'
   })()`)
   await sleep(1800)
+  await setSideView('settings')
   const chordAfter = await cdp.eval(`(() => {
     const s = window.__bp.getState()
     const at = (ms) => (s.chords.find((c) => c.startMs <= ms && ms < c.endMs) || {}).name
@@ -1947,6 +2017,7 @@ try {
   await cdp.eval(`window.__bp.getState().setChords([])`)
   await cdp.eval(`window.__bp.getState().setPageSec(20)`)
   await cdp.eval(`window.__bp.getState().setTopMidi(${topInfo.top})`)
+  await setSideView('edit')
   await sleep(150)
 
   /* ── 帮助弹层（顶栏键盘图标） ── */
@@ -1965,6 +2036,7 @@ try {
   check('Esc 能关掉帮助弹层', helpClosed === true, String(helpClosed))
 
   /* ── 右栏滑条值到顶时填充到头 ── */
+  await setSideView('settings')
   await cdp.eval(`window.__bp.getState().setGain(5)`)
   await sleep(200)
   const gainFill = await cdp.eval(`(() => {
@@ -1972,6 +2044,7 @@ try {
     return el ? getComputedStyle(el).getPropertyValue('--fill').trim() : 'none'
   })()`)
   check('倍率滑条拉满时填充到头（--fill=100%）', gainFill === '100.0%', gainFill)
+  await setSideView('edit')
   const errs = await cdp.eval(`window.__bpErrors || 0`)
   check('页面没有运行时错误', !errs, errs ? String(errs) : '')
 

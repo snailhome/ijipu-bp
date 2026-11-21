@@ -2,7 +2,8 @@
  * App.tsx — 爱扒谱的主界面
  *
  * 布局（用户 m01788 之后的形态）：上面工具条；中间左边「音符表 + 简谱流线谱」占满，
- * 右边「调性 + 生成参数 + jps 源码」。
+ * 右边有三种视图（用户 m02483）：编辑（吸附 / 生成参数 / jps 源码）、
+ * 分析（调性 / 节奏与谐波 / 分轨）、设置（显示尺寸与显示组 / 一次性开关 / 关于）。
  *
  * 独立的频谱面板已经撤掉 —— 频谱能量直接铺在音符表的格子里当热力图，
  * 把纵向空间全让给"音高 × 时间"的表格（对照 noteDigger 的信息密度）。
@@ -108,6 +109,15 @@ function Icon({ name }: { name: string }) {
         <svg {...common}>
           <path d="M2.6 12V9M5.4 12V6.4M8.2 12V8.6M11 12V4.4M13.6 12V7.2" />
           <circle cx="11" cy="2.6" r="1.2" fill="currentColor" stroke="none" />
+        </svg>
+      )
+    case 'analysisPanel':
+      /* 频谱柱 + 放大镜：右栏的「分析」面板（调性 / 节奏 / 分轨） */
+      return (
+        <svg {...common}>
+          <path d="M2 13V9.6M4.6 13V6.8M7.2 13V8.4" />
+          <circle cx="10.6" cy="8.8" r="2.5" />
+          <path d="M12.5 10.7l2 2" />
         </svg>
       )
     case 'save':
@@ -514,7 +524,13 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   /* 右侧栏两种视图：扒谱用的「编辑」与前期一次性的「设置」（用户 m06889） */
-  const [sideView, setSideView] = useState<'edit' | 'settings'>('edit')
+  /* 右栏三种视图：编辑（当前谱）/ 分析（调性、节奏、分轨）/ 设置（一次性） */
+  const [sideView, setSideView] = useState<'edit' | 'analysis' | 'settings'>('edit')
+  /* 三页共用同一个 .side 容器：切页时把滚动位置拉回顶部，别停在上页的中间 */
+  const sidePanelRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    sidePanelRef.current?.scrollTo({ top: 0 })
+  }, [sideView])
   /* 右侧栏宽度可拖（用户 m07044）；存 localStorage，下次进来还是这个宽度 */
   const [sideW, setSideW] = useState(() => {
     /* SSR（smoke 里 renderToString）没有 localStorage，先判一下 */
@@ -1840,8 +1856,40 @@ export default function App() {
             </button>
           </span>
 
-          {/* 设置 / 帮助 / 右栏开关：三颗只画图标，不画外框线（用户 m02483 第 7 条） */}
-          <span className="tgroup tb-util" title="设置 / 帮助 / 侧栏">
+          {/* 帮助 / 分析 / 设置 / 右栏开关：四颗只画图标，不画外框线（用户 m02483 第 7 条） */}
+          <span className="tgroup tb-util" title="帮助 / 分析 / 设置 / 侧栏">
+            {/* 帮助：按键 / 快捷键 / 鼠标操作（用户 m05893）。位置按用户 m02483 放在分析前面 */}
+            <button
+              className={helpOpen ? 'icon-btn on' : 'icon-btn'}
+              onClick={() => setHelpOpen(true)}
+              title="列出全部按键、快捷键、鼠标操作"
+              aria-label="按键与鼠标操作"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="1.5" y="4" width="13" height="8" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+                <rect x="3.4" y="6" width="1.6" height="1.6" fill="currentColor" />
+                <rect x="6" y="6" width="1.6" height="1.6" fill="currentColor" />
+                <rect x="8.6" y="6" width="1.6" height="1.6" fill="currentColor" />
+                <rect x="11.2" y="6" width="1.6" height="1.6" fill="currentColor" />
+                <rect x="4.6" y="9" width="6.8" height="1.5" rx="0.5" fill="currentColor" />
+              </svg>
+            </button>
+            {/* 分析面板（用户 m02483）：调性、节奏与分轨都收在这里，点它切换右栏 */}
+            <button
+              className={showSide && sideView === 'analysis' ? 'icon-btn on' : 'icon-btn'}
+              onClick={() => {
+                if (showSide && sideView === 'analysis') {
+                  setSideView('edit')
+                } else {
+                  setSideView('analysis')
+                  setShowSide(true)
+                }
+              }}
+              title="调性、节奏与分轨：点开在右栏里看/调"
+              aria-label="分析面板"
+            >
+              <Icon name="analysisPanel" />
+            </button>
             {/* 设置：前期的、一次性的东西都收在这里（模型安装、自动填音…） */}
             <button
               className={showSide && sideView === 'settings' ? 'icon-btn on' : 'icon-btn'}
@@ -1858,28 +1906,12 @@ export default function App() {
             >
               <span className="tool-icon gear" aria-hidden="true" />
             </button>
-            {/* 帮助：按键 / 快捷键 / 鼠标操作（用户 m05893） */}
-            <button
-              className={helpOpen ? 'icon-btn on' : 'icon-btn'}
-              onClick={() => setHelpOpen(true)}
-              title="列出全部按键、快捷键、鼠标操作"
-              aria-label="按键与鼠标操作"
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-                <rect x="1.5" y="4" width="13" height="8" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
-                <rect x="3.4" y="6" width="1.6" height="1.6" fill="currentColor" />
-                <rect x="6" y="6" width="1.6" height="1.6" fill="currentColor" />
-                <rect x="8.6" y="6" width="1.6" height="1.6" fill="currentColor" />
-                <rect x="11.2" y="6" width="1.6" height="1.6" fill="currentColor" />
-                <rect x="4.6" y="9" width="6.8" height="1.5" rx="0.5" fill="currentColor" />
-              </svg>
-            </button>
             {/* 右侧栏开关：图标与 iJipu BP 的兄弟项目「爱出片」用同一个
                 （public/icons/右侧边栏.svg，靠 CSS mask 上色，打开=亮、收起=灰） */}
             <button
               className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}
               onClick={() => setShowSide((v) => !v)}
-              title={showSide ? '把右侧栏收起来，给看谱多留点地方' : '把右侧栏展开（调性 / 参数 / 显示）'}
+              title={showSide ? '把右侧栏收起来，给看谱多留点地方' : '把右侧栏展开（分析 / 编辑 / 设置）'}
               aria-label={showSide ? '收起右侧栏' : '展开右侧栏'}
             >
               <span className="side-toggle-icon" />
@@ -1978,102 +2010,16 @@ export default function App() {
           />
         </div>
 
-        {/* 设置页：前期/一次性的东西都收在这儿（用户 m06889） */}
-        {sideView === 'settings' && (
-          <div className={showSide ? 'side' : 'side off'} style={{ width: sideW }}>
-            <div className="side-title">{COPY.settingsTitle}</div>
-
-            <SideGroup title={COPY.settingsAnalyse}>
-              <label
-                className="check"
-                data-name="分析后自动填入音符"
-                title="关着：分析只出频谱/节奏/调性，音符全靠自己在表格里点；开着：分析完先垫一版灰色的参考音"
-              >
-                <input
-                  type="checkbox"
-                  checked={autoNotes}
-                  onChange={(e) => useBp.getState().setAutoNotes(e.target.checked)}
-                />
-                分析后自动填入音符
-              </label>
-              <div className="hint">跟具体某首歌无关的行为开关都放这里；改完立刻生效。</div>
-            </SideGroup>
-
-            {canSeparate() && (
-              <SideGroup title={COPY.stemsTitle}>
-                {sepOk && (!sepOk.model || !sepOk.dll) ? (
-                  <div className="warn" style={{ display: 'grid', gap: 8 }}>
-                    <div>
-                      {COPY.stemsMissing}
-                      {sepOk && !sepOk.dll ? `；${COPY.stemsMissingDll}` : ''}
-                    </div>
-                    {dl === null ? (
-                      <button
-                        className="primary"
-                        data-name="下载分离模型"
-                        title="应用内下载 htdemucs 人声分离模型（302 MB，走 hf-mirror，带进度）"
-                        onClick={() => void downloadSepModel()}
-                        disabled={!!busy}
-                      >
-                        {COPY.stemsDownloadNow}
-                      </button>
-                    ) : (
-                      <div className="dl-wrap" title="从 hf-mirror 下载（302 MB）">
-                        <div className="dl-bar">
-                          <i style={{ width: `${Math.round(dl * 100)}%` }} />
-                        </div>
-                        <span className="mono">{Math.round(dl * 100)}%</span>
-                      </div>
-                    )}
-                    <div className="row-gap">
-                      <button
-                        data-name="下载分离模型"
-                        title="打开镜像网页手动下载同一个模型"
-                        onClick={() => void openUrl(SEP_URL.mirrorPage)}
-                      >
-                        {COPY.stemsDownload}（镜像网页）
-                      </button>
-                      <button
-                        data-name="下载分离模型"
-                        title="打开 HuggingFace 官方页面手动下载"
-                        onClick={() => void openUrl(SEP_URL.officialPage)}
-                      >
-                        {COPY.stemsDownload}（HuggingFace）
-                      </button>
-                      <button
-                        data-name={COPY.stemsRecheck}
-                        title="重新检查模型文件和 onnxruntime.dll 在不在"
-                        onClick={() => void sepReady().then(setSepOk)}
-                      >
-                        {COPY.stemsRecheck}
-                      </button>
-                    </div>
-                    <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>
-                      {COPY.stemsInstallHint}
-                      {'\n'}
-                      {sepTarget ?? ''}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="hint">
-                    模型和 onnxruntime 都就位了，回「编辑」就能用「{COPY.stemsTitle}」里的分离按钮。
-                  </div>
-                )}
-              </SideGroup>
-            )}
-
-            <SideGroup title={COPY.settingsAbout} defaultOpen={false}>
-              <div className="hint">爱扒谱 iJipu BP {APP_VERSION}</div>
-              <div className="hint">分离模型 htdemucs（MIT，Meta AI）只在桌面版可用；网页版不显示分轨。</div>
-            </SideGroup>
-          </div>
-        )}
-
         <div
           className={showSide ? "side" : "side off"}
-          style={{ display: sideView === 'settings' ? 'none' : undefined, width: sideW }}
+          ref={sidePanelRef}
+          style={{ width: sideW }}
         >
+          {sideView !== 'edit' && (
+            <div className="side-title">{sideView === 'analysis' ? '分析' : COPY.settingsTitle}</div>
+          )}
           {/* 吸附：从顶栏挪到右栏（用户 m02483：顶栏省点地方），位置放在编辑页最上面 */}
+          {sideView === 'edit' && (
           <label
             className="field"
             data-name="吸附"
@@ -2089,7 +2035,9 @@ export default function App() {
               ))}
             </select>
           </label>
+          )}
 
+          {sideView === 'analysis' && (
           <div>
             <button className="group-head" onClick={() => setKeyOpen((v) => !v)} aria-expanded={keyOpen}>
               <span className="chev">{keyOpen ? '▾' : '▸'}</span>
@@ -2139,7 +2087,9 @@ export default function App() {
               </div>
             )}
           </div>
+          )}
 
+          {sideView === 'analysis' && (
           <SideGroup title={COPY.rhythmTitle}>
             <div className="row-gap">
               <button
@@ -2182,9 +2132,10 @@ export default function App() {
               {COPY.harmonicHint}
             </div>
           </SideGroup>
+          )}
 
           {/* 分轨：桌面专属（重计算），网站/插件端不渲染入口 */}
-          {canSeparate() && (
+          {sideView === 'analysis' && canSeparate() && (
             <div>
               <h3>{COPY.stemsTitle}</h3>
               {sepOk && (!sepOk.model || !sepOk.dll) ? (
@@ -2254,6 +2205,7 @@ export default function App() {
             </div>
           )}
 
+          {sideView === 'edit' && (
           <SideGroup title={"生成参数"}>
             <div style={{ display: 'grid', gap: 6 }}>
               <label className="field" data-name="标题" title="导出的 .jps 里 B: 那一行，也是默认文件名">
@@ -2311,7 +2263,9 @@ export default function App() {
               <div className="hint">改哪一项都只重算"拍轴"，原始秒轴不动。</div>
             </div>
           </SideGroup>
+          )}
 
+          {sideView === 'settings' && (
           <SideGroup title={"显示"}>
             <div style={{ display: 'grid', gap: 6 }}>
               <label className="field" data-name="行高" title="表格每半音一行的高度；左侧钢琴键和音符块跟着变（10–26px）">
@@ -2411,8 +2365,9 @@ export default function App() {
               <div className="hint">颜色深度 = 值 ^ 对比 × 倍率。</div>
             </div>
           </SideGroup>
+          )}
 
-          {warnings.length > 0 && (
+          {sideView === 'edit' && warnings.length > 0 && (
             <div>
               <h3>{COPY.warnings}</h3>
               <div className="warn">
@@ -2423,9 +2378,100 @@ export default function App() {
             </div>
           )}
 
+          {sideView === 'edit' && (
           <SideGroup title={COPY.jpsTitle}>
             <pre className="src">{jps || '（还没确认音符）'}</pre>
           </SideGroup>
+          )}
+
+          {/* 设置页：前期/一次性的东西都收在这儿（用户 m06889） */}
+          {sideView === 'settings' && (
+            <>
+              <SideGroup title={COPY.settingsAnalyse}>
+                <label
+                  className="check"
+                  data-name="分析后自动填入音符"
+                  title="关着：分析只出频谱/节奏/调性，音符全靠自己在表格里点；开着：分析完先垫一版灰色的参考音"
+                >
+                  <input
+                    type="checkbox"
+                    checked={autoNotes}
+                    onChange={(e) => useBp.getState().setAutoNotes(e.target.checked)}
+                  />
+                  分析后自动填入音符
+                </label>
+                <div className="hint">跟具体某首歌无关的行为开关都放这里；改完立刻生效。</div>
+              </SideGroup>
+
+              {canSeparate() && (
+                <SideGroup title={COPY.stemsTitle}>
+                  {sepOk && (!sepOk.model || !sepOk.dll) ? (
+                    <div className="warn" style={{ display: 'grid', gap: 8 }}>
+                      <div>
+                        {COPY.stemsMissing}
+                        {sepOk && !sepOk.dll ? `；${COPY.stemsMissingDll}` : ''}
+                      </div>
+                      {dl === null ? (
+                        <button
+                          className="primary"
+                          data-name="下载分离模型"
+                          title="应用内下载 htdemucs 人声分离模型（302 MB，走 hf-mirror，带进度）"
+                          onClick={() => void downloadSepModel()}
+                          disabled={!!busy}
+                        >
+                          {COPY.stemsDownloadNow}
+                        </button>
+                      ) : (
+                        <div className="dl-wrap" title="从 hf-mirror 下载（302 MB）">
+                          <div className="dl-bar">
+                            <i style={{ width: `${Math.round(dl * 100)}%` }} />
+                          </div>
+                          <span className="mono">{Math.round(dl * 100)}%</span>
+                        </div>
+                      )}
+                      <div className="row-gap">
+                        <button
+                          data-name="下载分离模型"
+                          title="打开镜像网页手动下载同一个模型"
+                          onClick={() => void openUrl(SEP_URL.mirrorPage)}
+                        >
+                          {COPY.stemsDownload}（镜像网页）
+                        </button>
+                        <button
+                          data-name="下载分离模型"
+                          title="打开 HuggingFace 官方页面手动下载"
+                          onClick={() => void openUrl(SEP_URL.officialPage)}
+                        >
+                          {COPY.stemsDownload}（HuggingFace）
+                        </button>
+                        <button
+                          data-name={COPY.stemsRecheck}
+                          title="重新检查模型文件和 onnxruntime.dll 在不在"
+                          onClick={() => void sepReady().then(setSepOk)}
+                        >
+                          {COPY.stemsRecheck}
+                        </button>
+                      </div>
+                      <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>
+                        {COPY.stemsInstallHint}
+                        {'\n'}
+                        {sepTarget ?? ''}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="hint">
+                      模型和 onnxruntime 都就位了，去「分析」页就能用分离按钮。
+                    </div>
+                  )}
+                </SideGroup>
+              )}
+
+              <SideGroup title={COPY.settingsAbout} defaultOpen={false}>
+                <div className="hint">爱扒谱 iJipu BP {APP_VERSION}</div>
+                <div className="hint">分离模型 htdemucs（MIT，Meta AI）只在桌面版可用；网页版不显示分轨。</div>
+              </SideGroup>
+            </>
+          )}
         </div>
       </div>
 

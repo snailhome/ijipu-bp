@@ -508,10 +508,13 @@ const melody = concat([
 /* ---------------- 12. 界面能挂载（SSR 渲染一次，抓初始渲染的崩溃） ---------------- */
 {
   const html = renderToString(createElement(App))
+  /* 首屏是「编辑」页：吸附、生成参数、jps 源码都在；调性/节奏/分轨收在「分析」页、显示组收在「设置」页，
+   * SSR 只渲染当前视图，所以这里不再要求出现「调性分析」（用户 m02483）。 */
   const ok =
     html.includes('爱扒谱') &&
     html.includes('打开音频') &&
-    html.includes('调性分析') &&
+    html.includes('生成参数') &&
+    html.includes('吸附') &&
     html.includes('简谱预览')
   check('主界面初始渲染出工具条与三个面板', ok, `${html.length} 字符`)
 }
