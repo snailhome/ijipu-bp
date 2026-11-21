@@ -60,13 +60,16 @@ npm run smoke
 - **两种模式的边界**（用户 m02483）：**选择**模式可以拖音符改音高/位置、拖右缘改时值；
   **画新音、删音（右键 / Delete）、点音符改确认只在绘制模式**。改指针交互时别把"删音"漏回选择模式；
   `probe` 里有"选择模式拖音符/改时值可以，右键与 Delete 不删"的用例守着。
+  选择工具还有三种模式（`store.selMode` = `block | col | row`，`Alt+R` 轮换，用户 m02483）：
+  块选只选点到的音，整列选时值有重叠的音，整行选同音高的音；`selectedIds` 一起高亮，
+  在绘制模式下 Delete 会把这一批一起删。反引号仍然只切绘制/选择。
 - **吸附下拉在右栏编辑页最上面**（用户 m02483 从顶栏挪下来），顶栏不再放它；画布上方那条
   "音符表 + 操作说明"窄栏也已撤掉（省纵向空间，说明看帮助弹层和悬浮提示），**别再把它加回去**。
 - **右栏三个页签**（用户 m02483）：`sideView` = `'edit' | 'analysis' | 'settings'`，同一个 `.side` 容器
   顶部是 `.side-tabs` 三个页签（**调节 / 分析 / 设置，各带图标**），顶栏**只留一颗右栏开关图标**（旁边是帮助）。
   **`Ctrl+]` = 收起 / 展开右栏**（`BracketRight` + ctrl/meta，帮助弹层里有这一行）；
-  **`Ctrl+L` = 键区锁、`Alt+L` = 重复区间、`Alt+N` = 自动翻页、`Alt+S` = 聚焦播放速度滑条、
-  `F1` = 帮助**（用户 m02483）。
+  **`Ctrl+L` = 键区锁、`Alt+L` = 重复区间、`Alt+N` = 自动翻页、`Alt+R` = 选择模式轮换、
+  `Alt+J` = 播放节拍、`Alt+S` = 聚焦播放速度滑条、`F1` = 帮助**（用户 m02483）。
   - 调节：吸附 / 调号（下拉）/ 去谐波 / 显示组 / 生成参数 / 警告 / jps（**显示排在生成参数前面**）。
   - 分析：分析 / 和弦分析（从顶栏挪来）/ 分析后自动填音开关 / 调性分析（候选）/ 节奏与谐波 / 分轨 /
     回到初稿（页面最下面）。
@@ -91,7 +94,7 @@ npm run smoke
   **不要只写原生 title 当唯一信息来源**。
 - **文件/界面热键**（用户 m02483）：`Ctrl+O` 打开音频、`Ctrl+J` 打开方案、`Ctrl+S` 保存方案、
   `Ctrl+E` 导出 .jps、`Ctrl+]` 右栏开关、`Ctrl+L` 键区锁、`Alt+L` 重复区间、`Alt+N` 自动翻页、
-  `Alt+Z` 音名/数字互换、`Alt+S` 聚焦播放速度滑条、`F1` 帮助。
+  `Alt+Z` 音名/数字互换、`Alt+R` 选择模式轮换、`Alt+J` 播放节拍、`Alt+S` 聚焦播放速度滑条、`F1` 帮助。
   热键都在 `App.tsx` 的 keydown effect 里；`exportJps` 定义在后面，用 `exportRef` 拿。
   帮助弹层的「文件 / 播放 / 编辑 / 鼠标与视野」几节列了这些，改热键要两边一起改。
   **顶栏右侧顺序**（用户 m02483）：导航（回到开头 / 循环 / 自动翻页）→ 绘制/选择 → 原音/合成 →
@@ -136,9 +139,9 @@ npm run smoke
     全部当谱音；导出 `writeMidi` 只写确认过的音（format 1、480 ticks/拍）。
     MIDI 模式（`store.midiMode`）隐藏频谱（NoteRoll 的 `midiMode` prop）、播放强制 synth。
   - 节拍器：`player.ts` 的 `setMetronome`，按 BPM / 拍号 / 首拍 + 当前倍率排"嗒"，
-    每小节第一拍重音；开关 `store.metronome` 落 `bp.metronome`。**音色直接用 noteDigger 的
-    mp3 采样**（`src/audio/beatClick.ts` 的 `BEAT_CLICK_URI`，来自它的 `CLICK_SOUND_BASE64`），
-    解码失败才退回振荡器。
+    每小节第一拍重音；开关 `store.metronome` 落 `bp.metronome`。**小节第一拍的音色直接用
+    noteDigger 的 mp3 采样**（`src/audio/beatClick.ts` 的 `BEAT_CLICK_URI`，来自它的
+    `CLICK_SOUND_BASE64`），中间拍子仍用原来的振荡器；采样解码失败时小节拍也退回振荡器。
   - 合成音不再走引擎 `SynthBackend`，改用 `src/audio/pianoSynth.ts`：从 noteDigger 的
     `lib/tinySynth.js` 移植的 GM 1 钢琴两层配方（正弦 + 三角波 FM）。noteDigger **没有 .sf2
     采样库**，128 个 GM 音色都是 TinySynth 用振荡器合成的；别再去找 soundfont 文件。

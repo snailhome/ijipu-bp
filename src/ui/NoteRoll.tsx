@@ -67,6 +67,8 @@ interface Props {
   /** 热力图对比（指数，越大反差越强） */
   contrast: number
   selectedId: string | null
+  /** 一起高亮的音（整行 / 整列选择时用，用户 m02483） */
+  selectedIds: string[]
   playMs: number
   onSelect: (id: string | null) => void
   onSeek: (ms: number) => void
@@ -468,7 +470,7 @@ export function NoteRoll(props: Props) {
       const per = rowH / (spot?.lanes ?? 1)
       const y = rowTop(n.midi) + (spot?.lane ?? 0) * per
       const h = Math.max(2, per - 1)
-      const sel = n.id === props.selectedId
+      const sel = n.id === props.selectedId || props.selectedIds.includes(n.id)
       /* 确认过的音是"我要扒的谱音"，得在彩虹热力图上跳出来（用户 m06417）：
        * 亮青绿实心 + 深色描边 + 一点外发光，像贴上去的小卡片；没确认的保持灰、别抢眼。 */
       g.fillStyle = n.confirmed ? '#3dffb8' : 'rgba(120,138,156,0.42)'
@@ -730,6 +732,7 @@ export function NoteRoll(props: Props) {
     props.firstBeatMs,
     props.loop,
     props.selectedId,
+    props.selectedIds,
     props.tonic,
     props.pitchMode,
     props.chords,

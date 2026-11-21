@@ -435,7 +435,14 @@ try {
 
   check('默认是选择模式（只试听，不会误画）', await segOn('选择'))
   check('点「绘制」能切到绘制模式', (await cdp.clickText('绘制')) && (await segOn('绘制')))
-  check('点「选择」能切回选择模式', (await cdp.clickText('选择')) && (await segOn('选择')))
+  check(
+    '点「选择」能切回选择模式',
+    (await cdp.eval(`(() => {
+      const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '').startsWith('选择（'))
+      if (b) b.click()
+      return !!b
+    })()`)) && (await segOn('选择')),
+  )
 
   const flagOn = (label) =>
     cdp.eval(`(() => {
@@ -712,7 +719,10 @@ try {
   check('再点一次 → 取消确认', a1off === false, String(a1off))
 
   // 切到选择模式，点音符不该再改确认状态
-  await cdp.clickText('选择')
+  await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '').startsWith('选择（'))
+    if (b) b.click()
+  })()`)
   const before = await cdp.eval(`window.__bp.getState().notes.filter((x) => x.confirmed).length`)
   await clickRoll(0.5, 0.5)
   const after = await cdp.eval(`window.__bp.getState().notes.filter((x) => x.confirmed).length`)
@@ -1346,6 +1356,32 @@ try {
   const pitchAfter = await cdp.eval(`window.__bp.getState().pitchMode`)
   check('Alt+Z 切换音名 / 数字', pitchAfter !== pitchBefore, `${pitchBefore} → ${pitchAfter}`)
   await cdp.pressKey('KeyZ', 'z', 90, 1)
+  await sleep(150)
+  /* Alt+R 切选择模式（块选 → 整列 → 整行） */
+  const selBefore = await cdp.eval(`window.__bp.getState().selMode`)
+  await cdp.pressKey('KeyR', 'r', 82, 1)
+  await sleep(180)
+  const selAfter = await cdp.eval(`window.__bp.getState().selMode`)
+  check('Alt+R 切换选择模式', selAfter !== selBefore, `${selBefore} → ${selAfter}`)
+  const selBtn = await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '').startsWith('选择（'))
+    return b ? { label: b.getAttribute('aria-label'), key: b.getAttribute('data-key') } : null
+  })()`)
+  check(
+    '选择按钮带三模式名称和 Alt+R 热键',
+    !!selBtn && /选择（(块选|整列|整行)）/.test(selBtn.label) && selBtn.key === 'Alt+R',
+    JSON.stringify(selBtn),
+  )
+  await cdp.pressKey('KeyR', 'r', 82, 1)
+  await cdp.pressKey('KeyR', 'r', 82, 1)
+  await sleep(150)
+  /* Alt+J 播放节拍 */
+  const metroBefore = await cdp.eval(`window.__bp.getState().metronome`)
+  await cdp.pressKey('KeyJ', 'j', 74, 1)
+  await sleep(180)
+  const metroAfter = await cdp.eval(`window.__bp.getState().metronome`)
+  check('Alt+J 开关播放节拍', metroAfter !== metroBefore, `${metroBefore} → ${metroAfter}`)
+  await cdp.pressKey('KeyJ', 'j', 74, 1)
   await sleep(150)
   const pitchKeys = await cdp.eval(`(() => {
     return [...document.querySelectorAll('.tb-right button')]

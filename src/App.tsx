@@ -32,7 +32,8 @@ import type { ChordSegment } from './analysis/chords'
 import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
-import { PAGE_SEC_MAX, PAGE_SEC_MIN, PLAY_RATE_MAX, PLAY_RATE_MIN, ROW_H_MAX, ROW_H_MIN, useBp } from './model/store'
+import { PAGE_SEC_MAX, PAGE_SEC_MIN, PLAY_RATE_MAX, PLAY_RATE_MIN, ROW_H_MAX, ROW_H_MIN, SEL_MODES, useBp } from './model/store'
+import type { SelMode } from './model/store'
 import { buildProject, parseProject, projectPathFor, serializeProject } from './model/project'
 import type { ProjectFile } from './model/project'
 import { barIndexOf, barStartTick } from './jps/bars'
@@ -172,6 +173,22 @@ function Icon({ name }: { name: string }) {
         <svg {...common}>
           <path d="M8 2.4l4.6 11.2H3.4z" />
           <path d="M8 11V5.6M8 5.6l2.8-1.8" />
+        </svg>
+      )
+    case 'selCol':
+      /* 整列选择：竖向虚线带 */
+      return (
+        <svg {...common}>
+          <rect x="5.2" y="2.2" width="5.6" height="11.6" rx="1" strokeDasharray="2 2" />
+          <path d="M8 4.4v7.2" />
+        </svg>
+      )
+    case 'selRow':
+      /* 整行选择：横向虚线带 */
+      return (
+        <svg {...common}>
+          <rect x="2.2" y="5.2" width="11.6" height="5.6" rx="1" strokeDasharray="2 2" />
+          <path d="M4.4 8h7.2" />
         </svg>
       )
     case 'save':
@@ -454,6 +471,7 @@ const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
       ['Tab', '原音频 / 合成音 互换'],
       ['Alt + L', '重复区间开关'],
       ['Alt + N', '自动翻页开关'],
+      ['Alt + J', '播放节拍开关'],
       ['Home', '回开头（没选播放区回曲子开头，选了回播放区开头）'],
       ['Ctrl + ← / →', '退 / 进一个小节'],
     ],
@@ -500,6 +518,13 @@ const SNAP_CHOICES: Array<{ v: SnapMode; label: string }> = [
   { v: 'beat', label: COPY.snapBeat },
   { v: 'bar', label: COPY.snapBar },
 ]
+
+/** 选择工具三种模式的名称和说明（用户 m02483：参照 noteDigger） */
+const SEL_INFO: Record<SelMode, { label: string; tip: string }> = {
+  block: { label: '块选', tip: '点音符只选它一个；拖音符改音高/位置、拖右边缘改时值' },
+  col: { label: '整列', tip: '点一个音：选同一时间范围（时值有重叠）的所有音' },
+  row: { label: '整行', tip: '点一个音：选同一音高的所有音' },
+}
 
 const SEP_URL = {
   mirror: 'https://hf-mirror.com/StemSplitio/htdemucs-ft-vocals-onnx/resolve/main/htdemucs_ft_vocals.onnx',
@@ -600,6 +625,9 @@ export default function App() {
   /* 上次真正存盘时的内容指纹；null = 这首还没存过盘 */
   const savedSigRef = useRef<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  /* 选择工具的三种模式（用户 m02483）：块选 / 整列 / 整行；selectedIds 是高亮集合 */
+  const selMode = useBp((s) => s.selMode)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [helpOpen, setHelpOpen] = useState(false)
   /* 右侧栏两种视图：扒谱用的「编辑」与前期一次性的「设置」（用户 m06889） */
   /* 右栏三种视图：编辑（当前谱）/ 分析（调性、节奏、分轨）/ 设置（一次性） */
@@ -1600,7 +1628,36 @@ export default function App() {
   const removeNote = useCallback((id: string) => {
     useBp.getState().removeNote(id)
     setSelectedId((cur) => (cur === id ? null : cur))
+    setSelectedIds((ids) => ids.filter((x) => x !== id))
   }, [])
+
+  /**
+   * 选择（用户 m02483）：块选只选点到的音；整列选同一时间范围（时值有重叠）的音；
+   * 整行选同一音高的音。三种模式用 Alt+R / 选择按钮切换。
+   */
+  const selectWithMode = useCallback(
+    (id: string | null) => {
+      if (!id) {
+        setSelectedId(null)
+        setSelectedIds([])
+        return
+      }
+      const st = set.getState()
+      const n = st.notes.find((x) => x.id === id)
+      if (!n) {
+        setSelectedId(id)
+        setSelectedIds([id])
+        return
+      }
+      let ids = [id]
+      if (st.selMode === 'row') ids = st.notes.filter((x) => x.midi === n.midi).map((x) => x.id)
+      else if (st.selMode === 'col')
+        ids = st.notes.filter((x) => x.startMs < n.endMs && n.startMs < x.endMs).map((x) => x.id)
+      setSelectedId(id)
+      setSelectedIds(ids)
+    },
+    [set],
+  )
 
   /* ---------- 热键 ---------- */
   useEffect(() => {
@@ -1646,16 +1703,31 @@ export default function App() {
         /* Alt+N = 自动翻页开关（用户 m02483） */
         e.preventDefault()
         st.setAutoPage(!st.autoPage)
+      } else if (e.code === 'KeyJ' && e.altKey) {
+        /* Alt+J = 播放节拍开关（用户 m02483） */
+        e.preventDefault()
+        st.setMetronome(!st.metronome)
       } else if (e.code === 'F1') {
         /* F1 = 打开帮助（按键与鼠标操作，用户 m02483） */
         e.preventDefault()
         setHelpOpen(true)
       } else if (e.code === 'Delete' || e.code === 'Backspace') {
-        /* 删音只在绘制模式（用户 m02483）；选择模式只挪不改数量 */
-        if (selectedId && st.mode === 'draw') {
-          e.preventDefault()
-          removeNote(selectedId)
+        /* 删音只在绘制模式（用户 m02483）；选择模式只挪不改数量。
+         * 整行/整列选中的一批音一起删（用户 m02483 的选择工具）。 */
+        if (st.mode === 'draw') {
+          const ids = selectedIds.length ? selectedIds : selectedId ? [selectedId] : []
+          if (ids.length) {
+            e.preventDefault()
+            for (const id of ids) st.removeNote(id)
+            setSelectedIds([])
+            setSelectedId(null)
+          }
         }
+      } else if (e.code === 'KeyR' && e.altKey) {
+        /* Alt+R = 切换选择模式：块选 → 整列 → 整行（用户 m02483） */
+        e.preventDefault()
+        const i = SEL_MODES.indexOf(st.selMode)
+        st.setSelMode(SEL_MODES[(i + 1) % SEL_MODES.length])
       } else if (e.code === 'KeyZ' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
         /* Ctrl+Shift+Z 跟 Ctrl+Y 一样是重做 */
         e.preventDefault()
@@ -1722,7 +1794,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey, true) // 捕获阶段：先于控件自己的默认行为
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [goStart, jumpBar, openAudio, openProject, removeNote, saveProject, selectedId, set, switchMode, togglePlay])
+  }, [goStart, jumpBar, openAudio, openProject, removeNote, saveProject, selectedId, selectedIds, set, switchMode, togglePlay])
 
   /* ---------- 导出 ---------- */
   const exportJps = useCallback(async () => {
@@ -2014,6 +2086,7 @@ export default function App() {
               data-name="播放节拍"
               title="播放时按 BPM 打拍子（每小节第一拍重音），只在播放时响"
               aria-label="播放节拍"
+              data-key="Alt+J"
             >
               <Icon name="metro" />
             </button>
@@ -2072,12 +2145,20 @@ export default function App() {
             </button>
             <button
               className={mode === 'select' ? 'on' : ''}
-              onClick={() => useBp.getState().setMode('select')}
-              aria-label={COPY.modeSelect}
-              data-key="`"
-              title={COPY.modeSelectTip}
+              onClick={() => {
+                const st = useBp.getState()
+                if (st.mode !== 'select') {
+                  st.setMode('select')
+                  return
+                }
+                const i = SEL_MODES.indexOf(st.selMode)
+                st.setSelMode(SEL_MODES[(i + 1) % SEL_MODES.length])
+              }}
+              aria-label={`选择（${SEL_INFO[selMode].label}）`}
+              data-key="Alt+R"
+              title={SEL_INFO[selMode].tip}
             >
-              <Icon name="cursor" />
+              <Icon name={selMode === 'block' ? 'cursor' : selMode === 'col' ? 'selCol' : 'selRow'} />
             </button>
           </div>
 
@@ -2239,7 +2320,8 @@ export default function App() {
             bandOnly={bandOnly}
             midiMode={midiMode}
             selectedId={selectedId}
-            onSelect={setSelectedId}
+            selectedIds={selectedIds}
+            onSelect={selectWithMode}
             onSeek={seek}
             onAudition={(midi) => void audition(midi)}
             onAdd={(n) => useBp.getState().addNote(n)}

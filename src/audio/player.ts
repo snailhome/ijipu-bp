@@ -141,15 +141,15 @@ function stopMetronome(): void {
   }
 }
 
-/** 在指定 AudioContext 时刻排一个"嗒"：优先用 noteDigger 的采样，没解码好就用振荡器 */
+/** 排一个"嗒"：**小节第一拍**用 noteDigger 的采样，其余拍子仍用原来的振荡器（用户 m02483） */
 function clickAt(at: number, accent: boolean): void {
   const c = audioCtx()
   const t = Math.max(c.currentTime, at)
-  if (beatBuffer) {
+  if (accent && beatBuffer) {
     const s = c.createBufferSource()
     s.buffer = beatBuffer
     const g = c.createGain()
-    g.gain.value = accent ? 0.95 : 0.75
+    g.gain.value = 0.9
     s.connect(g)
     g.connect(c.destination)
     s.start(t)

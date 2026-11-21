@@ -59,6 +59,10 @@ export const PLAY_RATE_MIN = 0.5
 export const PLAY_RATE_MAX = 2
 export const PLAY_RATE_DEFAULT = 1
 
+/** 选择工具的三种模式（用户 m02483，参照 noteDigger）：块选 / 整列 / 整行 */
+export type SelMode = 'block' | 'col' | 'row'
+export const SEL_MODES: SelMode[] = ['block', 'col', 'row']
+
 /** localStorage 里记的界面尺寸（非 SSR 环境才读；坏了就用默认值） */
 function lsNum(key: string, def: number, min: number, max: number): number {
   if (typeof localStorage === 'undefined') return def
@@ -122,6 +126,8 @@ interface State {
   metronome: boolean
   /** MIDI 编辑器模式：隐藏频谱、用钢琴音色试听，方便纯 MIDI 编辑（用户 m02483） */
   midiMode: boolean
+  /** 选择工具的模式（块选 / 整列 / 整行） */
+  selMode: SelMode
   /** 和弦识别结果（noteDigger 复刻；只做提示，不写进 jps） */
   chords: ChordSegment[]
   /** 要不要把和弦名画在表格底下 */
@@ -159,6 +165,7 @@ interface State {
   setPlayRate: (r: number) => void
   setMetronome: (b: boolean) => void
   setMidiMode: (b: boolean) => void
+  setSelMode: (m: SelMode) => void
   setChords: (c: ChordSegment[]) => void
   setShowChords: (b: boolean) => void
   setLoop: (r: LoopRange | null) => void
@@ -308,6 +315,7 @@ export const useBp = create<State>((set, get) => ({
   playRate: lsNum('bp.playRate', PLAY_RATE_DEFAULT, PLAY_RATE_MIN, PLAY_RATE_MAX),
   metronome: lsNum('bp.metronome', 0, 0, 1) === 1,
   midiMode: false,
+  selMode: 'block',
   chords: [],
   showChords: true,
   tonic: 0,
@@ -439,6 +447,7 @@ export const useBp = create<State>((set, get) => ({
     set({ playRate: Math.round(Math.max(PLAY_RATE_MIN, Math.min(PLAY_RATE_MAX, r)) * 100) / 100 }),
   setMetronome: (b) => set({ metronome: b }),
   setMidiMode: (b) => set({ midiMode: b }),
+  setSelMode: (m) => set({ selMode: m }),
   setChords: (c) => set({ chords: c }),
   setShowChords: (b) => set({ showChords: b }),
   setLoop: (r) => set({ loop: r }),
