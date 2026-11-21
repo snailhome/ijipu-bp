@@ -54,6 +54,11 @@ export const ROW_H_DEFAULT = 14
 /** 默认让第一行落在 C7 附近（原来的 center=76 换算过来就是这里），重开时从 localStorage 恢复 */
 export const TOP_MIDI_DEFAULT = 96
 
+/** 播放速度（用户 m02483）：0.5×–2× 够慢听细节、也够快过一遍；默认 1×（只改快慢，不改音高） */
+export const PLAY_RATE_MIN = 0.5
+export const PLAY_RATE_MAX = 2
+export const PLAY_RATE_DEFAULT = 1
+
 /** localStorage 里记的界面尺寸（非 SSR 环境才读；坏了就用默认值） */
 function lsNum(key: string, def: number, min: number, max: number): number {
   if (typeof localStorage === 'undefined') return def
@@ -111,6 +116,8 @@ interface State {
   rowH: number
   /** 表格第一行的音高（MIDI）；滚轮上下换音区后记在这里，重开时恢复 */
   topMidi: number
+  /** 播放速度（0.5×–2×，只改快慢不改音高） */
+  playRate: number
   /** 和弦识别结果（noteDigger 复刻；只做提示，不写进 jps） */
   chords: ChordSegment[]
   /** 要不要把和弦名画在表格底下 */
@@ -145,6 +152,7 @@ interface State {
   setPageSec: (sec: number) => void
   setRowH: (h: number) => void
   setTopMidi: (m: number) => void
+  setPlayRate: (r: number) => void
   setChords: (c: ChordSegment[]) => void
   setShowChords: (b: boolean) => void
   setLoop: (r: LoopRange | null) => void
@@ -291,6 +299,7 @@ export const useBp = create<State>((set, get) => ({
   pageSec: lsNum('bp.pageSec', PAGE_SEC_DEFAULT, PAGE_SEC_MIN, PAGE_SEC_MAX),
   rowH: Math.round(lsNum('bp.rowH', ROW_H_DEFAULT, ROW_H_MIN, ROW_H_MAX)),
   topMidi: Math.round(lsNum('bp.topMidi', TOP_MIDI_DEFAULT, MIDI_LOW, MIDI_HIGH)),
+  playRate: lsNum('bp.playRate', PLAY_RATE_DEFAULT, PLAY_RATE_MIN, PLAY_RATE_MAX),
   chords: [],
   showChords: true,
   tonic: 0,
@@ -418,6 +427,8 @@ export const useBp = create<State>((set, get) => ({
     set({ rowH: Math.round(Math.max(ROW_H_MIN, Math.min(ROW_H_MAX, h))) }),
   setTopMidi: (m) =>
     set({ topMidi: Math.round(Math.max(MIDI_LOW, Math.min(MIDI_HIGH, m))) }),
+  setPlayRate: (r) =>
+    set({ playRate: Math.round(Math.max(PLAY_RATE_MIN, Math.min(PLAY_RATE_MAX, r)) * 100) / 100 }),
   setChords: (c) => set({ chords: c }),
   setShowChords: (b) => set({ showChords: b }),
   setLoop: (r) => set({ loop: r }),

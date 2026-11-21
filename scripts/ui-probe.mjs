@@ -313,6 +313,18 @@ try {
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 420, button: 'none', buttons: 0 })
   await sleep(200)
   await setSideView('edit')
+  check(
+    '「设置」页里有关于、没有显示组和生成参数',
+    await (async () => {
+      const ok = await setSideView('settings')
+      const has = await cdp.eval(`(() => {
+        const t = document.querySelector('.side').textContent || ''
+        return t.includes('关于') && !t.includes('行高') && !t.includes('生成参数') && !t.includes('分析后自动填入音符')
+      })()`)
+      await setSideView('edit')
+      return ok && has
+    })(),
+  )
   const chevInfo = await cdp.eval(`(() => {
     const el = document.querySelector('.side .group-head .chev')
     if (!el) return null
@@ -1050,13 +1062,13 @@ try {
 
   /* ── 倍率/对比真有作用：同一块画布取样，调滑条后颜色必须变 ──
    * 这两个滑条一开始"看着没效果"，因为绘制 effect 的依赖漏了它们（不会重绘）。
-   * 它们现在在「设置」页的「显示」组里（用户 m02483）。 */
-  check('右栏能切到「设置」页', await setSideView('settings'))
+   * 它们现在在「调节」页的「显示」组里（用户 m02483）。 */
+  check('右栏能切到「调节」页', await setSideView('edit'))
   check(
-    '「设置」页里有显示组、没有生成参数和自动填音开关',
+    '「调节」页里有显示组（行高/屏宽）和播放速度',
     await cdp.eval(`(() => {
       const t = document.querySelector('.side').textContent || ''
-      return t.includes('行高') && t.includes('屏宽') && !t.includes('生成参数') && !t.includes('分析后自动填入音符')
+      return t.includes('行高') && t.includes('屏宽') && t.includes('播放速度')
     })()`),
   )
   const sampleHeat = async () =>
@@ -1802,8 +1814,8 @@ try {
     JSON.stringify(tb.utilOrder),
   )
 
-  /* ── 行高滑条 / 屏宽滑条（用户 m02483 第 1、2 条）：在「设置」页的「显示」组里 ── */
-  await setSideView('settings')
+  /* ── 行高滑条 / 屏宽滑条（用户 m02483 第 1、2 条）：在「调节」页的「显示」组里 ── */
+  await setSideView('edit')
   const rowSlider = await cdp.eval(`(() => {
     const el = [...document.querySelectorAll('.side input[type=range]')].find((x) => x.min === '10' && x.max === '26')
     if (!el) return null
@@ -1857,6 +1869,28 @@ try {
   )
   check('屏宽记进 localStorage（重开能恢复）', afterPage.saved === String(afterPage.pageSec), String(afterPage.saved))
 
+  /* ── 播放速度滑条（用户 m02483）：0.5–2×、默认 1×，滚轮能调，值进 store 与 localStorage ── */
+  const rateInfo = await cdp.eval(`(() => {
+    const el = [...document.querySelectorAll('.side input[type=range]')].find((x) => x.min === '0.5' && x.max === '2')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2, value: Number(el.value) }
+  })()`)
+  check('调节页有播放速度滑条（0.5×–2×，默认 1×）', !!rateInfo && rateInfo.value === 1, JSON.stringify(rateInfo))
+  if (rateInfo) await cdp.wheelAt(rateInfo.x, rateInfo.y, -120)
+  await sleep(250)
+  const rateAfter = await cdp.eval(`(() => ({
+    rate: window.__bp.getState().playRate,
+    stored: localStorage.getItem('bp.playRate'),
+  }))()`)
+  check(
+    '滚轮调播放速度：store 与 localStorage 一起变',
+    rateAfter.rate !== 1 && rateAfter.stored === String(rateAfter.rate),
+    JSON.stringify(rateAfter),
+  )
+  await cdp.eval(`window.__bp.getState().setPlayRate(1)`)
+  await sleep(150)
+
   /* ── 所有滑条都能"鼠标悬浮滚轮"调（用户 m02483 追加要求） ──
    * 逐条滚一下：值必须真的变；行高那条还要试"指着整行文字滚"（命中区放宽到 label.field）。 */
   const sliders = await cdp.eval(`(() => {
@@ -1883,8 +1917,8 @@ try {
   const sliderAfter = await cdp.eval(`[...document.querySelectorAll('.side input[type=range]')].filter((el) => !el.disabled).map((el) => Number(el.value))`)
   const stuck = sliders.map((s, i) => (sliderAfter[i] === sliderBefore[i] ? s.key : null)).filter(Boolean)
   check(
-    `设置页 ${sliders.length} 条滑条全都能悬浮滚轮调`,
-    sliders.length >= 4 && stuck.length === 0,
+    `调节页 ${sliders.length} 条滑条全都能悬浮滚轮调`,
+    sliders.length >= 6 && stuck.length === 0,
     `没动：${stuck.join('、') || '无'}（前：${sliderBefore.join(',')}）`,
   )
 
@@ -1906,7 +1940,7 @@ try {
   )
 
   /* 行高那条：鼠标指在"行高 14px"这行文字上滚，也要能调（命中区是整行） */
-  await setSideView('settings')
+  await setSideView('edit')
   const rowLabelWheel = await cdp.eval(`(() => {
     const el = document.querySelector('.side input[type=range][min="10"][max="26"]')
     if (!el) return null
@@ -1935,6 +1969,7 @@ try {
     s.setGain(1)
     s.setContrast(1.4)
     s.setSuppress(0)
+    s.setPlayRate(1)
   })()`)
   await sleep(200)
   await setSideView('edit')
@@ -2008,7 +2043,7 @@ try {
     return 'ok'
   })()`)
   await sleep(1800)
-  await setSideView('settings')
+  await setSideView('edit')
   const chordAfter = await cdp.eval(`(() => {
     const s = window.__bp.getState()
     const at = (ms) => (s.chords.find((c) => c.startMs <= ms && ms < c.endMs) || {}).name
@@ -2065,7 +2100,7 @@ try {
   check('Esc 能关掉帮助弹层', helpClosed === true, String(helpClosed))
 
   /* ── 右栏滑条值到顶时填充到头 ── */
-  await setSideView('settings')
+  await setSideView('edit')
   await cdp.eval(`window.__bp.getState().setGain(5)`)
   await sleep(200)
   const gainFill = await cdp.eval(`(() => {
@@ -2085,6 +2120,7 @@ try {
     s.setRowH(18)
     s.setPageSec(12)
     s.setTopMidi(72)
+    s.setPlayRate(1.25)
   })()`)
   await sleep(400)
   await cdp.send('Page.reload', { ignoreCache: false })
@@ -2095,7 +2131,7 @@ try {
       restored = await cdp.eval(`(() => {
         if (!document.querySelector('.toolbar') || !window.__bpRoll) return null
         const s = window.__bp.getState()
-        return { rowH: s.rowH, pageSec: s.pageSec, top: window.__bpRoll.top, stored: s.topMidi }
+        return { rowH: s.rowH, pageSec: s.pageSec, top: window.__bpRoll.top, stored: s.topMidi, rate: s.playRate }
       })()`)
     } catch {
       restored = null /* 刷新瞬间执行上下文被销毁，下一轮再来 */
@@ -2103,8 +2139,9 @@ try {
     if (restored) break
   }
   check(
-    '刷新后行高 / 屏宽 / 第一行音高都恢复',
-    !!restored && restored.rowH === 18 && restored.pageSec === 12 && restored.stored === 72 && restored.top === 72,
+    '刷新后行高 / 屏宽 / 第一行音高 / 播放速度都恢复',
+    !!restored && restored.rowH === 18 && restored.pageSec === 12 && restored.stored === 72 &&
+      restored.top === 72 && restored.rate === 1.25,
     JSON.stringify(restored),
   )
   /* 收尾：把三项调回默认，免得截图/后续跑挂在这个状态上 */
@@ -2113,6 +2150,7 @@ try {
     s.setRowH(14)
     s.setPageSec(20)
     s.setTopMidi(96)
+    s.setPlayRate(1)
   })()`)
   await sleep(250)
 

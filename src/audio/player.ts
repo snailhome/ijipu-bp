@@ -29,6 +29,10 @@ let endMs = 0
 let mode: PlayMode = 'audio'
 let onTick: ((ms: number) => void) | null = null
 let onEnd: (() => void) | null = null
+/** 播放速度（用户 m02483）：只改快慢，不改音高 */
+let rate = 1
+/** 合成音改倍率时要按当前位置重排，得留着这一轮的音符 */
+let playNotes: RawNote[] = []
 /**
  * 每次 play/stop 都递增。异步 play() 里 `await ctx.resume()` / `await synth.ready()`
  * 之后要拿自己的号比对：号变了说明期间又被 stop/play 过一次，这一路就作废。
@@ -119,6 +123,39 @@ export function isPlaying(): boolean {
   return raf !== 0
 }
 
+/** 当前播放位置（毫秒）：音频模式看 AudioContext 时钟，合成音看 performance.now */
+function currentMs(): number {
+  const now = mode === 'audio' ? audioCtx().currentTime : performance.now() / 1000
+  return Math.min(endMs, startMs + (now - startAt) * 1000 * rate)
+}
+
+/**
+ * 改播放速度（0.5×–2×）。
+ * 正在播也立刻生效：音频模式直接改 BufferSource 的 playbackRate 并按当前位置重设时间基准；
+ * 合成音的音是提前排好时间的，只能按当前位置重新排一遍（会有一瞬间的重新起音）。
+ */
+export function setPlayRate(r: number): void {
+  const next = Math.max(0.5, Math.min(2, r))
+  if (Math.abs(next - rate) < 1e-6) return
+  if (!isPlaying()) {
+    rate = next
+    return
+  }
+  const pos = currentMs()
+  rate = next
+  if (mode === 'audio' && source) {
+    startMs = pos
+    startAt = audioCtx().currentTime
+    source.playbackRate.value = rate
+    return
+  }
+  const hooks = { onTick: onTick ?? (() => {}), onEnd: onEnd ?? undefined }
+  const notes = playNotes
+  const end = endMs
+  stop()
+  void play(pos, 'synth', notes, end, hooks)
+}
+
 /**
  * 从 fromMs 开始播放。
  * notes 只在 synth 模式下用；音频模式直接播 buffer。
@@ -133,6 +170,7 @@ export async function play(
   stop()
   const my = ++runId
   mode = playMode
+  playNotes = notes
   onTick = hooks.onTick
   onEnd = hooks.onEnd ?? null
   const ctxNow = audioCtx()
@@ -150,6 +188,7 @@ export async function play(
     }
     source = ctxNow.createBufferSource()
     source.buffer = buf
+    source.playbackRate.value = rate
     source.connect(ctxNow.destination)
     const t0 = ctxNow.currentTime + 0.05
     source.start(t0, startMs / 1000)
@@ -170,8 +209,9 @@ export async function play(
     startAt = performance.now() / 1000
     for (const n of notes) {
       if (n.endMs <= startMs) continue
-      const at = Math.max(0, n.startMs - startMs)
-      const dur = Math.max(60, n.endMs - Math.max(startMs, n.startMs))
+      /* 倍率只压时间轴：1.5× 时每个音提前 1/1.5 出现、时值也缩成 1/1.5，音高不变 */
+      const at = Math.max(0, (n.startMs - startMs) / rate)
+      const dur = Math.max(60, (n.endMs - Math.max(startMs, n.startMs)) / rate)
       void synth.play(midiToName(n.midi), at, dur, 0.35)
     }
   }
@@ -179,7 +219,7 @@ export async function play(
   const tick = () => {
     if (my !== runId || !onTick) return
     const now = mode === 'audio' ? audioCtx().currentTime : performance.now() / 1000
-    const pos = startMs + (now - startAt) * 1000
+    const pos = startMs + (now - startAt) * 1000 * rate
     if (pos >= endMs) {
       onTick(endMs)
       raf = 0

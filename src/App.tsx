@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { keyColor, keyDisplayName } from './analysis/pitchNames'
 import { loadAudioFromPath, pickAndLoadAudio, type LoadedAudio } from './audio/decode'
-import { play, setAudioBuffer, setStemBuffers, setPlayTrack, makeAudioBuffer, stop, audition, type PlayMode } from './audio/player'
+import { play, setAudioBuffer, setStemBuffers, setPlayTrack, makeAudioBuffer, stop, audition, setPlayRate as applyPlayRate, type PlayMode } from './audio/player'
 import {
   canSeparate,
   downloadModel,
@@ -519,6 +519,7 @@ export default function App() {
   const rowH = useBp((s) => s.rowH)
   const topMidi = useBp((s) => s.topMidi)
   const pageSec = useBp((s) => s.pageSec)
+  const playRate = useBp((s) => s.playRate)
   const chords = useBp((s) => s.chords)
   const showChords = useBp((s) => s.showChords)
 
@@ -573,17 +574,23 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [helpOpen])
 
-  /* 行高 / 一屏秒数 / 表格顶行：这是"看谱的习惯"，跟具体某首歌无关，所以不写进方案，
+  /* 行高 / 一屏秒数 / 表格顶行 / 播放速度：这是"看谱的习惯"，跟具体某首歌无关，所以不写进方案，
    * 只落 localStorage（用户 m02483）。下次打开（哪怕没有方案）也照旧。 */
   useEffect(() => {
     try {
       localStorage.setItem('bp.rowH', String(rowH))
       localStorage.setItem('bp.pageSec', String(pageSec))
       localStorage.setItem('bp.topMidi', String(topMidi))
+      localStorage.setItem('bp.playRate', String(playRate))
     } catch {
       /* 隐私模式禁用 localStorage：不影响用，只是记不住 */
     }
-  }, [rowH, pageSec, topMidi])
+  }, [rowH, pageSec, topMidi, playRate])
+
+  /* 播放速度写进播放器（用户 m02483）：改滑条时正在播也立刻生效 */
+  useEffect(() => {
+    applyPlayRate(playRate)
+  }, [playRate])
   /* 右侧栏（调性/参数/显示/源码）能不能收起来——宽屏看谱时把它关掉能多出一大块 */
   const [showSide, setShowSide] = useState(true)
   /* 调性分析那一组能不能折起来（调号选择挪进组里了） */
@@ -2089,6 +2096,27 @@ export default function App() {
           </label>
           )}
 
+          {/* 播放速度：用户 m02483，0.5×–2×，只改快慢不改音高 */}
+          {sideView === 'edit' && (
+          <label
+            className="field"
+            data-name="播放速度"
+            title="只改播放快慢，不改音高；0.5×–2×（默认 1×）"
+          >
+            播放速度
+            <input
+              type="range"
+              min={0.5}
+              max={2}
+              step={0.05}
+              value={playRate}
+              onChange={(e) => useBp.getState().setPlayRate(Number(e.target.value))}
+              style={{ width: 120, ...fillStyle(((playRate - 0.5) / 1.5) * 100) }}
+            />
+            <span className="mono">{playRate.toFixed(2)}×</span>
+          </label>
+          )}
+
           {/* 「分析后自动填入音符」从设置页挪到分析页（用户 m02483），不用分组，直接一条开关 */}
           {sideView === 'analysis' && (
             <>
@@ -2289,7 +2317,7 @@ export default function App() {
           </SideGroup>
           )}
 
-          {sideView === 'settings' && (
+          {sideView === 'edit' && (
           <SideGroup title={"显示"}>
             <div style={{ display: 'grid', gap: 6 }}>
               <label className="field" data-name="行高" title="表格每半音一行的高度；左侧钢琴键和音符块跟着变（10–26px）">
