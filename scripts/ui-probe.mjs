@@ -260,6 +260,29 @@ try {
   await sleep(260)
   check('鼠标移开后提示立刻消失', await cdp.eval(`!document.querySelector('.tb-tip')`))
 
+  /* 播放速度滑条：紧挨播放键右边，只放滑条，名称/说明靠悬浮提示（用户 m02483） */
+  const rateTipPos = await cdp.eval(`(() => {
+    const el = document.querySelector('.toolbar .rate-slider')
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  })()`)
+  if (rateTipPos) {
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: rateTipPos.x, y: rateTipPos.y, button: 'none', buttons: 0 })
+  }
+  await sleep(320)
+  const rateTip = await cdp.eval(`(() => {
+    const el = document.querySelector('.tb-tip')
+    return el ? { name: el.querySelector('.tb-tip-name')?.textContent || '', desc: el.querySelector('.tb-tip-desc')?.textContent || '' } : null
+  })()`)
+  check(
+    '播放速度滑条悬浮出名称+说明',
+    !!rateTip && rateTip.name === '播放速度' && (rateTip.desc || '').includes('音高'),
+    JSON.stringify(rateTip),
+  )
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 420, button: 'none', buttons: 0 })
+  await sleep(200)
+
   /* ── 右栏控件也有同样的提示（用户 m02483） ── */
   check(
     '「调节」页里有调号下拉、去谐波和生成参数（调性分析组不在这儿）',
@@ -1065,10 +1088,12 @@ try {
    * 它们现在在「调节」页的「显示」组里（用户 m02483）。 */
   check('右栏能切到「调节」页', await setSideView('edit'))
   check(
-    '「调节」页里有显示组（行高/屏宽）和播放速度',
+    '「调节」页里有显示组，且排在生成参数前面',
     await cdp.eval(`(() => {
       const t = document.querySelector('.side').textContent || ''
-      return t.includes('行高') && t.includes('屏宽') && t.includes('播放速度')
+      const titles = [...document.querySelectorAll('.side .sgroup .group-title')].map((x) => (x.textContent || '').trim())
+      return t.includes('行高') && t.includes('屏宽') && titles.includes('显示') && titles.includes('生成参数') &&
+        titles.indexOf('显示') < titles.indexOf('生成参数')
     })()`),
   )
   const sampleHeat = async () =>
@@ -1791,6 +1816,12 @@ try {
       utilBordered: utils.filter((u) => u.borderColor !== 'rgba(0, 0, 0, 0)').length,
       utilFilled: utils.filter((u) => u.bg !== 'rgba(0, 0, 0, 0)').length,
       utilOrder: [...bar.querySelectorAll('.tb-util .icon-btn')].map((b) => b.getAttribute('aria-label')),
+      rateRightOfPlay: (() => {
+        const el = bar.querySelector('.rate-slider')
+        if (!el || !pr) return false
+        const r = el.getBoundingClientRect()
+        return r.left >= pr.right + 4
+      })(),
     }
   })()`)
   check('顶栏分左右两簇，播放键单独在中间', tb.left && tb.right, JSON.stringify(tb))
@@ -1801,6 +1832,7 @@ try {
     tb.playW >= 44 && tb.playDx <= 2,
     `宽 ${tb.playW}、偏移 ${tb.playDx.toFixed(1)}px`,
   )
+  check('播放速度滑条在播放键右边', tb.rateRightOfPlay, JSON.stringify(tb))
   check(
     '右侧两颗图标按钮（帮助 + 侧栏）不画外框线',
     tb.utilCount === 2 && tb.utilBordered === 0 && tb.utilFilled === 0,
@@ -1869,14 +1901,22 @@ try {
   )
   check('屏宽记进 localStorage（重开能恢复）', afterPage.saved === String(afterPage.pageSec), String(afterPage.saved))
 
-  /* ── 播放速度滑条（用户 m02483）：0.5–2×、默认 1×，滚轮能调，值进 store 与 localStorage ── */
+  /* ── 播放速度滑条（用户 m02483）：在顶栏播放键右边，0.5–2×、默认 1×，滚轮能调 ── */
   const rateInfo = await cdp.eval(`(() => {
-    const el = [...document.querySelectorAll('.side input[type=range]')].find((x) => x.min === '0.5' && x.max === '2')
+    const el = document.querySelector('.toolbar .rate-slider')
     if (!el) return null
     const r = el.getBoundingClientRect()
-    return { x: r.x + r.width / 2, y: r.y + r.height / 2, value: Number(el.value) }
+    return {
+      x: r.x + r.width / 2, y: r.y + r.height / 2, value: Number(el.value),
+      min: el.min, max: el.max, name: el.getAttribute('data-name'), title: el.getAttribute('title'),
+    }
   })()`)
-  check('调节页有播放速度滑条（0.5×–2×，默认 1×）', !!rateInfo && rateInfo.value === 1, JSON.stringify(rateInfo))
+  check(
+    '顶栏播放键右侧有播放速度滑条（0.5×–2×，默认 1×，带名称/说明）',
+    !!rateInfo && rateInfo.value === 1 && rateInfo.min === '0.5' && rateInfo.max === '2' &&
+      rateInfo.name === '播放速度' && (rateInfo.title || '').includes('不改音高'),
+    JSON.stringify(rateInfo),
+  )
   if (rateInfo) await cdp.wheelAt(rateInfo.x, rateInfo.y, -120)
   await sleep(250)
   const rateAfter = await cdp.eval(`(() => ({
@@ -1918,7 +1958,7 @@ try {
   const stuck = sliders.map((s, i) => (sliderAfter[i] === sliderBefore[i] ? s.key : null)).filter(Boolean)
   check(
     `调节页 ${sliders.length} 条滑条全都能悬浮滚轮调`,
-    sliders.length >= 6 && stuck.length === 0,
+    sliders.length >= 5 && stuck.length === 0,
     `没动：${stuck.join('、') || '无'}（前：${sliderBefore.join(',')}）`,
   )
 

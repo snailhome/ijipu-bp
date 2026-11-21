@@ -65,7 +65,7 @@ npm run smoke
 - **右栏三个页签**（用户 m02483）：`sideView` = `'edit' | 'analysis' | 'settings'`，同一个 `.side` 容器
   顶部是 `.side-tabs` 三个页签（**调节 / 分析 / 设置，各带图标**），顶栏**只留一颗右栏开关图标**（旁边是帮助）。
   **`Ctrl+]` = 收起 / 展开右栏**（`BracketRight` + ctrl/meta，帮助弹层里有这一行）。
-  - 调节：吸附 / 调号（下拉）/ 去谐波 / 播放速度 / 生成参数 / 显示组 / 警告 / jps。
+  - 调节：吸附 / 调号（下拉）/ 去谐波 / 显示组 / 生成参数 / 警告 / jps（**显示排在生成参数前面**）。
   - 分析：调性分析（候选列表）/ 节奏与谐波 / 分轨 / 分析后自动填音开关（不分组）。
   - 设置：分轨模型安装 / 关于。
   **控件说明一律放 `title`（悬浮提示），右栏正文不再写解释性段落**（用户 m02483），
@@ -110,10 +110,11 @@ npm run smoke
   **所有滑条都要支持"悬浮滚轮"调节**：App.tsx 里挂 document 级 wheel 监听（命中区放宽到整行
   `label.field`），新加滑条不用另写；改这段要跑 `probe` 的"滑条全都能滚轮调"用例。
 - **播放速度**（用户 m02483）：`store.playRate`（0.5×–2×，默认 1×，只改快慢不改音高），
-  滑条在调节页；值落 localStorage `bp.playRate`，App 的 effect 调 `audio/player.ts` 的
+  滑条**只放在顶栏播放键右边**（`.play-wrap .rate-slider`，不写文字标签，名称/说明靠悬浮提示，
+  提示里带"当前 1.05×"）；值落 localStorage `bp.playRate`，App 的 effect 调 `audio/player.ts` 的
   `setPlayRate`。播放中改倍率：音频模式改 `BufferSource.playbackRate` 并按当前位置重设基准；
   合成音按当前位置重排一遍。改播放位置算法时记得 tick 的 `* rate` 和合成音的 `/ rate` 两处一起改，
-  `probe` 有滑条 + localStorage + 刷新恢复的用例。
+  `probe` 有滑条位置 + 悬浮提示 + 滚轮 + 刷新恢复的用例。
 - **和弦分析**（用户 m02483，从 noteDigger 的 `plugins/chordEst.js` 复刻）：`src/analysis/chords.ts`
   是纯函数（频谱 → chroma → 169 个状态的和弦模板匹配 → HMM + Viterbi），在 worker 里以
   `kind: 'chords'` 跑，结果进 `store.chords`，**只画在表格底部那条带子里当提示，不进 jps、不进方案**。

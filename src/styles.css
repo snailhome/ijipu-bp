@@ -91,6 +91,21 @@ button.primary {
 }
 
 /* 播放：单独一颗、比别的按钮大一号（用户 m02483 第 6 条） */
+/* 播放速度滑条：紧挨播放键右边，只放滑条本身（名称/说明走悬浮提示） */
+.play-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.play-wrap .rate-slider {
+  position: absolute;
+  left: calc(50% + 33px);
+  top: 50%;
+  transform: translateY(-50%);
+  width: 86px;
+}
+
 .play-btn {
   width: 46px;
   height: 32px;
@@ -779,7 +794,8 @@ a.link {
 /* ===== 右栏滑条：自己画轨道和拇指，值满了就真的顶到头 =====
    浏览器默认的 range 在 Windows 上会留一段固定内缩，值到最大时拇指离右端还有一截，
    看着像"没到头"。这里 appearance:none 自己画，--fill 由 React 按当前值的百分比写进去。 */
-.side input[type='range'] {
+.side input[type='range'],
+.toolbar input[type='range'] {
   -webkit-appearance: none;
   appearance: none;
   height: 18px;
@@ -790,7 +806,8 @@ a.link {
   cursor: pointer;
 }
 
-.side input[type='range']::-webkit-slider-runnable-track {
+.side input[type='range']::-webkit-slider-runnable-track,
+.toolbar input[type='range']::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 2px;
   background: linear-gradient(
@@ -800,7 +817,8 @@ a.link {
   );
 }
 
-.side input[type='range']::-webkit-slider-thumb {
+.side input[type='range']::-webkit-slider-thumb,
+.toolbar input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 12px;
@@ -811,19 +829,22 @@ a.link {
   border: 1px solid rgba(0, 0, 0, 0.35);
 }
 
-.side input[type='range']::-moz-range-track {
+.side input[type='range']::-moz-range-track,
+.toolbar input[type='range']::-moz-range-track {
   height: 4px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.18);
 }
 
-.side input[type='range']::-moz-range-progress {
+.side input[type='range']::-moz-range-progress,
+.toolbar input[type='range']::-moz-range-progress {
   height: 4px;
   border-radius: 2px;
   background: var(--accent);
 }
 
-.side input[type='range']::-moz-range-thumb {
+.side input[type='range']::-moz-range-thumb,
+.toolbar input[type='range']::-moz-range-thumb {
   width: 12px;
   height: 12px;
   border-radius: 50%;

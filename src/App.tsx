@@ -31,7 +31,7 @@ import type { ChordSegment } from './analysis/chords'
 import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
-import { PAGE_SEC_MAX, PAGE_SEC_MIN, ROW_H_MAX, ROW_H_MIN, useBp } from './model/store'
+import { PAGE_SEC_MAX, PAGE_SEC_MIN, PLAY_RATE_MAX, PLAY_RATE_MIN, ROW_H_MAX, ROW_H_MIN, useBp } from './model/store'
 import { buildProject, parseProject, projectPathFor, serializeProject } from './model/project'
 import type { ProjectFile } from './model/project'
 import { barIndexOf, barStartTick } from './jps/bars'
@@ -351,7 +351,7 @@ function HoverTip() {
     }
 
     /* 顶栏按钮 + 左右侧栏的按钮 / 滑条 / 输入框 / 复选框；分组标题（小三角）不弹，免得挡视线 */
-    const TIP_SEL = '.toolbar button, .side button:not(.group-head), .side .field, .side .check'
+    const TIP_SEL = '.toolbar button, .toolbar input[type="range"], .side button:not(.group-head), .side .field, .side .check'
     const hit = (e: Event) => (e.target as HTMLElement | null)?.closest?.(TIP_SEL) as HTMLElement | null
 
     const onOver = (e: PointerEvent) => {
@@ -365,7 +365,7 @@ function HoverTip() {
       if (!target) return
       /* 在控件内部从 svg 挪到 button 也会触发 pointerout，那种不算离开 */
       const to = (e.relatedTarget as HTMLElement | null)?.closest?.(
-        '.toolbar button, .side button:not(.group-head), .side .field, .side .check',
+        '.toolbar button, .toolbar input[type="range"], .side button:not(.group-head), .side .field, .side .check',
       )
       if (!to || to !== target) hide()
     }
@@ -1768,16 +1768,32 @@ export default function App() {
           </span>
         </div>
 
-        {/* 播放：单独一颗、放顶栏正中、比别的按钮大（用户 m02483 第 6 条） */}
-        <button
-          className={playing ? 'play-btn on' : 'play-btn'}
-          onClick={togglePlay}
-          disabled={!analysis}
-          title={playing ? '暂停（空格）' : '播放（空格）'}
-          aria-label={playing ? COPY.pause : COPY.play}
-        >
-          <Icon name={playing ? 'pause' : 'play'} />
-        </button>
+        {/* 播放：单独一颗、放顶栏正中、比别的按钮大（用户 m02483 第 6 条）；
+            速度滑条紧挨它右边（用户 m02483），只放滑条，名称/说明走悬浮提示 */}
+        <div className="play-wrap">
+          <button
+            className={playing ? 'play-btn on' : 'play-btn'}
+            onClick={togglePlay}
+            disabled={!analysis}
+            title={playing ? '暂停（空格）' : '播放（空格）'}
+            aria-label={playing ? COPY.pause : COPY.play}
+          >
+            <Icon name={playing ? 'pause' : 'play'} />
+          </button>
+          <input
+            className="rate-slider"
+            type="range"
+            min={PLAY_RATE_MIN}
+            max={PLAY_RATE_MAX}
+            step={0.05}
+            value={playRate}
+            onChange={(e) => useBp.getState().setPlayRate(Number(e.target.value))}
+            data-name="播放速度"
+            title={`只改播放快慢，不改音高；当前 ${playRate.toFixed(2)}×（0.5×–2×）`}
+            aria-label="播放速度"
+            style={fillStyle(((playRate - PLAY_RATE_MIN) / (PLAY_RATE_MAX - PLAY_RATE_MIN)) * 100)}
+          />
+        </div>
 
         <div className="tb-side tb-right">
           {/* 绘制 / 选择（用户 m02483 第 5 条：一组） */}
@@ -2096,27 +2112,6 @@ export default function App() {
           </label>
           )}
 
-          {/* 播放速度：用户 m02483，0.5×–2×，只改快慢不改音高 */}
-          {sideView === 'edit' && (
-          <label
-            className="field"
-            data-name="播放速度"
-            title="只改播放快慢，不改音高；0.5×–2×（默认 1×）"
-          >
-            播放速度
-            <input
-              type="range"
-              min={0.5}
-              max={2}
-              step={0.05}
-              value={playRate}
-              onChange={(e) => useBp.getState().setPlayRate(Number(e.target.value))}
-              style={{ width: 120, ...fillStyle(((playRate - 0.5) / 1.5) * 100) }}
-            />
-            <span className="mono">{playRate.toFixed(2)}×</span>
-          </label>
-          )}
-
           {/* 「分析后自动填入音符」从设置页挪到分析页（用户 m02483），不用分组，直接一条开关 */}
           {sideView === 'analysis' && (
             <>
@@ -2259,65 +2254,6 @@ export default function App() {
           )}
 
           {sideView === 'edit' && (
-          <SideGroup title={"生成参数"}>
-            <div style={{ display: 'grid', gap: 6 }}>
-              <label className="field" data-name="标题" title="导出的 .jps 里 B: 那一行，也是默认文件名">
-                标题
-                <input
-                  style={{ width: 150 }}
-                  value={title}
-                  onChange={(e) => useBp.getState().setTitle(e.target.value)}
-                />
-              </label>
-              <label className="field" data-name={COPY.bpmLabel} title="每分钟拍数；改它会重算整张拍轴">
-                {COPY.bpmLabel}
-                <input
-                  type="number"
-                  value={Math.round(bpm)}
-                  min={20}
-                  max={300}
-                  onChange={(e) => useBp.getState().setBpm(Number(e.target.value))}
-                />
-              </label>
-              <label className="field" data-name={COPY.meterLabel} title="每小节几拍（x/4）；弱起必须比它小">
-                {COPY.meterLabel}
-                <input
-                  type="number"
-                  value={beatsPerBar}
-                  min={1}
-                  max={12}
-                  onChange={(e) => useBp.getState().setBeatsPerBar(Number(e.target.value))}
-                />
-                / 4
-              </label>
-              <label className="field" data-name={COPY.pickupLabel} title={COPY.pickupTip}>
-                {COPY.pickupLabel}
-                <select
-                  value={pickupBeats}
-                  onChange={(e) => useBp.getState().setPickupBeats(Number(e.target.value))}
-                >
-                  {Array.from({ length: Math.max(1, beatsPerBar) }, (_, i) => (
-                    <option key={i} value={i}>
-                      {i === 0 ? COPY.pickupNone : `${i} 拍`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field" data-name={COPY.firstBeatLabel} title="音频里第 1 拍的位置（毫秒）：谱面从这里开始对齐">
-                {COPY.firstBeatLabel}
-                <input
-                  type="number"
-                  value={Math.round(firstBeatMs)}
-                  step={10}
-                  onChange={(e) => useBp.getState().setFirstBeatMs(Number(e.target.value))}
-                />
-                ms
-              </label>
-            </div>
-          </SideGroup>
-          )}
-
-          {sideView === 'edit' && (
           <SideGroup title={"显示"}>
             <div style={{ display: 'grid', gap: 6 }}>
               <label className="field" data-name="行高" title="表格每半音一行的高度；左侧钢琴键和音符块跟着变（10–26px）">
@@ -2414,6 +2350,65 @@ export default function App() {
                   </span>
                 </div>
               )}
+            </div>
+          </SideGroup>
+          )}
+
+          {sideView === 'edit' && (
+          <SideGroup title={"生成参数"}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              <label className="field" data-name="标题" title="导出的 .jps 里 B: 那一行，也是默认文件名">
+                标题
+                <input
+                  style={{ width: 150 }}
+                  value={title}
+                  onChange={(e) => useBp.getState().setTitle(e.target.value)}
+                />
+              </label>
+              <label className="field" data-name={COPY.bpmLabel} title="每分钟拍数；改它会重算整张拍轴">
+                {COPY.bpmLabel}
+                <input
+                  type="number"
+                  value={Math.round(bpm)}
+                  min={20}
+                  max={300}
+                  onChange={(e) => useBp.getState().setBpm(Number(e.target.value))}
+                />
+              </label>
+              <label className="field" data-name={COPY.meterLabel} title="每小节几拍（x/4）；弱起必须比它小">
+                {COPY.meterLabel}
+                <input
+                  type="number"
+                  value={beatsPerBar}
+                  min={1}
+                  max={12}
+                  onChange={(e) => useBp.getState().setBeatsPerBar(Number(e.target.value))}
+                />
+                / 4
+              </label>
+              <label className="field" data-name={COPY.pickupLabel} title={COPY.pickupTip}>
+                {COPY.pickupLabel}
+                <select
+                  value={pickupBeats}
+                  onChange={(e) => useBp.getState().setPickupBeats(Number(e.target.value))}
+                >
+                  {Array.from({ length: Math.max(1, beatsPerBar) }, (_, i) => (
+                    <option key={i} value={i}>
+                      {i === 0 ? COPY.pickupNone : `${i} 拍`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field" data-name={COPY.firstBeatLabel} title="音频里第 1 拍的位置（毫秒）：谱面从这里开始对齐">
+                {COPY.firstBeatLabel}
+                <input
+                  type="number"
+                  value={Math.round(firstBeatMs)}
+                  step={10}
+                  onChange={(e) => useBp.getState().setFirstBeatMs(Number(e.target.value))}
+                />
+                ms
+              </label>
             </div>
           </SideGroup>
           )}
