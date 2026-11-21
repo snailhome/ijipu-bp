@@ -25,7 +25,7 @@ import { snapMs } from '../src/jps/snap'
 import { toJps } from '../src/jps/toJps'
 import { msToX, spanMs } from '../src/ui/timeAxis'
 import { assignLanes } from '../src/ui/noteLanes'
-import { buildProject, parseProject, projectHasContent, projectPathFor, serializeProject } from '../src/model/project'
+import { buildProject, parseProject, projectPathFor, serializeProject } from '../src/model/project'
 import type { ProjectSource } from '../src/model/project'
 import { useBp } from '../src/model/store'
 import type { RawNote } from '../src/model/types'
@@ -502,31 +502,6 @@ const melody = concat([
     '坏音符丢掉、越界参数钳回来（bpm 999 → 300）',
     'project' in messy && messy.project.notes.length === 1 && messy.project.notes[0].midi === 61 && messy.project.settings.bpm === 300,
     'project' in messy ? `${messy.project.notes.length} 个音 / bpm ${messy.project.settings.bpm}` : messy.error,
-  )
-
-  /* 用户 m02314：第一次打开音频不该在旁边留一个空方案文件 */
-  const pristine: ProjectSource = {
-    ...src,
-    notes: [],
-    bpm: 120,
-    beatsPerBar: 4,
-    pickupBeats: 0,
-    firstBeatMs: 0,
-    tonic: 0,
-    autoTonic: true,
-    title: '爱扒谱导出',
-    gain: 1,
-    contrast: 1.4,
-    bandOnly: false,
-    suppress: 0,
-    autoNotes: false,
-    loop: null,
-    loopOn: false,
-  }
-  check('刚打开、什么都没动：不算有内容（不建空方案）', !projectHasContent(pristine))
-  check(
-    '画了音 / 改了参数：算有内容',
-    projectHasContent({ ...pristine, notes }) && projectHasContent({ ...pristine, bpm: 90 }),
   )
 }
 

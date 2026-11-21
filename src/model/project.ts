@@ -76,32 +76,9 @@ export function projectPathFor(audioPath: string): string {
   return `${audioPath}${PROJECT_SUFFIX}`
 }
 
-/**
- * 有没有「扒谱内容」值得建方案文件（用户 m02314：有内容才建）。
- *
- * 刚打开一首歌、既没画音也没改参数时，不该在旁边留一个空 `.bp.json`；
- * 但**已经存在的方案**要继续写（哪怕把音删光了，也要把"删光"存下来），
- * 这一条由调用方用「已有方案」标记兜住。
- */
-export function projectHasContent(s: ProjectSource): boolean {
-  if (s.notes.length > 0) return true
-  return (
-    s.bpm !== 120 ||
-    s.beatsPerBar !== 4 ||
-    s.pickupBeats !== 0 ||
-    s.firstBeatMs !== 0 ||
-    s.tonic !== 0 ||
-    !s.autoTonic ||
-    s.title !== '爱扒谱导出' ||
-    s.gain !== 1 ||
-    s.contrast !== 1.4 ||
-    s.bandOnly ||
-    s.suppress !== 0 ||
-    s.autoNotes ||
-    s.loop !== null ||
-    s.loopOn
-  )
-}
+/* 注：原来有个 `projectHasContent`（用户 m02314：有内容才建 `.bp.json`），
+ * 现在自动存盘改成写本机缓存、只有 Ctrl+S / 「保存方案」才写文件（用户 m02483），
+ * 后台不再需要这个判据，已删。 */
 
 /** 当前 state → 方案对象；没有音频路径（浏览器）时返回 null */
 export function buildProject(s: ProjectSource, savedAt = new Date().toISOString()): ProjectFile | null {

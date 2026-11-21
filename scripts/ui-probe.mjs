@@ -210,6 +210,36 @@ try {
   check('界面挂载（出现 .toolbar）', mounted)
   if (!mounted) throw new Error('界面没起来，后面的点击没意义')
 
+  /* ── 顶栏悬浮提示：快（120ms）且"名称在前、说明在后"（用户 m02483） ── */
+  const tipPos = await cdp.eval(`(() => {
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '设置')
+    if (!b) return null
+    const r = b.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  })()`)
+  if (tipPos) {
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: tipPos.x, y: tipPos.y, button: 'none', buttons: 0 })
+  }
+  await sleep(320) /* 原生 title 要约 1 秒后才弹；320ms 就出现说明是我们自己的提示 */
+  const tip = await cdp.eval(`(() => {
+    const el = document.querySelector('.tb-tip')
+    if (!el) return null
+    return {
+      name: el.querySelector('.tb-tip-name')?.textContent || '',
+      desc: el.querySelector('.tb-tip-desc')?.textContent || '',
+      firstClass: el.firstElementChild?.className || '',
+    }
+  })()`)
+  check('顶栏悬浮提示很快出现（320ms 内，不等原生 title）', !!tip, JSON.stringify(tip))
+  check(
+    '提示第一行是按钮名称、第二行是功能说明',
+    !!tip && tip.name === '设置' && tip.firstClass === 'tb-tip-name' && tip.desc.includes('一次性设置'),
+    JSON.stringify(tip),
+  )
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 420, button: 'none', buttons: 0 })
+  await sleep(260)
+  check('鼠标移开后提示立刻消失', await cdp.eval(`!document.querySelector('.tb-tip')`))
+
   const segOn = (label) =>
     cdp.eval(`(() => {
       const b = [...document.querySelectorAll('.seg button')].find((x) => ((x.getAttribute('aria-label') || '') + ' ' + (x.textContent || '')).includes(${JSON.stringify(label)}))
@@ -292,6 +322,68 @@ try {
   })()`)
   check('顶栏有「保存方案」「打开方案」按钮', projectBtns.save && projectBtns.open, JSON.stringify(projectBtns))
   check('没有音频路径时「保存方案」是灰的', projectBtns.saveDisabled === true)
+
+  /* ── 两种保存（用户 m02483）：随时保存只写缓存，Ctrl+S 才写 .bp.json ──
+   * 放在「保存方案」用例之前跑：那一条会留下"已存"时间，这里要验"只缓存、没已存"。 */
+  const cacheOnly = await cdp.eval(`(async () => {
+    const bp = window.__bp
+    const path = '/tmp/cache-only.wav'
+    localStorage.removeItem('bp.cache')
+    localStorage.removeItem('bp.project:' + path + '.bp.json')
+    bp.setState({ filePath: path, fileName: 'cache-only.wav' })
+    /* 随便改一个参数：1.2 秒后应该只写缓存 */
+    bp.getState().setGain(1.1)
+    await new Promise((r) => setTimeout(r, 1800))
+    const cacheText = localStorage.getItem('bp.cache')
+    const projText = localStorage.getItem('bp.project:' + path + '.bp.json')
+    const status = document.querySelector('.status')?.textContent || ''
+    const cache = cacheText ? JSON.parse(cacheText) : null
+    const out = {
+      cache: !!cache,
+      cachePath: cache ? cache.audio.path : null,
+      cacheGain: cache ? cache.settings.gain : null,
+      fileExists: !!projText,
+      statusCache: status.includes('缓存'),
+      statusSaved: status.includes('已存'),
+    }
+    bp.getState().setGain(1)
+    return out
+  })()`)
+  check(
+    '随时保存只写本机缓存、不生成 .bp.json',
+    cacheOnly.cache &&
+      cacheOnly.cachePath === '/tmp/cache-only.wav' &&
+      Math.abs(cacheOnly.cacheGain - 1.1) < 1e-6 &&
+      cacheOnly.fileExists === false,
+    JSON.stringify(cacheOnly),
+  )
+  check(
+    '状态栏这时只显示「缓存」、不显示「已存」',
+    cacheOnly.statusCache === true && cacheOnly.statusSaved === false,
+    JSON.stringify(cacheOnly),
+  )
+
+  await cdp.eval(`document.activeElement && document.activeElement.blur && document.activeElement.blur()`)
+  await cdp.pressKey('KeyS', 's', 83, 2) /* Ctrl+S */
+  await sleep(400)
+  const ctrlSaved = await cdp.eval(`(() => {
+    const path = '/tmp/cache-only.wav'
+    const text = localStorage.getItem('bp.project:' + path + '.bp.json')
+    const status = document.querySelector('.status')?.textContent || ''
+    const store = window.__bp.getState()
+    window.__bp.setState({ filePath: null })
+    return {
+      saved: !!text,
+      notes: text ? JSON.parse(text).notes.length : -1,
+      stateNotes: store.notes.length,
+      statusSaved: status.includes('已存'),
+    }
+  })()`)
+  check(
+    'Ctrl+S 才真正写出 .bp.json',
+    ctrlSaved.saved && ctrlSaved.notes === ctrlSaved.stateNotes && ctrlSaved.statusSaved,
+    JSON.stringify(ctrlSaved),
+  )
 
   const savedProj = await cdp.eval(`(async () => {
     const bp = window.__bp
@@ -410,6 +502,105 @@ try {
   check('选择模式下点空白不加音', altPlain === altBefore, `${altBefore}→${altPlain}`)
   check('选择模式下按住 Alt 点空白就加音', altAfter === altBefore + 1, `${altPlain}→${altAfter}`)
   await cdp.eval(`window.__bp.getState().setMode('draw')`)
+
+  /* ── 选择模式：能拖音符条 / 改时值，但不能画音 / 删音 / 改确认（用户 m02483） ──
+   * 绘制模式的行为一条没动：照旧能画、能删、点一下改确认。 */
+  await cdp.eval(`window.__bp.getState().setMode('select')`)
+  await sleep(150)
+  const tmpId = await cdp.eval(`window.__bp.getState().addNote({ midi: 62, startMs: 1200, endMs: 1700 })`)
+  await sleep(200)
+  const noteBoxSel = (id) =>
+    cdp.eval(`(() => {
+      const s = window.__bp.getState()
+      const n = s.notes.find((x) => x.id === ${JSON.stringify(id)})
+      if (!n) return null
+      const c = document.querySelector('.pane.roll canvas')
+      const r = c.getBoundingClientRect()
+      const m = window.__bpRoll || {}
+      const ROW_H = m.rowH || 14, RULER_H = m.rulerH || 36, KEY_W = 66
+      const span = s.durationMs / s.view.zoom
+      const xAt = (ms) => KEY_W + ((ms - s.view.panMs) / span) * (r.width - KEY_W)
+      const y = RULER_H + (m.top - n.midi) * ROW_H + ROW_H / 2
+      return {
+        ox: r.x, oy: r.y, rowH: ROW_H,
+        mid: { x: xAt((n.startMs + n.endMs) / 2), y },
+        edge: { x: xAt(n.endMs) - 3, y },
+      }
+    })()`)
+
+  const g1 = await noteBoxSel(tmpId)
+  /* 光标：选择模式停在右缘也应该是左右箭头（以前只有绘制模式才给） */
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved', x: g1.ox + g1.edge.x, y: g1.oy + g1.edge.y, button: 'none', buttons: 0,
+  })
+  await sleep(200)
+  const edgeCursorSelect = await cdp.eval(`(() => {
+    const c = document.querySelector('.pane.roll canvas')
+    return c.style.cursor || getComputedStyle(c).cursor
+  })()`)
+  check('选择模式停在音符右缘也是左右箭头', edgeCursorSelect === 'ew-resize', edgeCursorSelect)
+
+  await cdp.dragAt(g1.ox + g1.mid.x, g1.oy + g1.mid.y, g1.ox + g1.mid.x, g1.oy + g1.mid.y - g1.rowH, 6)
+  await sleep(200)
+  const afterSelectMove = await cdp.eval(`(() => {
+    const n = window.__bp.getState().notes.find((x) => x.id === ${JSON.stringify(tmpId)})
+    return n ? { midi: n.midi, startMs: n.startMs, endMs: n.endMs } : null
+  })()`)
+  check(
+    '选择模式下拖着音符条能改音高',
+    !!afterSelectMove && afterSelectMove.midi === 63,
+    JSON.stringify(afterSelectMove),
+  )
+
+  const g2 = await noteBoxSel(tmpId)
+  await cdp.dragAt(g2.ox + g2.edge.x, g2.oy + g2.edge.y, g2.ox + g2.edge.x + 40, g2.oy + g2.edge.y, 6)
+  await sleep(200)
+  const afterSelectResize = await cdp.eval(`(() => {
+    const n = window.__bp.getState().notes.find((x) => x.id === ${JSON.stringify(tmpId)})
+    return n ? { startMs: n.startMs, endMs: n.endMs } : null
+  })()`)
+  check(
+    '选择模式下拖右缘能改时值',
+    !!afterSelectResize && afterSelectMove && afterSelectResize.endMs > afterSelectMove.endMs + 20 &&
+      afterSelectResize.startMs === afterSelectMove.startMs,
+    `${JSON.stringify(afterSelectMove)} → ${JSON.stringify(afterSelectResize)}`,
+  )
+
+  /* 选择模式右键 = 不删 */
+  const g3 = await noteBoxSel(tmpId)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x: g3.ox + g3.mid.x, y: g3.oy + g3.mid.y, button: 'right', clickCount: 1, buttons: 2,
+  })
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: g3.ox + g3.mid.x, y: g3.oy + g3.mid.y, button: 'right', clickCount: 1, buttons: 0,
+  })
+  await sleep(250)
+  const aliveAfterRight = await cdp.eval(`window.__bp.getState().notes.some((x) => x.id === ${JSON.stringify(tmpId)})`)
+  check('选择模式右键不会删音符', aliveAfterRight === true, String(aliveAfterRight))
+
+  /* 选择模式点一下再按 Delete = 不删 */
+  await cdp.clickAt(g3.ox + g3.mid.x, g3.oy + g3.mid.y)
+  await cdp.pressKey('Delete', 'Delete', 46)
+  await sleep(200)
+  const aliveAfterDel = await cdp.eval(`window.__bp.getState().notes.some((x) => x.id === ${JSON.stringify(tmpId)})`)
+  check('选择模式按 Delete 不删音符', aliveAfterDel === true, String(aliveAfterDel))
+
+  /* 绘制模式右键 = 删（原有行为保持不变） */
+  await cdp.eval(`window.__bp.getState().setMode('draw')`)
+  await sleep(150)
+  const g4 = await noteBoxSel(tmpId)
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x: g4.ox + g4.mid.x, y: g4.oy + g4.mid.y, button: 'right', clickCount: 1, buttons: 2,
+  })
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: g4.ox + g4.mid.x, y: g4.oy + g4.mid.y, button: 'right', clickCount: 1, buttons: 0,
+  })
+  await sleep(250)
+  const aliveAfterDrawRight = await cdp.eval(`window.__bp.getState().notes.some((x) => x.id === ${JSON.stringify(tmpId)})`)
+  check('绘制模式右键仍然能删音符', aliveAfterDrawRight === false, String(aliveAfterDrawRight))
+  /* 后面几个用例原来就在绘制模式下跑，这里保持原状态 */
+  await cdp.eval(`window.__bp.getState().setMode('draw')`)
+  await sleep(100)
 
   // 全选按钮：现在有音符了，它应该是可点的
   await cdp.clickText('全选')
@@ -1230,7 +1421,8 @@ try {
     })
     st.setAllConfirmed(true)
     st.setView({ zoom: 1, panMs: 0 })
-    st.setMode('select')
+    /* 删音只在绘制模式（用户 m02483）；这里原来靠选择模式删，现在按新规矩切绘制 */
+    st.setMode('draw')
     return bp.getState().notes.length
   })()`)
   const laneCount = await laneSetup()

@@ -152,6 +152,49 @@ button.primary {
   color: var(--accent);
 }
 
+/* 顶栏悬浮提示（用户 m02483）：120ms 就出来，第一行按钮名称、第二行功能说明 */
+.tb-tip {
+  position: fixed;
+  z-index: 46;
+  transform: translate(-50%, 0);
+  display: grid;
+  gap: 2px;
+  max-width: 280px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(18, 24, 32, 0.97);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  animation: tb-tip-in 90ms ease-out;
+}
+
+.tb-tip.above {
+  transform: translate(-50%, -100%);
+}
+
+.tb-tip-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.tb-tip-desc {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--fg-dim);
+  white-space: normal;
+}
+
+@keyframes tb-tip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .brand {
   display: inline-flex;
   align-items: center;

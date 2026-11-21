@@ -160,6 +160,8 @@ type Drag =
       startMs: number
       endMs: number
       moved: boolean
+      /** 这一下"点而不拖"要不要当"确认/取消确认"（只有绘制模式才算，用户 m02483） */
+      confirm: boolean
     }
   | { kind: 'resize'; id: string; startMs: number }
   | { kind: 'create'; id: string; startMs: number; moved: boolean }
@@ -877,7 +879,8 @@ export function NoteRoll(props: Props) {
         props.onSelect(hit.id)
         props.onAudition(hit.midi)
         props.onSeek(hit.startMs)
-        if (!draw) return
+        /* 拖动改音高/位置、拖右缘改时值 —— 两种模式都行（用户 m02483）。
+         * 只有"画新音 / 删音 / 确认"还留在绘制模式，见下面的 onAdd 与 onPointerUp。 */
         if (x >= xAt(hit.endMs) - EDGE_PX) {
           drag.current = { kind: 'resize', id: hit.id, startMs: hit.startMs }
         } else {
@@ -890,6 +893,7 @@ export function NoteRoll(props: Props) {
             startMs: hit.startMs,
             endMs: hit.endMs,
             moved: false,
+            confirm: draw,
           }
         }
         return
@@ -927,12 +931,10 @@ export function NoteRoll(props: Props) {
          * 得让用户看得出来这里能调时值）；其余按模式给光标 —— 选择是单手指、绘制是一支笔（m02510）。 */
         const draw = mode === 'draw' || altHeld || e.altKey
         const lh = loopHit(x)
-        const edge =
-          draw &&
-          (() => {
-            const hit = noteAt(x, y)
-            return !!hit && x >= xAt(hit.endMs) - EDGE_PX
-          })()
+        const edge = (() => {
+          const hit = noteAt(x, y)
+          return !!hit && x >= xAt(hit.endMs) - EDGE_PX
+        })()
         e.currentTarget.style.cursor =
           lh === 'l' || lh === 'r' || edge ? 'ew-resize' : draw ? PEN_CURSOR : 'pointer'
         return
@@ -1007,8 +1009,8 @@ export function NoteRoll(props: Props) {
 
     // 时间尺上"点一下不拖" = 取消播放时段（用户 m03936：单纯点击时间轴取消时段）
     if (d?.kind === 'loop' && !d.moved) props.onLoop(null)
-    // 绘制模式下"点一下不拖"= 确认/取消确认
-    if (d?.kind === 'move' && !d.moved) props.onToggleConfirmed(d.id)
+    // 绘制模式下"点一下不拖"= 确认/取消确认（选择模式点音符只试听，用户 m02483）
+    if (d?.kind === 'move' && !d.moved && d.confirm) props.onToggleConfirmed(d.id)
   }, [props])
 
   const onContext = useCallback(
@@ -1016,16 +1018,17 @@ export function NoteRoll(props: Props) {
       const rect = e.currentTarget.getBoundingClientRect()
       const hit = noteAt(e.clientX - rect.left, e.clientY - rect.top)
       if (!hit) return
+      /* 选择模式下也拦掉系统右键菜单，但不删 —— 删音只在绘制模式（用户 m02483） */
       e.preventDefault()
-      props.onRemove(hit.id)
+      if (mode === 'draw' || altHeld) props.onRemove(hit.id)
     },
-    [noteAt, props],
+    [altHeld, mode, noteAt, props],
   )
 
   const hint =
     mode === 'draw'
-      ? '绘制：点空格子画音（按住拖长）、点已有的音=确认/取消确认、拖右边缘改时值、右键删'
-      : '选择：点哪里都只试听，不改谱'
+      ? '绘制：点空格子画音（按住拖长）、点已有的音=确认/取消确认、拖音符=移音高/位置、拖右边缘改时值、右键删'
+      : '选择：点一下试听；拖音符=移音高/位置、拖右边缘改时值（画音 / 删音 / 确认要切绘制）'
 
   return (
     <div className="pane roll" ref={wrapRef}>

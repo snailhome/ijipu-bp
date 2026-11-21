@@ -31,7 +31,7 @@ import { COPY } from './brand/copy'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
 import { PAGE_SEC_MAX, PAGE_SEC_MIN, ROW_H_MAX, ROW_H_MIN, useBp } from './model/store'
-import { buildProject, parseProject, projectHasContent, projectPathFor, serializeProject } from './model/project'
+import { buildProject, parseProject, projectPathFor, serializeProject } from './model/project'
 import type { ProjectFile } from './model/project'
 import { barIndexOf, barStartTick } from './jps/bars'
 import { spanMs } from './ui/timeAxis'
@@ -45,6 +45,9 @@ const SOURCE_LABEL: Record<AnalyzeSource, string> = { mix: '混音', vocals: '�
 
 /** 浏览器/开发环境下方案的 localStorage 键前缀（桌面壳走真实文件，不碰它） */
 const PROJECT_LS_PREFIX = 'bp.project:'
+
+/** 「随时保存」那份本机缓存（不是方案文件，用户 m02483） */
+const CACHE_KEY = 'bp.cache'
 
 /** range 滑条的"已填充"比例（CSS 里 --fill 决定渐变停在哪；值到顶时颜色真的顶到尽头） */
 function fillStyle(pct: number): Record<string, string> {
@@ -256,6 +259,91 @@ function Icon({ name }: { name: string }) {
       return null
   }
 }
+
+/**
+ * 顶栏的悬浮提示（用户 m02483）：比浏览器原生 title 快得多（120ms 就出来），
+ * 内容固定是"按钮名称"在上、"功能说明"在下；名称取 aria-label，说明取 title。
+ *
+ * 为什么不给每个按钮套一层组件：顶栏几十颗按钮，加包裹会改一堆 DOM 结构，而且
+ * `.seg` 里 overflow:hidden 会把浮层裁掉。这里用事件委托 + 固定定位的顶层浮层，
+ * 新加按钮只要照旧写 aria-label / title 就自动有提示。
+ */
+function ToolbarTip() {
+  const [tip, setTip] = useState<{ name: string; desc: string; x: number; y: number; above: boolean } | null>(null)
+  useEffect(() => {
+    let target: HTMLElement | null = null
+    let timer = 0
+    /* 原生 title 大约 1 秒后还会弹一个，跟这个重复：hover 时先摘掉，离开再挂回去 */
+    let savedTitle: string | null = null
+
+    const restoreTitle = () => {
+      if (target && savedTitle !== null) {
+        target.setAttribute('title', savedTitle)
+        savedTitle = null
+      }
+      target = null
+    }
+    const hide = () => {
+      window.clearTimeout(timer)
+      restoreTitle()
+      setTip(null)
+    }
+    const show = () => {
+      if (!target) return
+      const name = (target.getAttribute('aria-label') || target.getAttribute('data-name') || '').trim()
+      const desc = (target.getAttribute('title') || target.dataset.tip || '').trim()
+      if (savedTitle === null) {
+        savedTitle = target.getAttribute('title')
+        target.removeAttribute('title')
+      }
+      if (!name && !desc) return
+      const r = target.getBoundingClientRect()
+      const above = r.top > 96
+      const x = Math.max(150, Math.min(window.innerWidth - 150, r.left + r.width / 2))
+      setTip({ name, desc: desc === name ? '' : desc, x, y: above ? r.top - 8 : r.bottom + 8, above })
+    }
+
+    const hit = (e: Event) =>
+      (e.target as HTMLElement | null)?.closest?.('.toolbar button, .toolbar .icon-field') as HTMLElement | null
+
+    const onOver = (e: PointerEvent) => {
+      const el = hit(e)
+      if (!el || el === target) return
+      hide()
+      target = el
+      timer = window.setTimeout(show, 120)
+    }
+    const onOut = (e: PointerEvent) => {
+      if (!target) return
+      /* 在按钮内部从 svg 挪到 button 也会触发 pointerout，那种不算离开 */
+      const to = (e.relatedTarget as HTMLElement | null)?.closest?.('.toolbar button, .toolbar .icon-field')
+      if (!to || to !== target) hide()
+    }
+    document.addEventListener('pointerover', onOver)
+    document.addEventListener('pointerout', onOut)
+    document.addEventListener('pointerdown', hide, true)
+    document.addEventListener('wheel', hide, true)
+    document.addEventListener('scroll', hide, true)
+    window.addEventListener('blur', hide)
+    return () => {
+      document.removeEventListener('pointerover', onOver)
+      document.removeEventListener('pointerout', onOut)
+      document.removeEventListener('pointerdown', hide, true)
+      document.removeEventListener('wheel', hide, true)
+      document.removeEventListener('scroll', hide, true)
+      window.removeEventListener('blur', hide)
+      hide()
+    }
+  }, [])
+
+  if (!tip) return null
+  return (
+    <div className={tip.above ? 'tb-tip above' : 'tb-tip'} style={{ left: tip.x, top: tip.y }} role="tooltip">
+      {tip.name && <strong className="tb-tip-name">{tip.name}</strong>}
+      {tip.desc && <span className="tb-tip-desc">{tip.desc}</span>}
+    </div>
+  )
+}
 /** 帮助面板的内容（用户 m05893：顶栏键盘图标点开就能查按键 / 快捷键 / 鼠标操作） */
 const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
   {
@@ -273,15 +361,16 @@ const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
     rows: [
       ['` 反引号', '绘制 / 选择 互换（默认选择）'],
       ['按住 Alt', '选择模式下临时当绘制用，松开恢复'],
-      ['拖空白处', '画一个音（起点落在光标那一格，按住往右拖加长）'],
-      ['拖音符中间', '上下改音高、左右改位置'],
-      ['拖音符右缘', '改时值（光标会变左右箭头）'],
-      ['点已有音符', '确认 / 取消确认（只有确认过的音才会导出）'],
+      ['拖空白处', '画一个音（只在绘制模式；起点落在光标那一格，按住往右拖加长）'],
+      ['拖音符中间', '上下改音高、左右改位置（两种模式都能拖）'],
+      ['拖音符右缘', '改时值（光标会变左右箭头；两种模式都能拖）'],
+      ['点已有音符', '确认 / 取消确认（只在绘制模式；只有确认过的音才会导出）'],
       ['↑ / ↓', '选中的音符升 / 降半音（Shift 一个八度）'],
-      ['Delete / Backspace', '删掉选中的音符；右键点音符也能删'],
+      ['Delete / Backspace', '删掉选中的音符（只在绘制模式）；绘制模式下右键点音符也能删'],
       ['Ctrl + Z', '撤销（最多 200 步，一次拖动算一步）'],
       ['Ctrl + Shift + Z / Ctrl + Y', '重做'],
       ['Ctrl + A', '全选确认'],
+      ['Ctrl + S', '真正存盘（写 <音频名>.bp.json）；平时的改动只写本机缓存'],
     ],
   },
   {
@@ -384,8 +473,9 @@ export default function App() {
 
   const set = useBp
   const [notice, setNotice] = useState<string | null>(null)
-  /* 上次自动存成的时间（状态栏显示"已存 HH:MM:SS"） */
+  /* 两种保存各记一个时间（用户 m02483）：缓存 = 随时保存那份，已存 = 真正写了 .bp.json */
   const [savedAt, setSavedAt] = useState<string | null>(null)
+  const [cachedAt, setCachedAt] = useState<string | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [helpOpen, setHelpOpen] = useState(false)
   /* 右侧栏两种视图：扒谱用的「编辑」与前期一次性的「设置」（用户 m06889） */
@@ -439,13 +529,10 @@ export default function App() {
   const pendingAnalyzeRef = useRef<{ confirm: boolean; source: AnalyzeSource } | null>(null)
   /* 打开音频时读到的方案：等分析结果回来再盖上去（setAnalysis 会清空音符） */
   const pendingRestoreRef = useRef<ProjectFile | null>(null)
-  /* 自动存方案的节流定时器（同一时间只挂一个，连续拖动最多每 1.2 秒写一次） */
+  /* 这份恢复是从哪来的：本机缓存还是 .bp.json（决定状态栏显示"缓存"还是"已存"） */
+  const restoreKindRef = useRef<'cache' | 'file'>('file')
+  /* 自动（缓存）保存的节流定时器（同一时间只挂一个，连续拖动最多每 1.2 秒写一次） */
   const saveTimerRef = useRef<number | null>(null)
-  /* 这首音频**已经**有方案文件了：刚打开、啥也没干时不建空文件（用户 m02314），
-   * 但已有方案要能继续写 —— 把音删光也得把"删光"存下来 */
-  const hasProjectRef = useRef(false)
-  /* 写盘失败只报一次，别每 1.2 秒刷一遍状态栏 */
-  const saveErrRef = useRef(false)
 
   /* 所有滑条：鼠标悬浮在上面滚轮就能调，而且那一刻不滚动面板（用户 m05454、m02483）。
    * React 的 onWheel 是 passive 的，preventDefault 拦不住滚动，所以这里挂原生监听。
@@ -533,11 +620,13 @@ export default function App() {
         pendingRestoreRef.current = null
         if (restore) {
           st.applyProject(restore)
-          hasProjectRef.current = true
           st.setBusy(null)
-          setSavedAt(restore.savedAt || null)
+          /* 从缓存恢复就显示"缓存"，从 .bp.json 恢复就显示"已存"（用户 m02483） */
+          const fromCache = restoreKindRef.current === 'cache'
+          if (fromCache) setCachedAt(restore.savedAt || null)
+          else setSavedAt(restore.savedAt || null)
           setNotice(
-            `已恢复方案：${restore.audio.name}${
+            `已恢复${fromCache ? '本机缓存' : '方案'}：${restore.audio.name}${
               restore.savedAt ? `（上次存于 ${clockOfIso(restore.savedAt)}）` : ''
             }`,
           )
@@ -597,20 +686,63 @@ export default function App() {
     }
   }, [])
 
+  /** 本机缓存（随时保存那份）：读写都在这里，跟 `.bp.json` 完全分开（用户 m02483） */
+  const writeCache = useCallback((p: ProjectFile) => {
+    if (typeof localStorage === 'undefined') return
+    try {
+      localStorage.setItem(CACHE_KEY, serializeProject(p))
+    } catch {
+      /* 配额满 / 隐私模式：缓存写不进去不影响编辑 */
+    }
+  }, [])
+
+  const readCache = useCallback((): ProjectFile | null => {
+    if (typeof localStorage === 'undefined') return null
+    try {
+      const text = localStorage.getItem(CACHE_KEY)
+      if (!text) return null
+      const r = parseProject(text)
+      if ('error' in r) {
+        localStorage.removeItem(CACHE_KEY)
+        return null
+      }
+      return r.project
+    } catch {
+      return null
+    }
+  }, [])
+
+  /** 打开这段音频时该恢复什么：同一首的缓存优先（含没存盘的改动），否则读旁边的 `.bp.json` */
+  const readRestoreFor = useCallback(
+    async (audioPath: string): Promise<ProjectFile | null> => {
+      const cache = readCache()
+      if (cache && cache.audio.path === audioPath) {
+        restoreKindRef.current = 'cache'
+        return cache
+      }
+      restoreKindRef.current = 'file'
+      return readProjectFile(projectPathFor(audioPath))
+    },
+    [readCache, readProjectFile],
+  )
+
   /** 装载 + 起分析：选文件、"启动参数带文件"、恢复方案都走这一条，避免两套逻辑。
-   *  restoreArg 不传 = 自动找音频旁边的方案；传 null = 明确不恢复。 */
+   *  restoreArg 不传 = 自动找该音频的缓存 / 旁边的方案；传 null = 明确不恢复。 */
   const applyLoaded = useCallback(
     async (loaded: LoadedAudio, restoreArg?: ProjectFile | null) => {
       const st = set.getState()
       const restore =
         restoreArg === undefined
           ? loaded.path
-            ? await readProjectFile(projectPathFor(loaded.path))
+            ? await readRestoreFor(loaded.path)
             : null
           : restoreArg
       pendingRestoreRef.current = restore ?? null
       stop()
       st.setPlaying(false)
+      /* 换歌：上一首的"已存/缓存"时间先清掉，等恢复完再按来源补上 */
+      setSavedAt(null)
+      setCachedAt(null)
       st.setLoaded({ fileName: loaded.name, filePath: loaded.path, durationMs: loaded.durationMs })
       setAudioBuffer(loaded.buffer)
       st.setBusy(COPY.analyzing)
@@ -623,8 +755,6 @@ export default function App() {
       }
       /* 打开文件这一轮永远分析混音：清掉上一轮的"分析哪一轨"标记 */
       pendingAnalyzeRef.current = null
-      /* 换歌了：新的音频旁边有没有方案，等恢复流程走完再说 */
-      hasProjectRef.current = false
       w.postMessage(
         {
           samples: loaded.samples,
@@ -636,7 +766,7 @@ export default function App() {
         [loaded.samples.buffer as ArrayBuffer],
       )
     },
-    [readProjectFile, set],
+    [readRestoreFor, set],
   )
 
   const openAudio = useCallback(async () => {
@@ -657,13 +787,16 @@ export default function App() {
     }
   }, [applyLoaded, set])
 
-  /* ---------- 方案：保存 / 打开 / 启动恢复（用户 m01794） ---------- */
-  /** 立刻把当前状态写回音频旁边的 `.bp.json`；返回路径（浏览器里返回伪路径）。
-   *  force = 用户主动点了「保存方案」：哪怕还没内容也照写；
-   *  自动存则遵守「有内容才建」（用户 m02314）。 */
-  const saveProject = useCallback(async (force = false): Promise<string | null> => {
+  /* ---------- 方案：两种保存（用户 m02483） ----------
+   *  · 缓存保存：改动 1.2 秒后写到本机缓存（localStorage 的 `bp.cache`），**不碰 .bp.json**；
+   *    下次打开先恢复它，没存盘的工作不会丢。
+   *  · 真正保存：Ctrl+S 或顶栏「保存方案」，才写音频旁边的 `.bp.json`（浏览器里存 localStorage）。
+   *  读缓存的 readCache / readRestoreFor 在 applyLoaded 之前（启动恢复要用）。 */
+
+  /** 真正保存：写音频旁边的 `.bp.json`，同时把缓存刷成同一份（下次打开不会取到旧缓存）。
+   *  返回路径（浏览器里返回伪路径）。 */
+  const saveProject = useCallback(async (): Promise<string | null> => {
     const st = set.getState()
-    if (!force && !hasProjectRef.current && !projectHasContent(st)) return null
     const p = buildProject(st)
     if (!p) return null
     const path = projectPathFor(p.audio.path)
@@ -673,15 +806,16 @@ export default function App() {
     } else if (typeof localStorage !== 'undefined') {
       localStorage.setItem(`${PROJECT_LS_PREFIX}${path}`, text)
     }
-    if (typeof localStorage !== 'undefined') localStorage.setItem('bp.lastProject', path)
-    hasProjectRef.current = true
-    saveErrRef.current = false
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('bp.lastProject', path)
+      localStorage.setItem(CACHE_KEY, text)
+    }
     setSavedAt(p.savedAt)
     return path
   }, [set])
 
-  /** 自动存：连续改动时最多每 1.2 秒写一次；写完不弹提示，只在状态栏更新时间。
-   *  分析中/正在恢复方案时不写：此时 notes 还是空的（或机器初稿），一写就把好方案盖掉。 */
+  /** 自动（缓存）保存：连续改动时最多每 1.2 秒写一次缓存；只更新状态栏的"缓存"时间。
+   *  分析中/正在恢复方案时不写：此时 notes 还是空的（或机器初稿），一写就把好缓存盖掉。 */
   const scheduleSave = useCallback(() => {
     const st = set.getState()
     if (!st.filePath) return
@@ -689,21 +823,23 @@ export default function App() {
     if (saveTimerRef.current !== null) return
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null
-      void saveProject().catch((e: unknown) => {
-        if (saveErrRef.current) return
-        saveErrRef.current = true
-        set.getState().setError(`方案存不下来：${e instanceof Error ? e.message : String(e)}`)
-      })
+      const cur = set.getState()
+      if (cur.busy || pendingRestoreRef.current) return
+      const p = buildProject(cur)
+      if (!p) return
+      writeCache(p)
+      setCachedAt(p.savedAt)
     }, 1200)
-  }, [saveProject, set])
+  }, [set, writeCache])
 
-  /** 打开一个已有方案：按里面记的音频路径重新装载，再恢复状态 */
+  /** 打开一个已有方案 / 本机缓存：按里面记的音频路径重新装载，再恢复状态 */
   const restoreProject = useCallback(
-    async (p: ProjectFile) => {
+    async (p: ProjectFile, kind: 'cache' | 'file' = 'file') => {
       const st = set.getState()
+      restoreKindRef.current = kind
       st.setError(null)
       setNotice(null)
-      st.setBusy('正在打开方案…')
+      st.setBusy(kind === 'cache' ? '正在恢复本机缓存…' : '正在打开方案…')
       try {
         const loaded = await loadAudioFromPath(p.audio.path)
         if (!loaded) throw new Error(`方案里的音频不在了：${p.audio.path}`)
@@ -756,7 +892,13 @@ export default function App() {
           await applyLoaded(loaded)
           return
         }
-        /* 没有启动参数：读"上次存过的那条方案"的路径（自动保存时记在 localStorage） */
+        /* 没有启动参数：先接着本机缓存（随时保存那份，可能没存过盘），没有再退回上次的方案文件 */
+        const cache = readCache()
+        if (cache) {
+          await restoreProject(cache, 'cache')
+          return
+        }
+        /* 没有缓存：读"上次存过的那条方案"的路径（真正保存时记在 localStorage） */
         const last = typeof localStorage !== 'undefined' ? localStorage.getItem('bp.lastProject') : null
         if (!last) return
         let text = ''
@@ -780,8 +922,9 @@ export default function App() {
     })()
   }, [applyLoaded, restoreProject, set])
 
-  /* ---------- 自动保存：参数、音符、视野一变，1.2 秒内写回音频旁边的 .bp.json ----------
-   * currentMs 故意不列进依赖：播放时它每帧都在变，不然会一直在写盘；
+  /* ---------- 自动（缓存）保存：参数、音符、视野一变，1.2 秒内写成本机缓存 ----------
+   * **不写 .bp.json**（用户 m02483）：要存成文件得按 Ctrl+S 或点「保存方案」。
+   * currentMs 故意不列进依赖：播放时它每帧都在变，不然会一直在写；
    * 暂停时（下面那个 effect）再补存一次，把播放头位置记下来。 */
   useEffect(() => {
     scheduleSave()
@@ -1185,7 +1328,8 @@ export default function App() {
       } else if (e.code === 'KeyL') {
         st.setLoopOn(!st.loopOn)
       } else if (e.code === 'Delete' || e.code === 'Backspace') {
-        if (selectedId) {
+        /* 删音只在绘制模式（用户 m02483）；选择模式只挪不改数量 */
+        if (selectedId && st.mode === 'draw') {
           e.preventDefault()
           removeNote(selectedId)
         }
@@ -1219,11 +1363,23 @@ export default function App() {
       } else if (e.code === 'KeyA' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
         st.setAllConfirmed(true)
+      } else if (e.code === 'KeyS' && (e.ctrlKey || e.metaKey)) {
+        /* Ctrl+S = 真正保存（写 .bp.json）；平时那 1.2 秒一次只是本机缓存（用户 m02483） */
+        e.preventDefault()
+        if (!st.filePath) {
+          setNotice('还没有打开音频，没地方存方案')
+          return
+        }
+        void saveProject()
+          .then((p) => setNotice(p ? `${COPY.projectSavedTip}：${p}` : null))
+          .catch((err: unknown) => {
+            st.setError(`方案存不下来：${err instanceof Error ? err.message : String(err)}`)
+          })
       }
     }
     window.addEventListener('keydown', onKey, true) // 捕获阶段：先于控件自己的默认行为
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [goStart, jumpBar, removeNote, selectedId, set, switchMode, togglePlay])
+  }, [goStart, jumpBar, removeNote, saveProject, selectedId, set, switchMode, togglePlay])
 
   /* ---------- 导出 ---------- */
   const exportJps = useCallback(async () => {
@@ -1277,7 +1433,7 @@ export default function App() {
               className="primary icon-btn"
               onClick={() => void openAudio()}
               disabled={!!busy}
-              title={COPY.openAudio}
+              title="选一段音频（wav / mp3 / m4a / flac…）打开，马上开始分析"
               aria-label={COPY.openAudio}
             >
               <Icon name="folder" />
@@ -1294,7 +1450,7 @@ export default function App() {
             <button
               className="icon-btn"
               onClick={() => {
-                void saveProject(true)
+                void saveProject()
                   .then((p) => setNotice(p ? `${COPY.projectSavedTip}：${p}` : null))
                   .catch((e: unknown) => {
                     set.getState().setError(`方案存不下来：${e instanceof Error ? e.message : String(e)}`)
@@ -1310,7 +1466,7 @@ export default function App() {
               className="icon-btn"
               onClick={() => void exportJps()}
               disabled={confirmedCount === 0}
-              title={COPY.exportJps}
+              title="只导出确认过的音，存成 .jps 文本"
               aria-label={COPY.exportJps}
             >
               <Icon name="export" />
@@ -1380,7 +1536,7 @@ export default function App() {
           className={playing ? 'play-btn on' : 'play-btn'}
           onClick={togglePlay}
           disabled={!analysis}
-          title={playing ? COPY.pause : COPY.play}
+          title={playing ? '暂停（空格）' : '播放（空格）'}
           aria-label={playing ? COPY.pause : COPY.play}
         >
           <Icon name={playing ? 'pause' : 'play'} />
@@ -1407,7 +1563,7 @@ export default function App() {
             </button>
           </div>
 
-          <label className="field icon-field" title="画音/拖音时吸附到哪一格">
+          <label className="field icon-field" data-name="吸附" title="画音 / 拖音时吸附到哪一格">
             <Icon name="magnet" />
             <select value={snap} onChange={(e) => useBp.getState().setSnap(e.target.value as SnapMode)}>
               {SNAP_CHOICES.map((c) => (
@@ -1424,7 +1580,7 @@ export default function App() {
               className={pitchMode === 'name' ? 'on' : ''}
               onClick={() => useBp.getState().setPitchMode('name')}
               aria-label={COPY.pitchName}
-              title={COPY.pitchName}
+              title="用音名写格子（C4、D4…）"
             >
               <Icon name="pitchName" />
             </button>
@@ -1432,7 +1588,7 @@ export default function App() {
               className={pitchMode === 'number' ? 'on' : ''}
               onClick={() => useBp.getState().setPitchMode('number')}
               aria-label={COPY.pitchNumber}
-              title={COPY.pitchNumber}
+              title="用简谱数字写格子（1、2、3…，换调号跟着变）"
             >
               <Icon name="pitchNumber" />
             </button>
@@ -1444,7 +1600,7 @@ export default function App() {
               className={playMode === 'audio' ? 'on' : ''}
               onClick={() => switchMode('audio')}
               aria-label={COPY.sourceAudio}
-              title={COPY.sourceAudio}
+              title="听原音频（跟合成音对比着听，Tab 切换）"
             >
               <Icon name="wave" />
             </button>
@@ -1452,7 +1608,7 @@ export default function App() {
               className={playMode === 'synth' ? 'on' : ''}
               onClick={() => switchMode('synth')}
               aria-label={COPY.sourceSynth}
-              title={COPY.sourceSynth}
+              title="听合成音（按当前谱子发声，Tab 切换）"
             >
               <Icon name="note" />
             </button>
@@ -1517,7 +1673,7 @@ export default function App() {
                   setShowSide(true)
                 }
               }}
-              title="设置"
+              title="模型安装、分析开关等一次性设置"
               aria-label="设置"
             >
               <span className="tool-icon gear" aria-hidden="true" />
@@ -1526,7 +1682,7 @@ export default function App() {
             <button
               className={helpOpen ? 'icon-btn on' : 'icon-btn'}
               onClick={() => setHelpOpen(true)}
-              title="按键与鼠标操作"
+              title="列出全部按键、快捷键、鼠标操作"
               aria-label="按键与鼠标操作"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -1543,7 +1699,7 @@ export default function App() {
             <button
               className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}
               onClick={() => setShowSide((v) => !v)}
-              title={showSide ? '收起右侧栏' : '展开右侧栏'}
+              title={showSide ? '把右侧栏收起来，给看谱多留点地方' : '把右侧栏展开（调性 / 参数 / 显示）'}
               aria-label={showSide ? '收起右侧栏' : '展开右侧栏'}
             >
               <span className="side-toggle-icon" />
@@ -2003,8 +2159,7 @@ export default function App() {
       </div>
 
       {/* 帮助弹层：点外面或按 Esc 关掉 */}
-      {helpOpen && (
-        <div className="modal-backdrop" onClick={() => setHelpOpen(false)}>
+      {helpOpen && (        <div className="modal-backdrop" onClick={() => setHelpOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="按键与鼠标操作">
             <div className="modal-head">
               <strong>按键 · 快捷键 · 鼠标</strong>
@@ -2029,14 +2184,18 @@ export default function App() {
         </div>
       )}
 
+      {/* 顶栏悬浮提示（用户 m02483）：快、名称在前、说明在后 */}
+      <ToolbarTip />
+
       <div className="status">
         <span>{fileName ?? COPY.empty}</span>
         <span>{durationMs ? `${(durationMs / 1000).toFixed(1)}s` : ''}</span>
         <span>
           {analysis ? `确认 ${confirmedCount} / 共 ${notes.length} 个音` : ''}
         </span>
-        {/* 方案自动保存的时间（用户 m01794）：一眼能看出"存没存" */}
-        {savedAt && <span className="hint" title={COPY.projectAutoTip}>已存 {clockOfIso(savedAt)}</span>}
+        {/* 两种保存各显示一个时间（用户 m02483）：缓存 = 随时保存，已存 = 真的写了 .bp.json */}
+        {cachedAt && <span className="hint" title={COPY.projectCacheTip}>缓存 {clockOfIso(cachedAt)}</span>}
+        {savedAt && <span className="hint" title={COPY.projectSaveTip}>已存 {clockOfIso(savedAt)}</span>}
         <span>{busy ?? ''}</span>
         <span className="spacer" />
         {error && <span className="err">{error}</span>}
