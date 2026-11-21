@@ -2,8 +2,8 @@
  * App.tsx — 爱扒谱的主界面
  *
  * 布局（用户 m01788 之后的形态）：上面工具条；中间左边「音符表 + 简谱流线谱」占满，
- * 右边有三种视图（用户 m02483）：编辑（吸附 / 生成参数 / jps 源码）、
- * 分析（调性 / 节奏与谐波 / 分轨）、设置（显示尺寸与显示组 / 一次性开关 / 关于）。
+ * 右边有三种页签（用户 m02483）：调节（吸附 / 调性 / 生成参数 / jps 源码）、
+ * 分析（节奏与谐波 / 分轨）、设置（显示组 / 一次性开关 / 关于），顶栏只有一颗右栏开关。
  *
  * 独立的频谱面板已经撤掉 —— 频谱能量直接铺在音符表的格子里当热力图，
  * 把纵向空间全让给"音高 × 时间"的表格（对照 noteDigger 的信息密度）。
@@ -112,12 +112,30 @@ function Icon({ name }: { name: string }) {
         </svg>
       )
     case 'analysisPanel':
-      /* 频谱柱 + 放大镜：右栏的「分析」面板（调性 / 节奏 / 分轨） */
+      /* 频谱柱 + 放大镜：右栏的「分析」页签（节奏 / 分轨） */
       return (
         <svg {...common}>
           <path d="M2 13V9.6M4.6 13V6.8M7.2 13V8.4" />
           <circle cx="10.6" cy="8.8" r="2.5" />
           <path d="M12.5 10.7l2 2" />
+        </svg>
+      )
+    case 'tune':
+      /* 三条滑杆：右栏的「调节」页签 */
+      return (
+        <svg {...common}>
+          <path d="M2.4 4.6h11.2M2.4 8h11.2M2.4 11.4h11.2" />
+          <circle cx="5.6" cy="4.6" r="1.4" fill="currentColor" stroke="none" />
+          <circle cx="9.6" cy="8" r="1.4" fill="currentColor" stroke="none" />
+          <circle cx="6.6" cy="11.4" r="1.4" fill="currentColor" stroke="none" />
+        </svg>
+      )
+    case 'settings':
+      /* 齿轮：右栏的「设置」页签 */
+      return (
+        <svg {...common}>
+          <circle cx="8" cy="8" r="2.1" />
+          <path d="M8 2.2v1.7M8 12.1v1.7M2.2 8h1.7M12.1 8h1.7M3.9 3.9l1.2 1.2M10.9 10.9l1.2 1.2M12.1 3.9l-1.2 1.2M5.1 10.9l-1.2 1.2" />
         </svg>
       )
     case 'save':
@@ -414,6 +432,7 @@ const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
       ['拖时间尺', '框播放区间；点一下 = 取消区间并挪播放头'],
       ['拖区间两端握柄', '改区间起止'],
       ['右栏滑条上滚轮', '微调这条滑条（按住 Shift 五倍步长）'],
+      ['Ctrl + ]', '收起 / 展开右侧栏'],
       ['点钢琴键', '试听该音高'],
     ],
   },
@@ -1585,6 +1604,10 @@ export default function App() {
           .catch((err: unknown) => {
             st.setError(`方案存不下来：${err instanceof Error ? err.message : String(err)}`)
           })
+      } else if (e.code === 'BracketRight' && (e.ctrlKey || e.metaKey)) {
+        /* Ctrl+] = 收起 / 展开右侧栏（用户 m02483） */
+        e.preventDefault()
+        setShowSide((v) => !v)
       }
     }
     window.addEventListener('keydown', onKey, true) // 捕获阶段：先于控件自己的默认行为
@@ -1856,9 +1879,9 @@ export default function App() {
             </button>
           </span>
 
-          {/* 帮助 / 分析 / 设置 / 右栏开关：四颗只画图标，不画外框线（用户 m02483 第 7 条） */}
-          <span className="tgroup tb-util" title="帮助 / 分析 / 设置 / 侧栏">
-            {/* 帮助：按键 / 快捷键 / 鼠标操作（用户 m05893）。位置按用户 m02483 放在分析前面 */}
+          {/* 帮助 + 右栏开关（用户 m02483）：右栏只留一颗图标，三个页签在栏内切换 */}
+          <span className="tgroup tb-util" title="帮助 / 侧栏">
+            {/* 帮助：按键 / 快捷键 / 鼠标操作（用户 m05893） */}
             <button
               className={helpOpen ? 'icon-btn on' : 'icon-btn'}
               onClick={() => setHelpOpen(true)}
@@ -1874,44 +1897,12 @@ export default function App() {
                 <rect x="4.6" y="9" width="6.8" height="1.5" rx="0.5" fill="currentColor" />
               </svg>
             </button>
-            {/* 分析面板（用户 m02483）：调性、节奏与分轨都收在这里，点它切换右栏 */}
-            <button
-              className={showSide && sideView === 'analysis' ? 'icon-btn on' : 'icon-btn'}
-              onClick={() => {
-                if (showSide && sideView === 'analysis') {
-                  setSideView('edit')
-                } else {
-                  setSideView('analysis')
-                  setShowSide(true)
-                }
-              }}
-              title="调性、节奏与分轨：点开在右栏里看/调"
-              aria-label="分析面板"
-            >
-              <Icon name="analysisPanel" />
-            </button>
-            {/* 设置：前期的、一次性的东西都收在这里（模型安装、自动填音…） */}
-            <button
-              className={showSide && sideView === 'settings' ? 'icon-btn on' : 'icon-btn'}
-              onClick={() => {
-                if (showSide && sideView === 'settings') {
-                  setSideView('edit')
-                } else {
-                  setSideView('settings')
-                  setShowSide(true)
-                }
-              }}
-              title="模型安装、分析开关等一次性设置"
-              aria-label="设置"
-            >
-              <span className="tool-icon gear" aria-hidden="true" />
-            </button>
             {/* 右侧栏开关：图标与 iJipu BP 的兄弟项目「爱出片」用同一个
                 （public/icons/右侧边栏.svg，靠 CSS mask 上色，打开=亮、收起=灰） */}
             <button
               className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}
               onClick={() => setShowSide((v) => !v)}
-              title={showSide ? '把右侧栏收起来，给看谱多留点地方' : '把右侧栏展开（分析 / 编辑 / 设置）'}
+              title={showSide ? '把右侧栏收起来，给看谱多留点地方' : '把右侧栏展开（调节 / 分析 / 设置）'}
               aria-label={showSide ? '收起右侧栏' : '展开右侧栏'}
             >
               <span className="side-toggle-icon" />
@@ -2015,9 +2006,30 @@ export default function App() {
           ref={sidePanelRef}
           style={{ width: sideW }}
         >
-          {sideView !== 'edit' && (
-            <div className="side-title">{sideView === 'analysis' ? '分析' : COPY.settingsTitle}</div>
-          )}
+          {/* 右栏内的三个页签（用户 m02483）：调节 / 分析 / 设置，各带图标；顶栏只留一颗开关图标 */}
+          <div className="side-tabs" role="tablist" aria-label="右侧栏">
+            {(
+              [
+                ['edit', '调节', 'tune', '吸附、调号、生成参数、jps 源码'],
+                ['analysis', '分析', 'analysisPanel', '节奏与谐波、分轨'],
+                ['settings', '设置', 'settings', '显示组、分析开关、模型安装'],
+              ] as const
+            ).map(([v, label, icon, tip]) => (
+              <button
+                key={v}
+                type="button"
+                role="tab"
+                aria-selected={sideView === v}
+                className={sideView === v ? 'on' : ''}
+                data-name={label}
+                title={tip}
+                onClick={() => setSideView(v)}
+              >
+                <Icon name={icon} />
+                {label}
+              </button>
+            ))}
+          </div>
           {/* 吸附：从顶栏挪到右栏（用户 m02483：顶栏省点地方），位置放在编辑页最上面 */}
           {sideView === 'edit' && (
           <label
@@ -2037,7 +2049,7 @@ export default function App() {
           </label>
           )}
 
-          {sideView === 'analysis' && (
+          {sideView === 'edit' && (
           <div>
             <button className="group-head" onClick={() => setKeyOpen((v) => !v)} aria-expanded={keyOpen}>
               <span className="chev">{keyOpen ? '▾' : '▸'}</span>

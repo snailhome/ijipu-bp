@@ -210,21 +210,19 @@ try {
   check('界面挂载（出现 .toolbar）', mounted)
   if (!mounted) throw new Error('界面没起来，后面的点击没意义')
 
-  /* 右栏三种视图（编辑 / 分析 / 设置，用户 m02483）：点顶栏图标切换。
-   * 读侧栏标题判断当前在哪一页，测试里用它切到需要的页。 */
+  /* 右栏内三个页签（调节 / 分析 / 设置，用户 m02483）：读高亮页签判断当前在哪一页 */
   const sideViewNow = () =>
     cdp.eval(`(() => {
-      const t = document.querySelector('.side .side-title')
-      const s = t ? (t.textContent || '').trim() : ''
+      const b = document.querySelector('.side-tabs button.on')
+      const s = b ? (b.textContent || '').trim() : ''
       return s === '分析' ? 'analysis' : s === '设置' ? 'settings' : 'edit'
     })()`)
   const setSideView = async (view) => {
     for (let i = 0; i < 4; i++) {
-      const now = await sideViewNow()
-      if (now === view) return true
-      const label = view === 'edit' ? (now === 'settings' ? '设置' : '分析面板') : view === 'settings' ? '设置' : '分析面板'
+      if ((await sideViewNow()) === view) return true
+      const label = view === 'edit' ? '调节' : view === 'analysis' ? '分析' : '设置'
       await cdp.eval(`(() => {
-        const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === ${JSON.stringify(label)})
+        const b = [...document.querySelectorAll('.side-tabs button')].find((x) => (x.textContent || '').trim() === ${JSON.stringify(label)})
         if (b) b.click()
       })()`)
       await sleep(220)
@@ -234,7 +232,7 @@ try {
 
   /* ── 顶栏悬浮提示：快（120ms）且"名称在前、说明在后"（用户 m02483） ── */
   const tipPos = await cdp.eval(`(() => {
-    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '设置')
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '按键与鼠标操作')
     if (!b) return null
     const r = b.getBoundingClientRect()
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
@@ -255,7 +253,7 @@ try {
   check('顶栏悬浮提示很快出现（320ms 内，不等原生 title）', !!tip, JSON.stringify(tip))
   check(
     '提示第一行是按钮名称、第二行是功能说明',
-    !!tip && tip.name === '设置' && tip.firstClass === 'tb-tip-name' && tip.desc.includes('一次性设置'),
+    !!tip && tip.name === '按键与鼠标操作' && tip.firstClass === 'tb-tip-name' && tip.desc.includes('快捷键'),
     JSON.stringify(tip),
   )
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 420, button: 'none', buttons: 0 })
@@ -263,12 +261,29 @@ try {
   check('鼠标移开后提示立刻消失', await cdp.eval(`!document.querySelector('.tb-tip')`))
 
   /* ── 右栏控件也有同样的提示（用户 m02483） ── */
-  check('右栏能切到「分析」页', await setSideView('analysis'))
   check(
-    '「分析」页里有调性 / 节奏（分轨只在桌面壳渲染）',
+    '「调节」页里有调号列表和生成参数',
     await cdp.eval(`(() => {
       const t = document.querySelector('.side').textContent || ''
-      return t.includes('调性分析') && t.includes('节奏与谐波')
+      const hasKeySelect = [...document.querySelectorAll('.side select')].some((s) =>
+        [...s.options].some((o) => /大调/.test(o.textContent || '')),
+      )
+      return hasKeySelect && t.includes('调性分析') && t.includes('生成参数')
+    })()`),
+  )
+  check(
+    '三个页签都带图标',
+    await cdp.eval(`(() => {
+      const tabs = [...document.querySelectorAll('.side-tabs button')]
+      return tabs.length === 3 && tabs.every((b) => !!b.querySelector('svg'))
+    })()`),
+  )
+  check('右栏能切到「分析」页', await setSideView('analysis'))
+  check(
+    '「分析」页里有节奏与谐波（调号已挪到调节页）',
+    await cdp.eval(`(() => {
+      const t = document.querySelector('.side').textContent || ''
+      return t.includes('节奏与谐波') && !t.includes('调性分析')
     })()`),
   )
   const sideTipPos = await cdp.eval(`(() => {
@@ -999,6 +1014,18 @@ try {
   const sideBack = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
   check('右侧栏默认展开、点图标能收起、再点能展开', sideOn && sideOff && sideBack)
   check('收起右侧栏后主区变宽', rollWOff > rollWOn + 100, `${Math.round(rollWOn)} → ${Math.round(rollWOff)}`)
+
+  /* Ctrl+] = 收起 / 展开右栏（用户 m02483） */
+  await cdp.eval(`(() => { const el = document.querySelector('.side'); if (el && el.classList.contains('off')) document.querySelector('.toolbar .side-toggle').click() })()`)
+  await sleep(250)
+  await cdp.pressKey('BracketRight', ']', 221, 2)
+  await sleep(250)
+  const hotkeyOff = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && el.classList.contains('off') })()`)
+  check('Ctrl+] 能收起右侧栏', hotkeyOff === true, String(hotkeyOff))
+  await cdp.pressKey('BracketRight', ']', 221, 2)
+  await sleep(250)
+  const hotkeyOn = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
+  check('再按 Ctrl+] 能展开右侧栏', hotkeyOn === true, String(hotkeyOn))
 
   // ── 横向滚动条：一直在，放大后 thumb 变窄 ──
   const barWidth = await cdp.eval(`(() => {
@@ -1759,17 +1786,15 @@ try {
     `宽 ${tb.playW}、偏移 ${tb.playDx.toFixed(1)}px`,
   )
   check(
-    '右侧四颗图标按钮不画外框线',
-    tb.utilCount === 4 && tb.utilBordered === 0 && tb.utilFilled === 0,
+    '右侧两颗图标按钮（帮助 + 侧栏）不画外框线',
+    tb.utilCount === 2 && tb.utilBordered === 0 && tb.utilFilled === 0,
     JSON.stringify(tb),
   )
   check(
-    '右上角图标顺序：热键 → 分析 → 设置 → 侧栏',
+    '右上角只剩帮助 + 侧栏两颗图标',
     Array.isArray(tb.utilOrder) &&
       tb.utilOrder[0] === '按键与鼠标操作' &&
-      tb.utilOrder[1] === '分析面板' &&
-      tb.utilOrder[2] === '设置' &&
-      /右侧栏/.test(tb.utilOrder[3] || ''),
+      /右侧栏/.test(tb.utilOrder[1] || ''),
     JSON.stringify(tb.utilOrder),
   )
 
