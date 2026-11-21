@@ -2036,7 +2036,6 @@ export default function App() {
             className="field"
             data-name="吸附"
             title="画音 / 拖音时吸附到哪一格（默认 1/16 拍）"
-            style={{ marginBottom: 10 }}
           >
             吸附
             <select value={snap} onChange={(e) => useBp.getState().setSnap(e.target.value as SnapMode)}>
@@ -2055,7 +2054,6 @@ export default function App() {
             className="field"
             data-name={COPY.keyLabel}
             title="改调号会重算表里的简谱数字，也决定 jps 的 D: 行"
-            style={{ marginBottom: 10 }}
           >
             {COPY.keyLabel}
             <select value={tonic} onChange={(e) => useBp.getState().setTonic(Number(e.target.value))}>
@@ -2068,6 +2066,29 @@ export default function App() {
           </label>
           )}
 
+          {/* 去谐波：用户 m02483 从分析页挪到调节页（单这一项，说明放悬浮提示里） */}
+          {sideView === 'edit' && (
+          <label
+            className="field"
+            data-name={COPY.harmonicLabel}
+            title="把泛音从谱里减掉（0 = 不动，1 = 全减）；松手后会用同一段音频重跑一遍"
+          >
+            {COPY.harmonicLabel}
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={suppress}
+              onChange={(e) => useBp.getState().setSuppress(Number(e.target.value))}
+              onPointerUp={(e) => applySuppress(Number((e.target as HTMLInputElement).value))}
+              onKeyUp={(e) => applySuppress(Number((e.currentTarget as HTMLInputElement).value))}
+              style={{ width: 120, ...fillStyle(suppress * 100) }}
+            />
+            <span className="mono">{suppress.toFixed(2)}</span>
+          </label>
+          )}
+
           {/* 「分析后自动填入音符」从设置页挪到分析页（用户 m02483），不用分组，直接一条开关 */}
           {sideView === 'analysis' && (
             <>
@@ -2075,7 +2096,6 @@ export default function App() {
                 className="check"
                 data-name="分析后自动填入音符"
                 title="关着：分析只出频谱/节奏/调性，音符全靠自己在表格里点；开着：分析完先垫一版灰色的参考音"
-                style={{ marginBottom: 4 }}
               >
                 <input
                   type="checkbox"
@@ -2084,9 +2104,6 @@ export default function App() {
                 />
                 分析后自动填入音符
               </label>
-              <div className="hint" style={{ marginBottom: 8 }}>
-                开着：分析完先垫一版灰色的参考音；关着：只出频谱/节奏/调性。
-              </div>
             </>
           )}
 
@@ -2119,9 +2136,6 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-                <div className="hint" style={{ marginTop: 6 }}>
-                  {COPY.keyPanelHint}
-                </div>
               </div>
             )}
           </div>
@@ -2141,33 +2155,8 @@ export default function App() {
               <span className="hint">
                 {rhythm
                   ? `BPM ${rhythm.bpm} · 拍点 ${rhythm.beatCount} 个 · 可信度 ${(rhythm.confidence * 100).toFixed(0)}%`
-                  : COPY.rhythmHint}
+                  : ''}
               </span>
-            </div>
-            <div className="row-gap" style={{ marginTop: 8 }}>
-              <label
-                className="field"
-                data-name={COPY.harmonicLabel}
-                title="把泛音从谱里减掉（0 = 不动，1 = 全减）；松手后会用同一段音频重跑一遍"
-                style={{ flex: 1 }}
-              >
-                {COPY.harmonicLabel}
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={suppress}
-                  onChange={(e) => useBp.getState().setSuppress(Number(e.target.value))}
-                  onPointerUp={(e) => applySuppress(Number((e.target as HTMLInputElement).value))}
-                  onKeyUp={(e) => applySuppress(Number((e.currentTarget as HTMLInputElement).value))}
-                  style={{ width: 120, ...fillStyle(suppress * 100) }}
-                />
-                <span className="mono">{suppress.toFixed(2)}</span>
-              </label>
-            </div>
-            <div className="hint" style={{ marginTop: 4 }}>
-              {COPY.harmonicHint}
             </div>
           </SideGroup>
           )}
@@ -2221,7 +2210,7 @@ export default function App() {
                   >
                     {stemsReady ? COPY.stemsAgain : COPY.stemsRun}
                   </button>
-                  {stemsReady ? (
+                  {stemsReady && (
                     <div className="seg" title={COPY.stemsTip}>
                       {(['mix', 'vocals', 'instrumental'] as const).map((m) => (
                         <button
@@ -2235,8 +2224,6 @@ export default function App() {
                         </button>
                       ))}
                     </div>
-                  ) : (
-                    <span className="hint">{COPY.stemsHint}</span>
                   )}
                 </div>
               )}
@@ -2298,7 +2285,6 @@ export default function App() {
                 />
                 ms
               </label>
-              <div className="hint">改哪一项都只重算"拍轴"，原始秒轴不动。</div>
             </div>
           </SideGroup>
           )}
@@ -2400,7 +2386,6 @@ export default function App() {
                   </span>
                 </div>
               )}
-              <div className="hint">颜色深度 = 值 ^ 对比 × 倍率。</div>
             </div>
           </SideGroup>
           )}

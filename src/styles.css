@@ -1026,7 +1026,6 @@ select option:checked {
 .side-tabs {
   display: flex;
   gap: 4px;
-  margin-bottom: 8px;
   padding-bottom: 7px;
   border-bottom: 1px solid var(--line);
 }

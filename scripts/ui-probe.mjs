@@ -262,13 +262,13 @@ try {
 
   /* ── 右栏控件也有同样的提示（用户 m02483） ── */
   check(
-    '「调节」页里有调号下拉和生成参数（调性分析组不在这儿）',
+    '「调节」页里有调号下拉、去谐波和生成参数（调性分析组不在这儿）',
     await cdp.eval(`(() => {
       const t = document.querySelector('.side').textContent || ''
       const hasKeySelect = [...document.querySelectorAll('.side select')].some((s) =>
         [...s.options].some((o) => /大调/.test(o.textContent || '')),
       )
-      return hasKeySelect && t.includes('生成参数') && !t.includes('调性分析')
+      return hasKeySelect && t.includes('去谐波') && t.includes('生成参数') && !t.includes('调性分析')
     })()`),
   )
   check(
@@ -280,13 +280,14 @@ try {
   )
   check('右栏能切到「分析」页', await setSideView('analysis'))
   check(
-    '「分析」页里有调性分析组、节奏与谐波、自动填音开关（调号下拉在调节页）',
+    '「分析」页里有调性分析组、节奏与谐波、自动填音开关（调号/去谐波在调节页）',
     await cdp.eval(`(() => {
       const t = document.querySelector('.side').textContent || ''
       const hasKeySelect = [...document.querySelectorAll('.side select')].some((s) =>
         [...s.options].some((o) => /大调/.test(o.textContent || '')),
       )
-      return t.includes('调性分析') && t.includes('节奏与谐波') && t.includes('分析后自动填入音符') && !hasKeySelect
+      return t.includes('调性分析') && t.includes('节奏与谐波') && t.includes('分析后自动填入音符') &&
+        !hasKeySelect && !t.includes('去谐波')
     })()`),
   )
   const sideTipPos = await cdp.eval(`(() => {
@@ -1887,8 +1888,8 @@ try {
     `没动：${stuck.join('、') || '无'}（前：${sliderBefore.join(',')}）`,
   )
 
-  /* 分析页里那条「去谐波」滑条也要能滚 */
-  await setSideView('analysis')
+  /* 调节页里那条「去谐波」滑条也要能滚（用户 m02483 从分析页挪过来） */
+  await setSideView('edit')
   const harmSlider = await cdp.eval(`(() => {
     const el = [...document.querySelectorAll('.side input[type=range]')].find((x) => x.min === '0' && x.max === '1')
     if (!el) return null
@@ -1899,7 +1900,7 @@ try {
   await sleep(220)
   const harmAfter = await cdp.eval(`window.__bp.getState().suppress`)
   check(
-    '分析页的「去谐波」滑条也能悬浮滚轮调',
+    '调节页的「去谐波」滑条也能悬浮滚轮调',
     !!harmSlider && harmAfter !== harmSlider.before,
     `${harmSlider?.before} → ${harmAfter}`,
   )
