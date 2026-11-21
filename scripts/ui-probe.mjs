@@ -262,13 +262,13 @@ try {
 
   /* ── 右栏控件也有同样的提示（用户 m02483） ── */
   check(
-    '「调节」页里有调号列表和生成参数',
+    '「调节」页里有调号下拉和生成参数（调性分析组不在这儿）',
     await cdp.eval(`(() => {
       const t = document.querySelector('.side').textContent || ''
       const hasKeySelect = [...document.querySelectorAll('.side select')].some((s) =>
         [...s.options].some((o) => /大调/.test(o.textContent || '')),
       )
-      return hasKeySelect && t.includes('调性分析') && t.includes('生成参数')
+      return hasKeySelect && t.includes('生成参数') && !t.includes('调性分析')
     })()`),
   )
   check(
@@ -280,10 +280,13 @@ try {
   )
   check('右栏能切到「分析」页', await setSideView('analysis'))
   check(
-    '「分析」页里有节奏与谐波（调号已挪到调节页）',
+    '「分析」页里有调性分析组、节奏与谐波、自动填音开关（调号下拉在调节页）',
     await cdp.eval(`(() => {
       const t = document.querySelector('.side').textContent || ''
-      return t.includes('节奏与谐波') && !t.includes('调性分析')
+      const hasKeySelect = [...document.querySelectorAll('.side select')].some((s) =>
+        [...s.options].some((o) => /大调/.test(o.textContent || '')),
+      )
+      return t.includes('调性分析') && t.includes('节奏与谐波') && t.includes('分析后自动填入音符') && !hasKeySelect
     })()`),
   )
   const sideTipPos = await cdp.eval(`(() => {
@@ -1049,10 +1052,10 @@ try {
    * 它们现在在「设置」页的「显示」组里（用户 m02483）。 */
   check('右栏能切到「设置」页', await setSideView('settings'))
   check(
-    '「设置」页里有显示组、没有生成参数',
+    '「设置」页里有显示组、没有生成参数和自动填音开关',
     await cdp.eval(`(() => {
       const t = document.querySelector('.side').textContent || ''
-      return t.includes('行高') && t.includes('屏宽') && !t.includes('生成参数')
+      return t.includes('行高') && t.includes('屏宽') && !t.includes('生成参数') && !t.includes('分析后自动填入音符')
     })()`),
   )
   const sampleHeat = async () =>

@@ -2,8 +2,8 @@
  * App.tsx — 爱扒谱的主界面
  *
  * 布局（用户 m01788 之后的形态）：上面工具条；中间左边「音符表 + 简谱流线谱」占满，
- * 右边有三种页签（用户 m02483）：调节（吸附 / 调性 / 生成参数 / jps 源码）、
- * 分析（节奏与谐波 / 分轨）、设置（显示组 / 一次性开关 / 关于），顶栏只有一颗右栏开关。
+ * 右边有三种页签（用户 m02483）：调节（吸附 / 调号 / 生成参数 / jps 源码）、
+ * 分析（调性分析候选 / 节奏与谐波 / 分轨）、设置（显示组 / 一次性开关 / 关于），顶栏只有一颗右栏开关。
  *
  * 独立的频谱面板已经撤掉 —— 频谱能量直接铺在音符表的格子里当热力图，
  * 把纵向空间全让给"音高 × 时间"的表格（对照 noteDigger 的信息密度）。
@@ -2049,7 +2049,48 @@ export default function App() {
           </label>
           )}
 
+          {/* 调号：用户 m02483 只把这一项挪到调节页；调性分析的候选列表还在分析页 */}
           {sideView === 'edit' && (
+          <label
+            className="field"
+            data-name={COPY.keyLabel}
+            title="改调号会重算表里的简谱数字，也决定 jps 的 D: 行"
+            style={{ marginBottom: 10 }}
+          >
+            {COPY.keyLabel}
+            <select value={tonic} onChange={(e) => useBp.getState().setTonic(Number(e.target.value))}>
+              {KEY_CHOICES.map((k) => (
+                <option key={k} value={k}>
+                  {keyDisplayName(k)} 大调
+                </option>
+              ))}
+            </select>
+          </label>
+          )}
+
+          {/* 「分析后自动填入音符」从设置页挪到分析页（用户 m02483），不用分组，直接一条开关 */}
+          {sideView === 'analysis' && (
+            <>
+              <label
+                className="check"
+                data-name="分析后自动填入音符"
+                title="关着：分析只出频谱/节奏/调性，音符全靠自己在表格里点；开着：分析完先垫一版灰色的参考音"
+                style={{ marginBottom: 4 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={autoNotes}
+                  onChange={(e) => useBp.getState().setAutoNotes(e.target.checked)}
+                />
+                分析后自动填入音符
+              </label>
+              <div className="hint" style={{ marginBottom: 8 }}>
+                开着：分析完先垫一版灰色的参考音；关着：只出频谱/节奏/调性。
+              </div>
+            </>
+          )}
+
+          {sideView === 'analysis' && (
           <div>
             <button className="group-head" onClick={() => setKeyOpen((v) => !v)} aria-expanded={keyOpen}>
               <span className="chev">{keyOpen ? '▾' : '▸'}</span>
@@ -2057,21 +2098,6 @@ export default function App() {
             </button>
             {keyOpen && (
               <div className="group-body">
-                <label
-                  className="field"
-                  data-name={COPY.keyLabel}
-                  title="改调号会重算表里的简谱数字，也决定 jps 的 D: 行"
-                  style={{ marginBottom: 8 }}
-                >
-                  {COPY.keyLabel}
-                  <select value={tonic} onChange={(e) => useBp.getState().setTonic(Number(e.target.value))}>
-                    {KEY_CHOICES.map((k) => (
-                      <option key={k} value={k}>
-                        {keyDisplayName(k)} 大调
-                      </option>
-                    ))}
-                  </select>
-                </label>
                 <div className="keys">
                   {candidates.map((c) => (
                     <div
@@ -2399,22 +2425,6 @@ export default function App() {
           {/* 设置页：前期/一次性的东西都收在这儿（用户 m06889） */}
           {sideView === 'settings' && (
             <>
-              <SideGroup title={COPY.settingsAnalyse}>
-                <label
-                  className="check"
-                  data-name="分析后自动填入音符"
-                  title="关着：分析只出频谱/节奏/调性，音符全靠自己在表格里点；开着：分析完先垫一版灰色的参考音"
-                >
-                  <input
-                    type="checkbox"
-                    checked={autoNotes}
-                    onChange={(e) => useBp.getState().setAutoNotes(e.target.checked)}
-                  />
-                  分析后自动填入音符
-                </label>
-                <div className="hint">跟具体某首歌无关的行为开关都放这里；改完立刻生效。</div>
-              </SideGroup>
-
               {canSeparate() && (
                 <SideGroup title={COPY.stemsTitle}>
                   {sepOk && (!sepOk.model || !sepOk.dll) ? (
