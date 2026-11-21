@@ -1098,6 +1098,61 @@ try {
   const badgeOnRuler = await cdp.eval(`!!document.querySelector('.row-badge')`)
   check('时间尺区域不显示"音名·简谱"信息牌', badgeOnRuler === false, String(badgeOnRuler))
 
+  /* ── 时间轴 / 键区锁的操作提示（用户 m02483） ── */
+  const rulerTip = await cdp.eval(`(() => {
+    const el = document.querySelector('.canvas-tip')
+    return el ? { name: el.querySelector('strong')?.textContent || '', desc: el.querySelector('span')?.textContent || '' } : null
+  })()`)
+  check(
+    '时间轴上有操作提示（拖圈区间 / 点挪播放头）',
+    !!rulerTip && rulerTip.name === '时间轴' && rulerTip.desc.includes('播放区间'),
+    JSON.stringify(rulerTip),
+  )
+
+  const lockPoint = await cdp.eval(`(() => {
+    const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+    return { x: r.x + 54, y: r.y + 18 }
+  })()`)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: lockPoint.x, y: lockPoint.y, button: 'none' })
+  await sleep(220)
+  const lockTip = await cdp.eval(`(() => {
+    const el = document.querySelector('.canvas-tip')
+    return el ? { name: el.querySelector('strong')?.textContent || '', desc: el.querySelector('span')?.textContent || '' } : null
+  })()`)
+  check(
+    '键区锁上有操作提示（锁住后滚轮改平移）',
+    !!lockTip && lockTip.name.includes('键区锁') && lockTip.desc.includes('滚轮'),
+    JSON.stringify(lockTip),
+  )
+
+  /* ── 音名·简谱信息牌跟着鼠标走，且不再带"（点一下试听）" ── */
+  const badgeAt = (fx, fy) =>
+    cdp.eval(`(() => {
+      const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+      const el = document.querySelector('.row-badge')
+      const cv = document.querySelector('.pane.roll canvas')
+      return { left: el ? el.style.left : null, top: el ? el.style.top : null, text: el ? el.textContent : null,
+        x: r.x + r.width * ${fx}, y: r.y + r.height * ${fy}, cx: cv.getBoundingClientRect().x, cy: cv.getBoundingClientRect().y }
+    })()`)
+  const b1 = await badgeAt(0.4, 0.5)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: b1.x, y: b1.y, button: 'none' })
+  await sleep(200)
+  const badge1 = await badgeAt(0.4, 0.5)
+  const p2 = await badgeAt(0.66, 0.62)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p2.x, y: p2.y, button: 'none' })
+  await sleep(200)
+  const badge2 = await badgeAt(0.66, 0.62)
+  check(
+    '音名·简谱信息牌跟着鼠标走',
+    !!badge1.left && !!badge2.left && badge1.left !== badge2.left && badge1.top !== badge2.top,
+    `( ${badge1.left},${badge1.top} ) → ( ${badge2.left},${badge2.top} )`,
+  )
+  check(
+    '信息牌里不再有"（点一下试听）"',
+    !!badge2.text && badge2.text.includes('·') && !badge2.text.includes('点一下试听'),
+    String(badge2.text),
+  )
+
   /* ── 时点线要跟着当前时点走 ──
    * 注意：headless Chrome 没有音频设备，按空格虽然 playing 变 true，
    * currentTime 却不动（实测 0 → 0）。所以这里不去驱动真实播放，

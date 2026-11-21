@@ -184,8 +184,10 @@ export function NoteRoll(props: Props) {
   const [hoverMidi, setHoverMidi] = useState<number | null>(null)
   /* 按下未松的琴键：整格高亮成黄色（用户 m04380） */
   const [pressMidi, setPressMidi] = useState<number | null>(null)
-  /* 鼠标在画布里的 y（用来判断要不要显示悬浮信息；时间尺上不显示） */
+  /* 鼠标在画布里的 y（用来判断要不要显示悬浮信息；时间尺上不显示音名牌） */
   const [hoverY, setHoverY] = useState<number | null>(null)
+  /* 鼠标 x：音名牌和操作提示都跟着鼠标走（用户 m02483） */
+  const [hoverX, setHoverX] = useState<number | null>(null)
   /* 按住 Alt 临时当绘制模式用（用户 m05672）：选择模式下 Alt 一按就能画，松开回到选择 */
   const [altHeld, setAltHeld] = useState(false)
   const drag = useRef<Drag | null>(null)
@@ -922,6 +924,7 @@ export function NoteRoll(props: Props) {
       const rect = e.currentTarget.getBoundingClientRect()
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
+      setHoverX(x)
       setHoverY(y)
       setHoverMidi(y >= RULER_H ? midiAt(y) : null)
 
@@ -1030,6 +1033,22 @@ export function NoteRoll(props: Props) {
       ? '绘制：点空格子画音（按住拖长）、点已有的音=确认/取消确认、拖音符=移音高/位置、拖右边缘改时值、右键删'
       : '选择：点一下试听；拖音符=移音高/位置、拖右边缘改时值（画音 / 删音 / 确认要切绘制）'
 
+  /* 时间尺 / 键区锁的悬浮提示（用户 m02483）：画布是整块 canvas，没法像按钮那样挂 title，
+   * 就在 pointermove 里按命中区域算一句"这里能干什么"，跟鼠标一起走。 */
+  const hoverTip = useMemo(() => {
+    if (hoverX === null || hoverY === null || hoverY >= RULER_H) return null
+    if (hoverX >= KEY_W - 22 && hoverX <= KEY_W - 2) {
+      return {
+        name: props.lockPitch ? '键区锁（已锁住）' : '键区锁（未锁）',
+        desc: '锁定后滚轮改成左右平移，不再上下换音区；点一下切换',
+      }
+    }
+    return {
+      name: '时间轴',
+      desc: '按住往右拖：圈出播放区间（自动循环）；点一下：挪播放头并取消区间',
+    }
+  }, [hoverX, hoverY, props.lockPitch])
+
   return (
     <div className="pane roll" ref={wrapRef}>
       {/* 说明放画布上方一条窄头里，不压时间尺（时间尺上只留刻度和第几小节） */}
@@ -1052,17 +1071,36 @@ export function NoteRoll(props: Props) {
         onPointerLeave={() => {
           setHoverMidi(null)
           setHoverY(null)
+          setHoverX(null)
         }}
         onContextMenu={onContext}
       />
-      </div>
-      {/* 悬浮信息：跟着鼠标走，但只在音符格区域显示（时间尺上不显示） */}
-      {hoverMidi !== null && hoverY !== null && hoverY >= RULER_H && (
-        <div className="row-badge">
+      {/* 音名·简谱信息牌：跟着鼠标走（用户 m02483），只在音高格区域显示 */}
+      {hoverMidi !== null && hoverY !== null && hoverX !== null && hoverY >= RULER_H && (
+        <div
+          className="row-badge"
+          style={{
+            left: Math.max(6, Math.min(metrics.w - 112, hoverX + 14)),
+            top: Math.max(4, Math.min(metrics.h - 28, hoverY + 16)),
+          }}
+        >
           {midiToName(hoverMidi)} · {midiToNumber(hoverMidi, props.tonic).text}
-          <span className="dim">（点一下试听）</span>
         </div>
       )}
+      {/* 时间尺 / 键区锁的操作提示：说明"这里能干什么"（用户 m02483） */}
+      {hoverTip && hoverX !== null && hoverY !== null && (
+        <div
+          className="canvas-tip"
+          style={{
+            left: Math.max(6, Math.min(metrics.w - 250, hoverX + 14)),
+            top: Math.max(4, Math.min(metrics.h - 70, hoverY + 16)),
+          }}
+        >
+          <strong>{hoverTip.name}</strong>
+          <span>{hoverTip.desc}</span>
+        </div>
+      )}
+      </div>
       {notes.length === 0 && (
         <div className="pane-empty">
           {spectrum

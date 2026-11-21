@@ -380,11 +380,9 @@ button.primary {
   inset: 0;
 }
 
-/* 悬停行的信息牌（音名 + 简谱数字），贴在网格右上角 */
+/* 悬停行的信息牌（音名 + 简谱数字）：跟着鼠标走（位置由 React 写 left/top） */
 .row-badge {
   position: absolute;
-  right: 10px;
-  top: 30px;
   z-index: 4;
   padding: 2px 8px;
   border-radius: 999px;
@@ -393,12 +391,36 @@ button.primary {
   color: #d8ecff;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   pointer-events: none;
 }
 
-.row-badge .dim {
+/* 画布上的操作提示（时间轴 / 键区锁）：名称 + 一句说明，跟着鼠标走（用户 m02483） */
+.canvas-tip {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  gap: 2px;
+  max-width: 252px;
+  padding: 5px 9px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(18, 24, 32, 0.97);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.canvas-tip strong {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.canvas-tip span {
+  font-size: 11px;
+  line-height: 1.45;
   color: var(--fg-dim);
-  margin-left: 4px;
+  white-space: normal;
 }
 
 .pane-empty {
