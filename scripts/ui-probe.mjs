@@ -1370,31 +1370,68 @@ try {
   )
   check('屏宽记进 localStorage（重开能恢复）', afterPage.saved === String(afterPage.pageSec), String(afterPage.saved))
 
-  /* ── 设置页里也有这两条滑条（用户 m02483 说"设置里增一个"） ── */
-  await cdp.eval(`(() => {
-    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '设置')
-    if (b) b.click()
+  /* ── 所有滑条都能"鼠标悬浮滚轮"调（用户 m02483 追加要求） ──
+   * 逐条滚一下：值必须真的变；行高那条还要试"指着整行文字滚"（命中区放宽到 label.field）。 */
+  const sliders = await cdp.eval(`(() => {
+    return [...document.querySelectorAll('.side input[type=range]')].filter((el) => !el.disabled).map((el) => {
+      const r = el.getBoundingClientRect()
+      const lab = el.closest('label.field')
+      const lr = lab ? lab.getBoundingClientRect() : r
+      const labelText = lab ? (lab.textContent || '').trim().slice(0, 6) : ''
+      return {
+        key: (lab ? (lab.textContent || '').trim().slice(0, 2) : String(el.min)),
+        value: Number(el.value), min: Number(el.min), max: Number(el.max),
+        track: { x: r.x + r.width / 2, y: r.y + r.height / 2 },
+        label: { x: lr.x + 18, y: lr.y + lr.height / 2 },
+      }
+    })
   })()`)
-  await sleep(300)
-  const settingsSliders = await cdp.eval(`(() => {
-    const side = [...document.querySelectorAll('.side')].find((s) => s.style.display !== 'none' && s.querySelector('input[type=range][min="10"]'))
-    if (!side) return null
-    return {
-      row: !!side.querySelector('input[type=range][min="10"][max="26"]'),
-      page: !!side.querySelector('input[type=range][min="2"][max="60"]'),
-      hasTitle: [...side.querySelectorAll('.group-title')].some((t) => t.textContent.includes('显示尺寸')),
-    }
+  const sliderBefore = sliders.map((s) => s.value)
+  for (const s of sliders) {
+    /* 值已经在顶就往回滚，否则往上滚（滚轮向下 = 减一格） */
+    const deltaY = s.value >= s.max ? 120 : -120
+    await cdp.wheelAt(s.track.x, s.track.y, deltaY)
+    await sleep(150)
+  }
+  const sliderAfter = await cdp.eval(`[...document.querySelectorAll('.side input[type=range]')].filter((el) => !el.disabled).map((el) => Number(el.value))`)
+  const stuck = sliders.map((s, i) => (sliderAfter[i] === sliderBefore[i] ? s.key : null)).filter(Boolean)
+  check(
+    `右栏 ${sliders.length} 条滑条全都能悬浮滚轮调`,
+    sliders.length >= 5 && stuck.length === 0,
+    `没动：${stuck.join('、') || '无'}（前：${sliderBefore.join(',')}）`,
+  )
+
+  /* 行高那条：鼠标指在"行高 14px"这行文字上滚，也要能调（命中区是整行） */
+  const rowLabelWheel = await cdp.eval(`(() => {
+    const el = document.querySelector('.side input[type=range][min="10"][max="26"]')
+    if (!el) return null
+    const lab = el.closest('label.field')
+    const r = lab.getBoundingClientRect()
+    return { x: r.x + 16, y: r.y + r.height / 2, before: Number(el.value) }
+  })()`)
+  if (rowLabelWheel) {
+    await cdp.wheelAt(rowLabelWheel.x, rowLabelWheel.y, rowLabelWheel.before >= 26 ? 120 : -120)
+    await sleep(200)
+  }
+  const rowAfterLabelWheel = await cdp.eval(`(() => {
+    const el = document.querySelector('.side input[type=range][min="10"][max="26"]')
+    return el ? Number(el.value) : null
   })()`)
   check(
-    '「设置」页里有行高 / 屏宽两条滑条',
-    !!settingsSliders && settingsSliders.row && settingsSliders.page && settingsSliders.hasTitle,
-    JSON.stringify(settingsSliders),
+    '指着「行高」这行文字滚轮也能调（不用精确对准轨道）',
+    !!rowLabelWheel && rowAfterLabelWheel !== rowLabelWheel.before,
+    `${rowLabelWheel?.before} → ${rowAfterLabelWheel}`,
   )
+  /* 收尾：把滑条调回默认，别影响后面的用例 */
   await cdp.eval(`(() => {
-    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '设置')
-    if (b) b.click()
+    const s = window.__bp.getState()
+    s.setRowH(14)
+    s.setPageSec(20)
+    s.setGain(1)
+    s.setContrast(1.4)
+    s.setSuppress(0)
   })()`)
-  await sleep(300)
+  await sleep(200)
 
   /* ── 表格顶行记在 store / localStorage（用户 m02483 第 4 条） ── */
   const topInfo = await cdp.eval(`(() => {

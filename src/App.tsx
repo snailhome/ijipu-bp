@@ -446,19 +446,20 @@ export default function App() {
   const hasProjectRef = useRef(false)
   /* 写盘失败只报一次，别每 1.2 秒刷一遍状态栏 */
   const saveErrRef = useRef(false)
-  const sideRef = useRef<HTMLDivElement | null>(null)
 
-  /* 右侧栏里所有滑条：鼠标在上面滚轮就能调，而且那一刻不滚动右栏（用户 m05454）。
+  /* 所有滑条：鼠标悬浮在上面滚轮就能调，而且那一刻不滚动面板（用户 m05454、m02483）。
    * React 的 onWheel 是 passive 的，preventDefault 拦不住滚动，所以这里挂原生监听。
+   * 挂在 document 上而不是右栏上：设置页、弹层里的滑条也要一样能滚（用户 m02483 追加要求）。
+   * 命中区放宽到"整行 label.field"：光在 18px 高的轨道上滚太难对准，指着"行高 14px"这行滚也算。
    * 直接写 el.value 会被 React 的 value tracker 认为"没变"，得用原生 setter 再派发 input 事件。 */
   useEffect(() => {
-    const host = sideRef.current
-    if (!host) return
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
     const onWheel = (ev: WheelEvent) => {
-      const el = (ev.target as HTMLElement | null)?.closest?.('input[type="range"]') as HTMLInputElement | null
-      if (!el) return
-      ev.preventDefault() // 只调滑条，不滚右栏
+      const target = ev.target as HTMLElement | null
+      const el = (target?.closest?.('input[type="range"]') ??
+        target?.closest?.('label.field')?.querySelector('input[type="range"]')) as HTMLInputElement | null
+      if (!el || el.disabled) return
+      ev.preventDefault() // 只调滑条，不滚面板
       const step = Number(el.step) || 1
       const min = Number(el.min)
       const max = Number(el.max)
@@ -468,9 +469,9 @@ export default function App() {
       if (setter) setter.call(el, String(next))
       el.dispatchEvent(new Event('input', { bubbles: true }))
     }
-    host.addEventListener('wheel', onWheel, { passive: false })
-    return () => host.removeEventListener('wheel', onWheel)
-  }, [showSide])
+    document.addEventListener('wheel', onWheel, { passive: false })
+    return () => document.removeEventListener('wheel', onWheel)
+  }, [])
 
   const confirmedCount = useMemo(() => notes.filter((n) => n.confirmed).length, [notes])
   const warnings = useBp((s) => s.warnings)
@@ -1697,45 +1698,6 @@ export default function App() {
               </SideGroup>
             )}
 
-            {/* 显示尺寸（用户 m02483 第 1、2 条）：设置页也放一份，进来看得见；
-                跟「编辑」页「显示」组是同一个 state，在哪边调都一样。 */}
-            <SideGroup title="显示尺寸">
-              <label className="field" title="表格每半音一行的高度；钢琴键和音符块跟着变（10–26px）">
-                行高
-                <input
-                  type="range"
-                  min={ROW_H_MIN}
-                  max={ROW_H_MAX}
-                  step={1}
-                  value={rowH}
-                  onChange={(e) => useBp.getState().setRowH(Number(e.target.value))}
-                  style={{
-                    width: 140,
-                    ...fillStyle(((rowH - ROW_H_MIN) / (ROW_H_MAX - ROW_H_MIN)) * 100),
-                  }}
-                />
-                <span className="mono">{rowH}px</span>
-              </label>
-              <label className="field" title="时间轴上一屏显示多少秒（默认 20 秒，2–60 秒）">
-                屏宽
-                <input
-                  type="range"
-                  min={PAGE_SEC_MIN}
-                  max={PAGE_SEC_MAX}
-                  step={1}
-                  value={pageSliderSec}
-                  onChange={(e) => useBp.getState().setPageSec(Number(e.target.value))}
-                  disabled={!durationMs}
-                  style={{
-                    width: 140,
-                    ...fillStyle(((pageSliderSec - PAGE_SEC_MIN) / (PAGE_SEC_MAX - PAGE_SEC_MIN)) * 100),
-                  }}
-                />
-                <span className="mono">{Math.round(pageSliderSec)}s</span>
-              </label>
-              <div className="hint">跟「编辑」页「显示」组里那两条是同一个值，两边调都行。</div>
-            </SideGroup>
-
             <SideGroup title={COPY.settingsAbout} defaultOpen={false}>
               <div className="hint">爱扒谱 iJipu BP {APP_VERSION}</div>
               <div className="hint">分离模型 htdemucs（MIT，Meta AI）只在桌面版可用；网页版不显示分轨。</div>
@@ -1745,7 +1707,6 @@ export default function App() {
 
         <div
           className={showSide ? "side" : "side off"}
-          ref={sideRef}
           style={{ display: sideView === 'settings' ? 'none' : undefined, width: sideW }}
         >
           <div>
@@ -1932,36 +1893,6 @@ export default function App() {
 
           <SideGroup title={"显示"}>
             <div style={{ display: 'grid', gap: 6 }}>
-              <label className="field">
-                倍率
-                <input
-                  type="range"
-                  min={0.2}
-                  max={5}
-                  step={0.1}
-                  value={gain}
-                  onChange={(e) => useBp.getState().setGain(Number(e.target.value))}
-                  style={{ width: 140, ...fillStyle(((gain - 0.2) / 4.8) * 100) }}
-                />
-                <span className="hint" style={{ width: 30, textAlign: 'right' }}>
-                  {gain.toFixed(1)}
-                </span>
-              </label>
-              <label className="field">
-                对比
-                <input
-                  type="range"
-                  min={0.3}
-                  max={3}
-                  step={0.05}
-                  value={contrast}
-                  onChange={(e) => useBp.getState().setContrast(Number(e.target.value))}
-                  style={{ width: 140, ...fillStyle(((contrast - 0.3) / 2.7) * 100) }}
-                />
-                <span className="hint" style={{ width: 30, textAlign: 'right' }}>
-                  {contrast.toFixed(2)}
-                </span>
-              </label>
               <label className="field" title="表格每半音一行的高度；左侧钢琴键和音符块跟着变（10–26px）">
                 行高
                 <input
@@ -1997,6 +1928,36 @@ export default function App() {
                 />
                 <span className="hint" style={{ width: 34, textAlign: 'right' }}>
                   {Math.round(pageSliderSec)}s
+                </span>
+              </label>
+              <label className="field">
+                倍率
+                <input
+                  type="range"
+                  min={0.2}
+                  max={5}
+                  step={0.1}
+                  value={gain}
+                  onChange={(e) => useBp.getState().setGain(Number(e.target.value))}
+                  style={{ width: 140, ...fillStyle(((gain - 0.2) / 4.8) * 100) }}
+                />
+                <span className="hint" style={{ width: 30, textAlign: 'right' }}>
+                  {gain.toFixed(1)}
+                </span>
+              </label>
+              <label className="field">
+                对比
+                <input
+                  type="range"
+                  min={0.3}
+                  max={3}
+                  step={0.05}
+                  value={contrast}
+                  onChange={(e) => useBp.getState().setContrast(Number(e.target.value))}
+                  style={{ width: 140, ...fillStyle(((contrast - 0.3) / 2.7) * 100) }}
+                />
+                <span className="hint" style={{ width: 30, textAlign: 'right' }}>
+                  {contrast.toFixed(2)}
                 </span>
               </label>
               <label className="check" title="只把 G3–C6（约 196–1047Hz）的格子画亮：伴奏在低音区/高频的泛音会被压暗">
