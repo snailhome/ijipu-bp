@@ -1994,6 +1994,16 @@ try {
     }
   })()`)
   check('MIDI 组排在文件组后面、谱音组前面', midiPlace.hasAll && midiPlace.afterFile && midiPlace.beforeSelect, JSON.stringify(midiPlace.labels))
+  const undoPlace = await cdp.eval(`(() => {
+    const left = [...document.querySelectorAll('.tb-left button')].map((b) => b.getAttribute('aria-label') || '')
+    const right = [...document.querySelectorAll('.tb-right button')].map((b) => b.getAttribute('aria-label') || '')
+    return {
+      labels: left,
+      afterNone: left.indexOf('撤销') > left.indexOf('全不选') && left.indexOf('重做') > left.indexOf('全不选'),
+      notRight: !right.includes('撤销') && !right.includes('重做'),
+    }
+  })()`)
+  check('撤销 / 重做组放在全选 / 全不选后面', undoPlace.afterNone && undoPlace.notRight, JSON.stringify(undoPlace.labels))
   await cdp.eval(`(() => {
     const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === 'MIDI 编辑器')
     b?.click()

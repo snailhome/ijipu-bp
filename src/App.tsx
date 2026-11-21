@@ -2045,6 +2045,30 @@ export default function App() {
               <Icon name="checkNone" />
             </button>
           </span>
+
+          {/* 撤销 / 重做：按用户 m02483 放在全选 / 全不选后面 */}
+          <span className="tgroup" title="撤销 / 重做">
+            <button
+              className="icon-btn"
+              onClick={() => useBp.getState().undo()}
+              disabled={historyLen === 0}
+              title={COPY.undoTip}
+              aria-label={COPY.undo}
+              data-key="Ctrl+Z"
+            >
+              <Icon name="undo" />
+            </button>
+            <button
+              className="icon-btn"
+              onClick={() => useBp.getState().redo()}
+              disabled={futureLen === 0}
+              title={COPY.redoTip}
+              aria-label={COPY.redo}
+              data-key="Ctrl+Shift+Z"
+            >
+              <Icon name="redo" />
+            </button>
+          </span>
         </div>
 
         {/* 播放：单独一颗、放顶栏正中、比别的按钮大（用户 m02483 第 6 条）；
@@ -2206,29 +2230,7 @@ export default function App() {
             </button>
           </div>
 
-          {/* 撤销 / 重做 */}
-          <span className="tgroup" title="撤销 / 重做">
-            <button
-              className="icon-btn"
-              onClick={() => useBp.getState().undo()}
-              disabled={historyLen === 0}
-              title={COPY.undoTip}
-              aria-label={COPY.undo}
-              data-key="Ctrl+Z"
-            >
-              <Icon name="undo" />
-            </button>
-            <button
-              className="icon-btn"
-              onClick={() => useBp.getState().redo()}
-              disabled={futureLen === 0}
-              title={COPY.redoTip}
-              aria-label={COPY.redo}
-              data-key="Ctrl+Shift+Z"
-            >
-              <Icon name="redo" />
-            </button>
-          </span>
+          {/* 撤销 / 重做 已挪到全选 / 全不选后面（用户 m02483） */}
 
           {/* 帮助 + 右栏开关（用户 m02483）：右栏只留一颗图标，三个页签在栏内切换 */}
           <span className="tgroup tb-util" title="帮助 / 侧栏">
