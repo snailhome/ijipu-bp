@@ -1035,7 +1035,7 @@ export function NoteRoll(props: Props) {
     if (hoverX >= KEY_W - 22 && hoverX <= KEY_W - 2) {
       return {
         name: props.lockPitch ? '键区锁（已锁住）' : '键区锁（未锁）',
-        key: 'Alt+L',
+        key: 'Ctrl+L',
         desc: '锁定后滚轮改成左右平移，不再上下换音区；点一下切换',
       }
     }

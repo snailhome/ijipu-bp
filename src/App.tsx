@@ -416,7 +416,8 @@ const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
     rows: [
       ['空格', '播放 / 暂停；圈了播放区就在区间里循环'],
       ['Tab', '原音频 / 合成音 互换'],
-      ['L', '重复区间开关'],
+      ['Alt + L', '重复区间开关'],
+      ['Alt + N', '自动翻页开关'],
       ['Home', '回开头（没选播放区回曲子开头，选了回播放区开头）'],
       ['Ctrl + ← / →', '退 / 进一个小节'],
     ],
@@ -431,6 +432,7 @@ const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
       ['拖音符右缘', '改时值（光标会变左右箭头；两种模式都能拖）'],
       ['点已有音符', '确认 / 取消确认（只在绘制模式；只有确认过的音才会导出）'],
       ['↑ / ↓', '选中的音符升 / 降半音（Shift 一个八度）'],
+      ['Alt + Z', '音名 / 简谱数字 互换'],
       ['Delete / Backspace', '删掉选中的音符（只在绘制模式）；绘制模式下右键点音符也能删'],
       ['Ctrl + Z', '撤销（最多 200 步，一次拖动算一步）'],
       ['Ctrl + Shift + Z / Ctrl + Y', '重做'],
@@ -448,8 +450,9 @@ const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
       ['拖区间两端握柄', '改区间起止'],
       ['右栏滑条上滚轮', '微调这条滑条（按住 Shift 五倍步长）'],
       ['Ctrl + ]', '收起 / 展开右侧栏'],
-      ['Alt + L', '锁定 / 解锁钢琴键盘的上下换音区'],
+      ['Ctrl + L', '锁定 / 解锁钢琴键盘的上下换音区'],
       ['Alt + S', '把焦点移到播放速度滑条（再用 ← → 调）'],
+      ['F1', '打开 / 关闭这个帮助面板'],
       ['点钢琴键', '试听该音高'],
     ],
   },
@@ -1586,14 +1589,22 @@ export default function App() {
         /* 反引号：绘制 / 选择 互换（跟 noteDigger 的铅笔/箭头一个意思） */
         e.preventDefault()
         st.setMode(st.mode === 'draw' ? 'select' : 'draw')
-      } else if (e.code === 'KeyL') {
-        if (e.altKey) {
-          /* Alt+L = 锁定 / 解锁钢琴键盘的上下换音区（用户 m02483） */
-          e.preventDefault()
-          st.setLockPitch(!st.lockPitch)
-        } else {
-          st.setLoopOn(!st.loopOn)
-        }
+      } else if (e.code === 'KeyL' && (e.ctrlKey || e.metaKey)) {
+        /* Ctrl+L = 锁定 / 解锁钢琴键盘的上下换音区（用户 m02483） */
+        e.preventDefault()
+        st.setLockPitch(!st.lockPitch)
+      } else if (e.code === 'KeyL' && e.altKey) {
+        /* Alt+L = 重复区间开关（用户 m02483） */
+        e.preventDefault()
+        st.setLoopOn(!st.loopOn)
+      } else if (e.code === 'KeyN' && e.altKey) {
+        /* Alt+N = 自动翻页开关（用户 m02483） */
+        e.preventDefault()
+        st.setAutoPage(!st.autoPage)
+      } else if (e.code === 'F1') {
+        /* F1 = 打开帮助（按键与鼠标操作，用户 m02483） */
+        e.preventDefault()
+        setHelpOpen(true)
       } else if (e.code === 'Delete' || e.code === 'Backspace') {
         /* 删音只在绘制模式（用户 m02483）；选择模式只挪不改数量 */
         if (selectedId && st.mode === 'draw') {
@@ -1607,6 +1618,10 @@ export default function App() {
       } else if (e.code === 'KeyZ' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
         st.undo()
+      } else if (e.code === 'KeyZ' && e.altKey) {
+        /* Alt+Z = 音名 / 简谱数字 互换（用户 m02483） */
+        e.preventDefault()
+        st.setPitchMode(st.pitchMode === 'name' ? 'number' : 'name')
       } else if (e.code === 'KeyY' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
         st.redo()
@@ -1765,26 +1780,8 @@ export default function App() {
             </button>
           </span>
 
-          {/* 判音 / 谱音（用户 m02483 第 5 条）：自动判音、和弦识别、全当谱音、全不选、丢掉改动 */}
-          <span className="tgroup" title="判音 / 谱音">
-            <button
-              className="icon-btn"
-              onClick={doAnalyze}
-              disabled={!analysis || !!busy}
-              title={COPY.analyzeTip}
-              aria-label={COPY.analyze}
-            >
-              <Icon name="analyze" />
-            </button>
-            <button
-              className={chords.length > 0 ? 'icon-btn on' : 'icon-btn'}
-              onClick={runChordAnalysis}
-              disabled={!analysis || !!busy}
-              title={COPY.chordTip}
-              aria-label={COPY.chord}
-            >
-              <Icon name="chord" />
-            </button>
+          {/* 谱音：全当谱音 / 全不选（分析、和弦、回到初稿已挪到右栏「分析」页） */}
+          <span className="tgroup" title="谱音">
             <button
               className="icon-btn"
               onClick={() => {
@@ -1808,15 +1805,6 @@ export default function App() {
               aria-label={COPY.clearAll}
             >
               <Icon name="checkNone" />
-            </button>
-            <button
-              className="icon-btn"
-              onClick={doResetDraft}
-              disabled={!analysis}
-              title={COPY.resetDraftTip}
-              aria-label={COPY.resetDraft}
-            >
-              <Icon name="reset" />
             </button>
           </span>
         </div>
@@ -1848,9 +1836,37 @@ export default function App() {
             data-key="Alt+S"
             style={fillStyle(((playRate - PLAY_RATE_MIN) / (PLAY_RATE_MAX - PLAY_RATE_MIN)) * 100)}
           />
+          <span className="rate-val">{playRate.toFixed(2)}×</span>
         </div>
 
         <div className="tb-side tb-right">
+          {/* 回开头 / 循环 / 跟随（自动翻页）：一组导航（用户 m02483 第 5 条）；
+              按用户要求排到「绘制 / 选择」前面 */}
+          <span className="tgroup" title="导航">
+            <button className="icon-btn" onClick={goStart} title={COPY.goStartTip} aria-label={COPY.goStart} data-key="Home">
+              <Icon name="home" />
+            </button>
+            <button
+              className={loopOn ? 'icon-btn on' : 'icon-btn'}
+              onClick={() => useBp.getState().setLoopOn(!loopOn)}
+              title={COPY.loopTip}
+              aria-label={COPY.loop}
+              data-key="Alt+L"
+              disabled={!loop}
+            >
+              <Icon name="loop" />
+            </button>
+            <button
+              className={autoPage ? 'icon-btn on' : 'icon-btn'}
+              onClick={() => useBp.getState().setAutoPage(!autoPage)}
+              title={COPY.autoPageTip}
+              aria-label={COPY.autoPage}
+              data-key="Alt+N"
+            >
+              <Icon name="page" />
+            </button>
+          </span>
+
           {/* 绘制 / 选择（用户 m02483 第 5 条：一组） */}
           <div className="seg" title={mode === 'draw' ? COPY.modeDrawTip : COPY.modeSelectTip}>
             <button
@@ -1870,26 +1886,6 @@ export default function App() {
               title={COPY.modeSelectTip}
             >
               <Icon name="cursor" />
-            </button>
-          </div>
-
-          {/* 音名 / 数字 */}
-          <div className="seg" title="表格里写字用音名还是简谱数字（换调号数字跟着变）">
-            <button
-              className={pitchMode === 'name' ? 'on' : ''}
-              onClick={() => useBp.getState().setPitchMode('name')}
-              aria-label={COPY.pitchName}
-              title="用音名写格子（C4、D4…）"
-            >
-              <Icon name="pitchName" />
-            </button>
-            <button
-              className={pitchMode === 'number' ? 'on' : ''}
-              onClick={() => useBp.getState().setPitchMode('number')}
-              aria-label={COPY.pitchNumber}
-              title="用简谱数字写格子（1、2、3…，换调号跟着变）"
-            >
-              <Icon name="pitchNumber" />
             </button>
           </div>
 
@@ -1915,30 +1911,27 @@ export default function App() {
             </button>
           </div>
 
-          {/* 回开头 / 循环 / 跟随（自动翻页）：一组导航（用户 m02483 第 5 条） */}
-          <span className="tgroup" title="导航">
-            <button className="icon-btn" onClick={goStart} title={COPY.goStartTip} aria-label={COPY.goStart} data-key="Home">
-              <Icon name="home" />
+          {/* 音名 / 数字（用户 m02483：挪到原音 / 合成后面，Alt+Z 切换） */}
+          <div className="seg" title="表格里写字用音名还是简谱数字（换调号数字跟着变）">
+            <button
+              className={pitchMode === 'name' ? 'on' : ''}
+              onClick={() => useBp.getState().setPitchMode('name')}
+              aria-label={COPY.pitchName}
+              data-key="Alt+Z"
+              title="用音名写格子（C4、D4…）"
+            >
+              <Icon name="pitchName" />
             </button>
             <button
-              className={loopOn ? 'icon-btn on' : 'icon-btn'}
-              onClick={() => useBp.getState().setLoopOn(!loopOn)}
-              title={COPY.loopTip}
-              aria-label={COPY.loop}
-              data-key="L"
-              disabled={!loop}
+              className={pitchMode === 'number' ? 'on' : ''}
+              onClick={() => useBp.getState().setPitchMode('number')}
+              aria-label={COPY.pitchNumber}
+              data-key="Alt+Z"
+              title="用简谱数字写格子（1、2、3…，换调号跟着变）"
             >
-              <Icon name="loop" />
+              <Icon name="pitchNumber" />
             </button>
-            <button
-              className={autoPage ? 'icon-btn on' : 'icon-btn'}
-              onClick={() => useBp.getState().setAutoPage(!autoPage)}
-              title={COPY.autoPageTip}
-              aria-label={COPY.autoPage}
-            >
-              <Icon name="page" />
-            </button>
-          </span>
+          </div>
 
           {/* 撤销 / 重做 */}
           <span className="tgroup" title="撤销 / 重做">
@@ -1972,6 +1965,7 @@ export default function App() {
               onClick={() => setHelpOpen(true)}
               title="列出全部按键、快捷键、鼠标操作"
               aria-label="按键与鼠标操作"
+              data-key="F1"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
                 <rect x="1.5" y="4" width="13" height="8" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
@@ -2193,6 +2187,28 @@ export default function App() {
             </>
           )}
 
+          {/* 分析与和弦识别：从顶栏挪到「分析」页（用户 m02483） */}
+          {sideView === 'analysis' && (
+            <div className="row-gap">
+              <button
+                data-name={COPY.analyze}
+                title={COPY.analyzeTip}
+                onClick={doAnalyze}
+                disabled={!analysis || !!busy}
+              >
+                {COPY.analyze}
+              </button>
+              <button
+                data-name={COPY.chord}
+                title={COPY.chordTip}
+                onClick={runChordAnalysis}
+                disabled={!analysis || !!busy}
+              >
+                {COPY.chord}
+              </button>
+            </div>
+          )}
+
           {sideView === 'analysis' && (
           <div>
             <button className="group-head" onClick={() => setKeyOpen((v) => !v)} aria-expanded={keyOpen}>
@@ -2314,6 +2330,19 @@ export default function App() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* 回到初稿：会整张换音符表，放「分析」页最下面（用户 m02483） */}
+          {sideView === 'analysis' && (
+            <button
+              data-name={COPY.resetDraft}
+              title={COPY.resetDraftTip}
+              onClick={doResetDraft}
+              disabled={!analysis}
+              style={{ alignSelf: 'flex-start' }}
+            >
+              {COPY.resetDraft}
+            </button>
           )}
 
           {sideView === 'edit' && (

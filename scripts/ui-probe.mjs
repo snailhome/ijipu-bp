@@ -253,7 +253,7 @@ try {
   check('顶栏悬浮提示很快出现（320ms 内，不等原生 title）', !!tip, JSON.stringify(tip))
   check(
     '提示第一行是按钮名称、第二行是功能说明',
-    !!tip && tip.name === '按键与鼠标操作' && tip.firstClass === 'tb-tip-name' && tip.desc.includes('快捷键'),
+    !!tip && tip.name.startsWith('按键与鼠标操作') && tip.firstClass === 'tb-tip-name' && tip.desc.includes('快捷键'),
     JSON.stringify(tip),
   )
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 420, button: 'none', buttons: 0 })
@@ -339,6 +339,15 @@ try {
       )
       return t.includes('调性分析') && t.includes('节奏与谐波') && t.includes('分析后自动填入音符') &&
         !hasKeySelect && !t.includes('去谐波')
+    })()`),
+  )
+  check(
+    '「分析」页有分析 / 和弦分析 / 回到初稿按钮',
+    await cdp.eval(`(() => {
+      const texts = [...document.querySelectorAll('.side button')]
+        .filter((b) => !b.closest('.side-tabs'))
+        .map((b) => (b.textContent || '').trim())
+      return texts.includes('分析') && texts.includes('和弦分析') && texts.includes('回到初稿')
     })()`),
   )
   const sideTipPos = await cdp.eval(`(() => {
@@ -483,12 +492,16 @@ try {
   })()`)
   check('能灌入假分析（2 个未确认音）', injected === 2, String(injected))
 
-  /* 顶栏「分析」按钮：用户 m00741 就是说点它没反应，这里至少守住入口在、有音频后能点 */
+  /* 「分析」按钮（用户 m00741）：现在在右栏「分析」页里，有音频时能点 */
+  await setSideView('analysis')
   const analyzeBtn = await cdp.eval(`(() => {
-    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '分析')
+    const b = [...document.querySelectorAll('.side button')]
+      .filter((x) => !x.closest('.side-tabs'))
+      .find((x) => (x.textContent || '').trim() === '分析')
     return b ? { disabled: b.disabled, title: b.title } : null
   })()`)
-  check('顶栏有「分析」按钮（有音频时能点）', !!analyzeBtn && analyzeBtn.disabled === false, JSON.stringify(analyzeBtn))
+  check('「分析」页有「分析」按钮（有音频时能点）', !!analyzeBtn && analyzeBtn.disabled === false, JSON.stringify(analyzeBtn))
+  await setSideView('edit')
 
   /* 方案（用户 m01794）：两个入口在；「保存方案」点了要真的写出一份 .bp.json。
    * 浏览器里没有磁盘路径，存到 localStorage 兜底（跟桌面壳的写文件走同一个序列化）。 */
@@ -868,8 +881,9 @@ try {
   })`)
   check('恢复后所有音又变回确认、恢复入口收起', recovered.all && !recovered.link, JSON.stringify(recovered))
 
-  /* 回到初稿：确认框在，取消不动音符 */
+  /* 回到初稿：按钮在「分析」页里，确认框在，取消不动音符 */
   const beforeReset = await cdp.eval(`window.__bp.getState().notes.length`)
+  await setSideView('analysis')
   await cdp.clickText('回到初稿')
   await sleep(220)
   const resetAsk = await cdp.eval(`(() => { const m = document.querySelector('.modal-confirm'); return m ? m.querySelector('.modal-head strong')?.textContent : null })()`)
@@ -881,6 +895,7 @@ try {
   await sleep(200)
   check('取消「回到初稿」后音符还在', (await cdp.eval(`window.__bp.getState().notes.length`)) === beforeReset)
   await cdp.eval(`window.__bp.setState({ filePath: null })`)
+  await setSideView('edit')
 
   // ── 重复区间：造一个 500–2500ms 的区间，拖右握柄，验证能改长短 ──
   const loopBox = await cdp.eval(`(() => {
@@ -1286,25 +1301,58 @@ try {
     }
   })()`)
   check(
-    '键区锁上有操作提示（锁住后滚轮改平移，带 Alt+L）',
-    !!lockTip && lockTip.name.includes('键区锁') && lockTip.desc.includes('滚轮') && lockTip.key === 'Alt+L',
+    '键区锁上有操作提示（锁住后滚轮改平移，带 Ctrl+L）',
+    !!lockTip && lockTip.name.includes('键区锁') && lockTip.desc.includes('滚轮') && lockTip.key === 'Ctrl+L',
     JSON.stringify(lockTip),
   )
 
-  /* Alt+L 锁定 / 解锁键盘；Alt+S 把焦点移到播放速度滑条（用户 m02483） */
+  /* 热键（用户 m02483）：Ctrl+L 锁键盘、Alt+L 重复区间、Alt+N 自动翻页、F1 帮助 */
   const lockBefore = await cdp.eval(`window.__bp.getState().lockPitch`)
-  await cdp.pressKey('KeyL', 'l', 76, 1)
+  await cdp.pressKey('KeyL', 'l', 76, 2)
   await sleep(200)
   const lockAfter = await cdp.eval(`window.__bp.getState().lockPitch`)
-  check('Alt+L 锁定 / 解锁钢琴键盘', lockAfter !== lockBefore, `${lockBefore} → ${lockAfter}`)
+  check('Ctrl+L 锁定 / 解锁钢琴键盘', lockAfter !== lockBefore, `${lockBefore} → ${lockAfter}`)
+  await cdp.pressKey('KeyL', 'l', 76, 2)
+  await sleep(150)
+  const loopBefore = await cdp.eval(`window.__bp.getState().loopOn`)
+  await cdp.pressKey('KeyL', 'l', 76, 1)
+  await sleep(200)
+  const loopAfter = await cdp.eval(`window.__bp.getState().loopOn`)
+  check('Alt+L 开关重复区间', loopAfter !== loopBefore, `${loopBefore} → ${loopAfter}`)
   await cdp.pressKey('KeyL', 'l', 76, 1)
   await sleep(150)
+  const pageBefore = await cdp.eval(`window.__bp.getState().autoPage`)
+  await cdp.pressKey('KeyN', 'n', 78, 1)
+  await sleep(200)
+  const pageAfter = await cdp.eval(`window.__bp.getState().autoPage`)
+  check('Alt+N 开关自动翻页', pageAfter !== pageBefore, `${pageBefore} → ${pageAfter}`)
+  await cdp.pressKey('KeyN', 'n', 78, 1)
+  await sleep(150)
+  await cdp.pressKey('F1', 'F1', 112, 0)
+  await sleep(250)
+  const helpByF1 = await cdp.eval(`!!document.querySelector('.modal[aria-label="按键与鼠标操作"]')`)
+  check('F1 打开帮助面板', helpByF1 === true, String(helpByF1))
+  await cdp.pressKey('Escape', 'Escape', 27, 0)
+  await sleep(200)
   await cdp.pressKey('KeyS', 's', 83, 1)
   await sleep(250)
   const altSFocus = await cdp.eval(
     `!!document.activeElement && document.activeElement.classList.contains('rate-slider')`,
   )
   check('Alt+S 把焦点移到播放速度滑条', altSFocus === true, String(altSFocus))
+  const pitchBefore = await cdp.eval(`window.__bp.getState().pitchMode`)
+  await cdp.pressKey('KeyZ', 'z', 90, 1)
+  await sleep(200)
+  const pitchAfter = await cdp.eval(`window.__bp.getState().pitchMode`)
+  check('Alt+Z 切换音名 / 数字', pitchAfter !== pitchBefore, `${pitchBefore} → ${pitchAfter}`)
+  await cdp.pressKey('KeyZ', 'z', 90, 1)
+  await sleep(150)
+  const pitchKeys = await cdp.eval(`(() => {
+    return [...document.querySelectorAll('.tb-right button')]
+      .filter((b) => ['音名', '数字'].includes(b.getAttribute('aria-label') || ''))
+      .map((b) => b.getAttribute('data-key'))
+  })()`)
+  check('音名 / 数字按钮带 Alt+Z', pitchKeys.length === 2 && pitchKeys.every((k) => k === 'Alt+Z'), JSON.stringify(pitchKeys))
 
   /* ── 音名·简谱信息牌跟着鼠标走，且不再带"（点一下试听）" ── */
   const badgeAt = (fx, fy) =>
@@ -1858,7 +1906,8 @@ try {
       right: !!right,
       fileFirst: !!fileGroup && !!byLabel(fileGroup, '打开音频') && !!byLabel(fileGroup, '打开方案') &&
         !!byLabel(fileGroup, '保存方案') && !!byLabel(fileGroup, '导出 .jps'),
-      scoreGroup: !!byLabel(left || bar, '分析') && !!byLabel(left || bar, '和弦分析'),
+      scoreGroup: !!byLabel(left || bar, '全选') && !!byLabel(left || bar, '全不选'),
+      movedOut: !byLabel(bar, '分析') && !byLabel(bar, '和弦分析') && !byLabel(bar, '回到初稿'),
       playW: pr ? pr.width : 0,
       playDx: pr ? Math.abs(pr.x + pr.width / 2 - (br.x + br.width / 2)) : 999,
       utilCount: utils.length,
@@ -1875,13 +1924,28 @@ try {
   })()`)
   check('顶栏分左右两簇，播放键单独在中间', tb.left && tb.right, JSON.stringify(tb))
   check('文件操作组排在第一位（打开音频/打开方案/保存方案/导出）', tb.fileFirst)
-  check('判音/谱音组里有「分析」「和弦分析」', tb.scoreGroup)
+  check('谱音组里有「全选」「全不选」', tb.scoreGroup)
+  check('分析 / 和弦分析 / 回到初稿 已不在顶栏', tb.movedOut)
   check(
     '播放键比图标按钮大、在顶栏正中',
     tb.playW >= 44 && tb.playDx <= 2,
     `宽 ${tb.playW}、偏移 ${tb.playDx.toFixed(1)}px`,
   )
   check('播放速度滑条在播放键右边', tb.rateRightOfPlay, JSON.stringify(tb))
+  const rightOrder = await cdp.eval(`(() => {
+    const labels = [...document.querySelectorAll('.tb-right button')].map((b) => b.getAttribute('aria-label') || '')
+    const at = (l) => labels.indexOf(l)
+    return {
+      labels,
+      navFirst: at('回到开头') >= 0 && at('回到开头') < at('绘制'),
+      pitchAfterSource: at('原音频') >= 0 && at('原音频') < at('音名'),
+    }
+  })()`)
+  check(
+    '顶栏顺序：导航 → 绘制/选择 → 原音/合成 → 音名/数字',
+    rightOrder.navFirst && rightOrder.pitchAfterSource,
+    JSON.stringify(rightOrder.labels),
+  )
   const fileKeys = await cdp.eval(`(() => {
     const byLabel = (l) => [...document.querySelectorAll('.toolbar button')].find((b) => (b.getAttribute('aria-label') || '') === l)
     return {
@@ -1896,6 +1960,19 @@ try {
     fileKeys.open === 'Ctrl+O' && fileKeys.project === 'Ctrl+J' &&
       fileKeys.save === 'Ctrl+S' && fileKeys.exp === 'Ctrl+E',
     JSON.stringify(fileKeys),
+  )
+  const moreKeys = await cdp.eval(`(() => {
+    const byLabel = (l) => [...document.querySelectorAll('.toolbar button')].find((b) => (b.getAttribute('aria-label') || '') === l)
+    return {
+      loop: byLabel('重复区间')?.getAttribute('data-key') || null,
+      autoPage: byLabel('自动翻页')?.getAttribute('data-key') || null,
+      help: byLabel('按键与鼠标操作')?.getAttribute('data-key') || null,
+    }
+  })()`)
+  check(
+    '循环 / 自动翻页 / 帮助按钮带热键（Alt+L / Alt+N / F1）',
+    moreKeys.loop === 'Alt+L' && moreKeys.autoPage === 'Alt+N' && moreKeys.help === 'F1',
+    JSON.stringify(moreKeys),
   )
   check(
     '右侧两颗图标按钮（帮助 + 侧栏）不画外框线',
@@ -1992,6 +2069,8 @@ try {
     rateAfter.rate !== 1 && rateAfter.stored === String(rateAfter.rate),
     JSON.stringify(rateAfter),
   )
+  const rateVal = await cdp.eval(`document.querySelector('.play-wrap .rate-val')?.textContent || ''`)
+  check('播放速度滑条右侧显示速度值', rateVal === `${rateAfter.rate.toFixed(2)}×`, rateVal)
   await cdp.eval(`window.__bp.getState().setPlayRate(1)`)
   await sleep(150)
 
@@ -2140,8 +2219,9 @@ try {
   })()`)
   check('造出 4 秒的 C→F 和弦音频（频谱就绪）', !!chordSetup && chordSetup.frames > 60, JSON.stringify(chordSetup))
 
+  await setSideView('analysis')
   const clickedChord = await cdp.eval(`(() => {
-    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '和弦分析')
+    const b = [...document.querySelectorAll('.side button')].find((x) => (x.textContent || '').trim() === '和弦分析')
     if (!b) return 'no-btn'
     b.click()
     return 'ok'
@@ -2151,7 +2231,6 @@ try {
   const chordAfter = await cdp.eval(`(() => {
     const s = window.__bp.getState()
     const at = (ms) => (s.chords.find((c) => c.startMs <= ms && ms < c.endMs) || {}).name
-    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '和弦分析')
     const box = [...document.querySelectorAll('.side input[type=checkbox]')].find((x) => x.closest('label') && x.closest('label').textContent.includes('显示和弦'))
     /* 和弦带真的画上去了：取表格左下角（带子里）一个像素 */
     const c = document.querySelector('.pane.roll canvas')
@@ -2163,7 +2242,6 @@ try {
       names: s.chords.filter((x) => x.name !== 'N').map((x) => x.name),
       first: at(800),
       second: at(2800),
-      on: !!b && b.classList.contains('on'),
       showChords: s.showChords,
       hasToggle: !!box && !box.disabled,
       err: s.error,
@@ -2173,9 +2251,9 @@ try {
   check('点「和弦分析」：C 大三和弦判成 C', chordAfter.first === 'C', JSON.stringify(chordAfter.names))
   check('点「和弦分析」：F 大三和弦判成 F', chordAfter.second === 'F', `${chordAfter.second}（${JSON.stringify(chordAfter.names)}）`)
   check(
-    '和弦按钮亮起、面板里有「显示和弦」开关、没有报错',
-    clickedChord === 'ok' && chordAfter.on && chordAfter.hasToggle && chordAfter.showChords && !chordAfter.err,
-    JSON.stringify({ on: chordAfter.on, toggle: chordAfter.hasToggle, err: chordAfter.err }),
+    '和弦结果非空、面板里有「显示和弦」开关、没有报错',
+    clickedChord === 'ok' && chordAfter.n > 0 && chordAfter.hasToggle && chordAfter.showChords && !chordAfter.err,
+    JSON.stringify({ n: chordAfter.n, toggle: chordAfter.hasToggle, err: chordAfter.err }),
   )
   check(
     '和弦带画在表格底部（左下角那块是紫的）',

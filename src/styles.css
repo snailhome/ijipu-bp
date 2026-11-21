@@ -106,6 +106,19 @@ button.primary {
   width: 86px;
 }
 
+/* 滑条右侧的速度读数（用户 m02483：调节时能看到当前倍率） */
+.play-wrap .rate-val {
+  position: absolute;
+  left: calc(50% + 123px);
+  top: 50%;
+  transform: translateY(-50%);
+  min-width: 40px;
+  color: var(--fg-dim);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  pointer-events: none;
+}
+
 .play-btn {
   width: 46px;
   height: 32px;
