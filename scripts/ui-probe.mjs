@@ -384,6 +384,18 @@ try {
         const t = document.querySelector('.side').textContent || ''
         return t.includes('关于') && !t.includes('行高') && !t.includes('生成参数') && !t.includes('分析后自动填入音符')
       })()`)
+      /* 关于组默认收起；点开后再验 AGPL 源代码入口/第三方许可说明 */
+      await cdp.eval(`(() => {
+        const h = [...document.querySelectorAll('.side .group-head')].find((x) => (x.textContent || '').includes('关于'))
+        if (h && h.getAttribute('aria-expanded') === 'false') h.click()
+      })()`)
+      await sleep(180)
+      const source = await cdp.eval(`(() => {
+        const t = document.querySelector('.side')?.textContent || ''
+        const b = [...document.querySelectorAll('.side button')].find((x) => (x.textContent || '').includes('源代码'))
+        return { link: !!b, license: t.includes('noteDigger') && t.includes('GPL-3.0') }
+      })()`)
+      check('设置页有 AGPL 源代码入口和第三方许可说明', source.link && source.license, JSON.stringify(source))
       await setSideView('edit')
       return ok && has
     })(),

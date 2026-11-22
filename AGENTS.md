@@ -299,5 +299,5 @@ npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM 
   （当前 **108/108**）；`ui-probe` 用 `--use-fake-device-for-media-stream` +
   `--use-fake-ui-for-media-stream` 真录一段，验
   "麦克风按钮 → 小条 → 录音/暂停/停止 → 分析成谱 → 右栏 → 未保存提示 → 不保存直接新建
-  → 录音中刷新恢复 → 停止后刷新恢复"，并真拖块选/整列/整行/整组移动（当前 **195/195**）。
+  → 录音中刷新恢复 → 停止后刷新恢复"，并真拖块选/整列/整行/整组移动（当前 **196/196**）。
   改这段交互后**要跑 `npm run probe`**；动 Rust 命令跑 `cargo check --manifest-path src-tauri/Cargo.toml --lib`。

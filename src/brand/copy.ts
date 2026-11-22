@@ -105,6 +105,8 @@ export const COPY = {
   settingsTitle: '设置',
   settingsAnalyse: '分析',
   settingsAbout: '关于',
+  settingsSource: '源代码（AGPL-3.0）',
+  settingsLicenses: '第三方许可：noteDigger（GPL-3.0）、TinySynth（Apache-2.0）；详见仓库 THIRD-PARTY-NOTICES.md',
   stemsDownloadNow: '下载模型（302 MB，hf-mirror）',
   stemsMissing: '分离模型还没装（缺 htdemucs_ft_vocals.onnx）',
   stemsMissingDll: '缺 ONNX Runtime 动态库（onnxruntime.dll）：装模型包时会一起装到模型目录；也可以把它放到程序目录（跟 exe 同级）或模型目录，再点「重新检测」',

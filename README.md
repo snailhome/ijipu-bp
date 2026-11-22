@@ -296,8 +296,8 @@ npm run tauri:build -- --no-bundle   # 重编后 exe 图标才变
 - **iJipu 引擎**（AGPL-3.0）：`vendor/engine/` 逐字节同步。
 
 **源码仓库**：<https://github.com/snailhome/ijipu-bp>（公开）。按 AGPL-3.0 第 13 条，
-通过网络使用本应用的用户可以从这里获得 Corresponding Source；站点页脚/关于页放一个
-「源代码」链接即可。若要改回私有仓库，必须同时在站点提供公开可下载的完整源码包。
+通过网络使用本应用的用户可以从这里获得 Corresponding Source；应用「设置 → 关于」里也放了
+「源代码（AGPL-3.0）」入口。若要改回私有仓库，必须同时在站点提供公开可下载的完整源码包。
 
 ## 已知限制
 

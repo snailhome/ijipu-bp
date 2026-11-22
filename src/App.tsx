@@ -701,6 +701,9 @@ const SEP_URL = {
   officialPage: 'https://huggingface.co/StemSplitio/htdemucs-ft-vocals-onnx',
 }
 
+/** 源码仓库：AGPL §13 要求网络用户能拿到 Corresponding Source（关于页放链接） */
+const SOURCE_URL = 'https://github.com/snailhome/ijipu-bp'
+
 /** 右侧栏的一个分组：标题可点，收起/展开；组与组之间有分隔线（用户 m06889） */
 function SideGroup({
   title,
@@ -3485,6 +3488,12 @@ export default function App() {
               <SideGroup title={COPY.settingsAbout} defaultOpen={false}>
                 <div className="hint">爱扒谱 iJipu BP {APP_VERSION}</div>
                 <div className="hint">分离模型 htdemucs（MIT，Meta AI）只在桌面版可用；网页版不显示分轨。</div>
+                <div className="hint">
+                  <button type="button" className="link-btn" onClick={() => void openUrl(SOURCE_URL)}>
+                    {COPY.settingsSource}
+                  </button>
+                </div>
+                <div className="hint">{COPY.settingsLicenses}</div>
               </SideGroup>
             </>
           )}
