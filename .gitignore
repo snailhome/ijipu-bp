@@ -15,3 +15,6 @@ spike/**/target/
 spike/**/target-b/
 .cache/
 spike/**/target-c/
+# 分离模型安装包 / ONNX 模型是桌面产物（几百 MB），不进网页仓库
+sep-installer/payload/
+dist-model/
