@@ -296,10 +296,10 @@ npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM 
   （只出频谱/节奏/调性，不填音符）——表格里马上能看到录音的热力图、播放键也能用；
   小条的「分析成谱」再走 `doAnalyze()`（`notes:true`，有音符时仍会确认 + 留恢复快照）。
 - **测试**：`smoke` 盖 WAV 头/采样、合成路径/命名/计时（纯函数）+ 八度纠偏 5 条 + 选择框 5 条
-  （当前 **110/110**）；`ui-probe` 用 `--use-fake-device-for-media-stream` +
+  （当前 **114/114**）；`ui-probe` 用 `--use-fake-device-for-media-stream` +
   `--use-fake-ui-for-media-stream` 真录一段，验
   "麦克风按钮 → 小条 → 录音/暂停/停止 → 分析成谱 → 右栏 → 未保存提示 → 不保存直接新建
-  → 录音中刷新恢复 → 停止后刷新恢复"，并真拖块选/整列/整行/整组移动（当前 **196/196**）。
+  → 录音中刷新恢复 → 停止后刷新恢复"，并真拖块选/整列/整行/整组移动（当前 **197/197**）。
   改这段交互后**要跑 `npm run probe`**；动 Rust 命令跑 `cargo check --manifest-path src-tauri/Cargo.toml --lib`。
 
 ## 十二、访问统计（用户 2026-11-22）
@@ -313,3 +313,16 @@ npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM 
   `functions/api/stats.js` 的 `pages` 增加 `tools` / `bp`；`public/stats/index.html` 显示这两行。
 - **部署顺序**：先部署主站的 Functions（否则 bp 的 `/bp/` 上报会被 400 拒掉），再部署 bp 站点。
 - 改 endpoint / path / visitor 键要两边同步；**不要**把统计做成会阻塞页面的同步请求。
+
+## 十三、回爱记谱首页 / 在爱记谱打开（用户 2026-11-22）
+
+- **链接常量只在 `src/brand/links.ts`**：`IJIPU_SITE`、`IJIPU_APP`、`JPS_LINK_MAX_LEN`、`jpsAppUrl()`。
+  `JPS_LINK_MAX_LEN = 8000` 必须与 iJipu `store/urlImport.ts` 的 `JPS_PARAM_MAX_LEN` 一致，
+  否则会生成"看着能开、实际被应用忽略"的链接；**不要**在组件里另写 8000/域名。
+- **回首页**：状态栏与「设置 → 关于」的「爱记谱首页」走 `goSiteHome()` —— 网页版本窗口
+  `location.assign`，桌面壳用系统浏览器（Tauri 窗口没有地址栏/后退，不能把人困在介绍页）。
+- **在爱记谱打开**：`/app/?jps=<encodeURIComponent(当前 st.jps)>`，由 `openInIpu()` 走
+  `openUrl()`（新标签 / 系统浏览器）；「jps 源码」面板另有「复制打开链接」。
+  **不要**把这条长 URL 塞进导出的 `.jps`：`.jps` 是纯文本，塞进去会撑大谱面、且自引用。
+- 空界面提示要同时给两条路：「先打开一段音频，或录制一段音频（点顶栏麦克风）」；
+  状态栏空文案同样提录音。

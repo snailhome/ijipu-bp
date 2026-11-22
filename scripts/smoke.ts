@@ -37,6 +37,7 @@ import { formatElapsed } from '../src/audio/recorder'
 import { formatRecordingName, isRecordingPath, recordingPathOf, recordingSaveName } from '../src/model/recording'
 // 选择工具三种模式（用户 2026-11-22，参考 NoteDigger）：纯计算
 import { selectNotes } from '../src/ui/selection'
+import { IJIPU_SITE, JPS_LINK_MAX_LEN, jpsAppUrl } from '../src/brand/links'
 
 const SR = 44100
 const results: { name: string; ok: boolean; detail: string }[] = []
@@ -801,6 +802,26 @@ const melody = concat([
     analytics.includes("'/bp/'") ? 'path /bp/ + 主站 endpoint' : '缺少 /bp/ 或 endpoint',
   )
   check('爱扒谱 index.html 引入 `/analytics.js`', html.includes('src="/analytics.js"'))
+}
+
+/* ---------------- 22. 回爱记谱首页 / 在爱记谱打开 ---------------- */
+{
+  const code = 'V: 1.0\nB: 测试\nQ: 1 1'
+  check(
+    'jpsAppUrl 用 iJipu 的 `/app/?jps=<encoded>` 方式',
+    jpsAppUrl(code) === `${IJIPU_SITE}/app/?jps=${encodeURIComponent(code)}`,
+    jpsAppUrl(code).slice(0, 80),
+  )
+  check('链接上限与 iJipu 的 JPS_PARAM_MAX_LEN 一致（8000）', JPS_LINK_MAX_LEN === 8000, String(JPS_LINK_MAX_LEN))
+  const appSrc = readFileSync('src/App.tsx', 'utf8')
+  check(
+    '状态栏 / 关于 / jps 面板有「爱记谱首页」「在爱记谱打开」入口',
+    appSrc.includes('COPY.siteHome') && appSrc.includes('openInIpu') && appSrc.includes('jpsAppUrl'),
+  )
+  check(
+    '空界面提示补了「或录制一段音频」',
+    readFileSync('src/ui/NoteRoll.tsx', 'utf8').includes('或录制一段音频'),
+  )
 }
 
 const failed = results.filter((r) => !r.ok)

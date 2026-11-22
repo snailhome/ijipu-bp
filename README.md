@@ -285,6 +285,16 @@ Copy-Item "D:\Coding\JianpuScript\矢量图\Logo-bp.png" public\icons\logo-bp.pn
 npm run tauri:build -- --no-bundle   # 重编后 exe 图标才变
 ```
 
+## 回爱记谱 / 在爱记谱打开
+
+- 状态栏和「设置 → 关于」都有 **爱记谱首页**：网页版本窗口返回 `ijipu.pages.dev`，
+  桌面壳交给系统浏览器（不会把应用窗口困在介绍页）。
+- 「jps 源码」面板有 **在爱记谱打开** / **复制打开链接**：用 iJipu 的
+  `https://ijipu.pages.dev/app/?jps=<encodeURIComponent(源码)>` 方式打开当前生成的 `.jps`。
+- 地址与 8000 字上限集中在 `src/brand/links.ts`，上限跟 iJipu 的 `JPS_PARAM_MAX_LEN` 对齐；
+  超过 8000 字时提示先导出 `.jps` 再在应用里打开。
+- `.jps` 文件本身仍是纯文本，链接方式是 UI 现拼的，不往谱面里塞长 URL。
+
 ## 访问统计
 
 网页版 `public/analytics.js` 会跨站上报到主站 `https://ijipu.pages.dev/api/visit`，统计标识固定为

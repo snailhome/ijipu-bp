@@ -35,6 +35,7 @@ import {
 import { computeSpectrum } from './analysis/spectrum'
 import type { ChordSegment } from './analysis/chords'
 import { COPY } from './brand/copy'
+import { IJIPU_SITE, JPS_LINK_MAX_LEN, jpsAppUrl } from './brand/links'
 import { APP_VERSION } from './brand/version'
 import { invoke, isTauriShell } from './brand/env'
 import { PAGE_SEC_MAX, PAGE_SEC_MIN, PLAY_RATE_MAX, PLAY_RATE_MIN, ROW_H_MAX, ROW_H_MIN, SEL_MODES, useBp } from './model/store'
@@ -2405,6 +2406,49 @@ export default function App() {
     setNotice(`已下载：${name}`)
   }, [set])
 
+  /** 回爱记谱首页：网页版本窗口返回；桌面壳用系统浏览器（与 iJipu 的 goSiteHome 同口径） */
+  const goSiteHome = useCallback(() => {
+    if (isTauriShell()) {
+      void openUrl(IJIPU_SITE)
+      return
+    }
+    window.location.assign(IJIPU_SITE)
+  }, [])
+
+  /** 用 iJipu 的 `/app/?jps=<encoded>` 方式打开**当前生成的** .jps。 */
+  const openInIpu = useCallback(() => {
+    const st = set.getState()
+    if (!st.jps) {
+      st.setError(COPY.appLinkNoNotes)
+      return
+    }
+    if (st.jps.length > JPS_LINK_MAX_LEN) {
+      st.setError(COPY.appLinkTooLong)
+      return
+    }
+    st.setError(null)
+    void openUrl(jpsAppUrl(st.jps))
+  }, [set])
+
+  const copyInIpuLink = useCallback(async () => {
+    const st = set.getState()
+    if (!st.jps) {
+      st.setError(COPY.appLinkNoNotes)
+      return
+    }
+    if (st.jps.length > JPS_LINK_MAX_LEN) {
+      st.setError(COPY.appLinkTooLong)
+      return
+    }
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('这个环境不支持剪贴板')
+      await navigator.clipboard.writeText(jpsAppUrl(st.jps))
+      setNotice(COPY.appLinkCopied)
+    } catch (e) {
+      st.setError(`${COPY.appLinkCopyFail}${e instanceof Error ? e.message : String(e)}`)
+    }
+  }, [set])
+
   /* Ctrl+E（热键 effect 里）要调导出；ref 里始终是最新这份 */
   useEffect(() => {
     exportRef.current = () => void exportJps()
@@ -3416,6 +3460,25 @@ export default function App() {
           {sideView === 'edit' && (
           <SideGroup title={COPY.jpsTitle}>
             <pre className="src">{jps || '（还没确认音符）'}</pre>
+            <div className="jps-actions">
+              <button
+                className="link-btn"
+                onClick={openInIpu}
+                disabled={!jps || jps.length > JPS_LINK_MAX_LEN}
+                title={COPY.appOpenTip}
+              >
+                {COPY.appOpen} ↗
+              </button>
+              <button
+                className="link-btn"
+                onClick={() => void copyInIpuLink()}
+                disabled={!jps || jps.length > JPS_LINK_MAX_LEN}
+                title={COPY.appCopyLink}
+              >
+                {COPY.appCopyLink}
+              </button>
+            </div>
+            {jps && jps.length > JPS_LINK_MAX_LEN && <div className="hint">{COPY.appLinkTooLong}</div>}
           </SideGroup>
           )}
 
@@ -3488,6 +3551,11 @@ export default function App() {
               <SideGroup title={COPY.settingsAbout} defaultOpen={false}>
                 <div className="hint">爱扒谱 iJipu BP {APP_VERSION}</div>
                 <div className="hint">分离模型 htdemucs（MIT，Meta AI）只在桌面版可用；网页版不显示分轨。</div>
+                <div className="hint">
+                  <button type="button" className="link-btn" onClick={goSiteHome}>
+                    {COPY.siteHome} ↗
+                  </button>
+                </div>
                 <div className="hint">
                   <button type="button" className="link-btn" onClick={() => void openUrl(SOURCE_URL)}>
                     {COPY.settingsSource}
@@ -3622,6 +3690,19 @@ export default function App() {
         <span className="spacer" />
         {error && <span className="err">{error}</span>}
         {notice && <span className="hint">{notice}</span>}
+        <span className="status-links">
+          <button
+            className="link-btn"
+            onClick={openInIpu}
+            disabled={!jps}
+            title={COPY.appOpenTip}
+          >
+            {COPY.appOpen} ↗
+          </button>
+          <button className="link-btn" onClick={goSiteHome} title={COPY.siteHomeTip}>
+            {COPY.siteHome} ↗
+          </button>
+        </span>
         <span className="hint">空格播放 · Tab 原音/合成 · ` 绘制/选择 · L 循环 · Shift+滚轮平移 · Ctrl+滚轮缩放</span>
       </div>
     </div>

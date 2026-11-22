@@ -902,7 +902,7 @@ try {
   await sleep(350)
   const recovered = await cdp.eval(`({
     all: window.__bp.getState().notes.every((x) => x.confirmed),
-    link: !!document.querySelector('.status .link-btn'),
+    link: [...document.querySelectorAll('.status .link-btn')].some((b) => (b.textContent || '').includes('恢复')),
   })`)
   check('恢复后所有音又变回确认、恢复入口收起', recovered.all && !recovered.link, JSON.stringify(recovered))
 
@@ -2393,6 +2393,11 @@ try {
   })()`)
   check('倍率滑条拉满时填充到头（--fill=100%）', gainFill === '100.0%', gainFill)
   await setSideView('edit')
+  const siteLinks = await cdp.eval(`(() => {
+    const t = document.querySelector('.status')?.textContent || ''
+    return { home: t.includes('爱记谱首页'), app: t.includes('在爱记谱打开') }
+  })()`)
+  check('状态栏有「爱记谱首页」「在爱记谱打开」入口', siteLinks.home && siteLinks.app, JSON.stringify(siteLinks))
   const errs = await cdp.eval(`window.__bpErrors || 0`)
   check('页面没有运行时错误', !errs, errs ? String(errs) : '')
 

@@ -653,6 +653,19 @@ pre.src {
   align-items: center;
 }
 
+.status-links {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.jps-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
 label.field {
   display: inline-flex;
   align-items: center;
@@ -977,6 +990,12 @@ a.link {
 
 .link-btn:hover {
   filter: brightness(1.15);
+}
+
+.link-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  filter: none;
 }
 
 .modal-body h4 {
