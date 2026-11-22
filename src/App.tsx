@@ -3690,20 +3690,11 @@ export default function App() {
         <span className="spacer" />
         {error && <span className="err">{error}</span>}
         {notice && <span className="hint">{notice}</span>}
-        <span className="status-links">
-          <button
-            className="link-btn"
-            onClick={openInIpu}
-            disabled={!jps}
-            title={COPY.appOpenTip}
-          >
-            {COPY.appOpen} ↗
-          </button>
-          <button className="link-btn" onClick={goSiteHome} title={COPY.siteHomeTip}>
-            {COPY.siteHome} ↗
-          </button>
-        </span>
         <span className="hint">空格播放 · Tab 原音/合成 · ` 绘制/选择 · L 循环 · Shift+滚轮平移 · Ctrl+滚轮缩放</span>
+        {/* 用户 2026-11-22：状态栏只留「爱记谱首页」，放最右侧；「在爱记谱打开」只在 jps 源码面板 */}
+        <button className="link-btn status-home" onClick={goSiteHome} title={COPY.siteHomeTip}>
+          {COPY.siteHome} ↗
+        </button>
       </div>
     </div>
   )

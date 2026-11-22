@@ -2394,10 +2394,24 @@ try {
   check('倍率滑条拉满时填充到头（--fill=100%）', gainFill === '100.0%', gainFill)
   await setSideView('edit')
   const siteLinks = await cdp.eval(`(() => {
-    const t = document.querySelector('.status')?.textContent || ''
-    return { home: t.includes('爱记谱首页'), app: t.includes('在爱记谱打开') }
+    const statusEl = document.querySelector('.status')
+    const status = statusEl?.textContent || ''
+    const panel = document.querySelector('.jps-actions')?.textContent || ''
+    const homeEl = document.querySelector('.status-home')
+    const sr = statusEl?.getBoundingClientRect()
+    const hr = homeEl?.getBoundingClientRect()
+    return {
+      home: status.includes('爱记谱首页'),
+      statusApp: status.includes('在爱记谱打开'),
+      panelApp: panel.includes('在爱记谱打开'),
+      rightGap: sr && hr ? Math.round((sr.right - hr.right) * 10) / 10 : null,
+    }
   })()`)
-  check('状态栏有「爱记谱首页」「在爱记谱打开」入口', siteLinks.home && siteLinks.app, JSON.stringify(siteLinks))
+  check(
+    '状态栏只有「爱记谱首页」且在最右侧；「在爱记谱打开」只在 jps 源码面板',
+    siteLinks.home && !siteLinks.statusApp && siteLinks.panelApp && siteLinks.rightGap !== null && siteLinks.rightGap >= 0 && siteLinks.rightGap <= 24,
+    JSON.stringify(siteLinks),
+  )
   const errs = await cdp.eval(`window.__bpErrors || 0`)
   check('页面没有运行时错误', !errs, errs ? String(errs) : '')
 
