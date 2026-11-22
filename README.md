@@ -285,6 +285,21 @@ Copy-Item "D:\Coding\JianpuScript\矢量图\Logo-bp.png" public\icons\logo-bp.pn
 npm run tauri:build -- --no-bundle   # 重编后 exe 图标才变
 ```
 
+## 许可
+
+本项目按 **AGPL-3.0** 发布，见根目录 [LICENSE](LICENSE)。第三方来源与逐文件说明见
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)：
+
+- **noteDigger**（GPL-3.0）：`src/analysis/chords.ts`、`src/audio/pianoSynth.ts`、
+  `src/audio/beatClick.ts` 由它改写/直接使用其节拍采样；
+- **g200kg/webaudio-tinysynth**（Apache-2.0）：TinySynth 的原始出处；
+- **iJipu 引擎**（AGPL-3.0）：`vendor/engine/` 逐字节同步。
+
+> **上线前注意**：AGPL-3.0 第 13 条要求网络用户能拿到 Corresponding Source。
+> 当前源码仓库是私有的；公开部署到 Cloudflare Pages 前，必须把仓库改成公开，
+> 或在站点提供公开可下载的完整源码包。若不想开源，必须先重写 noteDigger 衍生部分和
+> vendored 引擎，不能直接发布。
+
 ## 已知限制
 
 - 只做单声部；和弦会被压成一个音。**「和弦分析」只给和弦名提示（画在表格底部），不写进 jps**。
