@@ -296,8 +296,20 @@ npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM 
   （只出频谱/节奏/调性，不填音符）——表格里马上能看到录音的热力图、播放键也能用；
   小条的「分析成谱」再走 `doAnalyze()`（`notes:true`，有音符时仍会确认 + 留恢复快照）。
 - **测试**：`smoke` 盖 WAV 头/采样、合成路径/命名/计时（纯函数）+ 八度纠偏 5 条 + 选择框 5 条
-  （当前 **108/108**）；`ui-probe` 用 `--use-fake-device-for-media-stream` +
+  （当前 **110/110**）；`ui-probe` 用 `--use-fake-device-for-media-stream` +
   `--use-fake-ui-for-media-stream` 真录一段，验
   "麦克风按钮 → 小条 → 录音/暂停/停止 → 分析成谱 → 右栏 → 未保存提示 → 不保存直接新建
   → 录音中刷新恢复 → 停止后刷新恢复"，并真拖块选/整列/整行/整组移动（当前 **196/196**）。
   改这段交互后**要跑 `npm run probe`**；动 Rust 命令跑 `cargo check --manifest-path src-tauri/Cargo.toml --lib`。
+
+## 十二、访问统计（用户 2026-11-22）
+
+- **主站 `/tools/`（音视频工具）**：主站 `public/analytics.js` 的 path 正则放行 `/tools/`，
+  `/api/visit` 的 `PATH_RE` 也放行；`/api/stats` 的 `pages.tools` 单列。
+- **爱扒谱（本仓）**：`public/analytics.js` 跨站 `POST` 到
+  `https://ijipu.pages.dev/api/visit`，`path` 固定 **`/bp/`**（不是真实路由，只是统计标识）；
+  visitor 存本域 `bp.visitor`，不存 IP/UA；`index.html` 里 `defer` 引入。
+- **主站改动**：`functions/api/visit.js` 的 `PATH_RE` 放行 `tools\/|bp\/`；
+  `functions/api/stats.js` 的 `pages` 增加 `tools` / `bp`；`public/stats/index.html` 显示这两行。
+- **部署顺序**：先部署主站的 Functions（否则 bp 的 `/bp/` 上报会被 400 拒掉），再部署 bp 站点。
+- 改 endpoint / path / visitor 键要两边同步；**不要**把统计做成会阻塞页面的同步请求。

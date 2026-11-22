@@ -6,6 +6,7 @@
  * 断言口径：不是"跑通不报错"，而是"给定已知输入，结果落在已知范围"。
  */
 import { defaultPageConfig } from '@engine-types'
+import { readFileSync } from 'node:fs'
 import { layoutScore, parseJps, renderScoreToSvg } from '@engine'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
@@ -788,6 +789,18 @@ const melody = concat([
   check('空框：一个都不选', empty.length === 0, JSON.stringify(empty))
   const reversed = selectNotes(ns, { mode: 'block', startMs: 1100, endMs: 200, midiLo: 61, midiHi: 59 })
   check('起止点反向（从右下往左上拖）：归一化后仍选到 c', reversed.join(',') === 'c', JSON.stringify(reversed))
+}
+
+/* ---------------- 21. 访问统计（跨站上报主站 /bp/） ---------------- */
+{
+  const analytics = readFileSync('public/analytics.js', 'utf8')
+  const html = readFileSync('index.html', 'utf8')
+  check(
+    '爱扒谱 analytics 跨站上报 `/bp/` 到主站 /api/visit',
+    analytics.includes("'/bp/'") && analytics.includes('https://ijipu.pages.dev/api/visit'),
+    analytics.includes("'/bp/'") ? 'path /bp/ + 主站 endpoint' : '缺少 /bp/ 或 endpoint',
+  )
+  check('爱扒谱 index.html 引入 `/analytics.js`', html.includes('src="/analytics.js"'))
 }
 
 const failed = results.filter((r) => !r.ok)

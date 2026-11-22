@@ -285,6 +285,12 @@ Copy-Item "D:\Coding\JianpuScript\矢量图\Logo-bp.png" public\icons\logo-bp.pn
 npm run tauri:build -- --no-bundle   # 重编后 exe 图标才变
 ```
 
+## 访问统计
+
+网页版 `public/analytics.js` 会跨站上报到主站 `https://ijipu.pages.dev/api/visit`，统计标识固定为
+`/bp/`（写进主站 D1 的同一张 `visits` 表）。只统计生产环境；visitor 存在本域 `bp.visitor`，
+不存 IP / UA；localStorage 不可用时静默跳过，统计失败不影响应用。
+
 ## 许可
 
 本项目按 **AGPL-3.0** 发布，见根目录 [LICENSE](LICENSE)。第三方来源与逐文件说明见
