@@ -295,10 +295,9 @@ npm run tauri:build -- --no-bundle   # 重编后 exe 图标才变
 - **g200kg/webaudio-tinysynth**（Apache-2.0）：TinySynth 的原始出处；
 - **iJipu 引擎**（AGPL-3.0）：`vendor/engine/` 逐字节同步。
 
-> **上线前注意**：AGPL-3.0 第 13 条要求网络用户能拿到 Corresponding Source。
-> 当前源码仓库是私有的；公开部署到 Cloudflare Pages 前，必须把仓库改成公开，
-> 或在站点提供公开可下载的完整源码包。若不想开源，必须先重写 noteDigger 衍生部分和
-> vendored 引擎，不能直接发布。
+**源码仓库**：<https://github.com/snailhome/ijipu-bp>（公开）。按 AGPL-3.0 第 13 条，
+通过网络使用本应用的用户可以从这里获得 Corresponding Source；站点页脚/关于页放一个
+「源代码」链接即可。若要改回私有仓库，必须同时在站点提供公开可下载的完整源码包。
 
 ## 已知限制
 

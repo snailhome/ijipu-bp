@@ -37,11 +37,11 @@
 
 AGPL-3.0 要求：**通过网络与本应用交互的用户，有权获得 Corresponding Source**。
 
-- 源码仓库：<https://github.com/snailhome/ijipu-bp>
-- **该仓库当前是私有仓库**；如果要公开部署到 Cloudflare Pages，必须在上线前做到下面任一条：
-  1. 把仓库改成公开（最简单）；
-  2. 在站点提供公开、可下载的完整源代码包（含 `vendor/`、本文件、`LICENSES/`）；
-  3. 按 AGPL §13 提供等价的源代码获取方式（不能只写「发邮件找我要」而实际不提供）。
+- 源码仓库：<https://github.com/snailhome/ijipu-bp>（**PUBLIC**）
+- 该仓库包含本项目的完整对应源码：`src/`、`vendor/`、`scripts/`、`LICENSES/`、本文件。
+- 公开部署时在站点页脚/关于页放一个指向该仓库的「源代码」链接即可满足 AGPL §13。
+- 如果以后把仓库改回私有，必须同时在站点提供公开、可下载的完整源码包，或按 AGPL §13
+  提供等价的源代码获取方式（不能只写「发邮件找我要」而实际不提供）。
 - 如果不想公开源代码，就不能使用 noteDigger 的 GPL 代码和 iJipu 的 AGPL 引擎；
   需要先把 `chords.ts` / `pianoSynth.ts` / `beatClick.ts` 和 `vendor/engine` 全部替换/重写，
   再考虑别的许可。
