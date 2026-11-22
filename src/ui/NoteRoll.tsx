@@ -19,8 +19,9 @@ import { beatMs, snapMs, snapMsFloor } from '../jps/snap'
 import { barStartTick, isBarStartTick } from '../jps/bars'
 import { COPY } from '../brand/copy'
 import { assignLanes } from './noteLanes'
+import { selectNotes } from './selection'
 import { msToX, pickTickSeconds, spanMs, xToMs } from './timeAxis'
-import type { PitchMode, View } from '../model/store'
+import type { PitchMode, SelMode, View } from '../model/store'
 import type { ChordSegment } from '../analysis/chords'
 import type { EditMode, LoopRange, RawNote, SnapMode, Spectrum } from '../model/types'
 
@@ -69,8 +70,12 @@ interface Props {
   selectedId: string | null
   /** 一起高亮的音（整行 / 整列选择时用，用户 m02483） */
   selectedIds: string[]
+  /** 选择工具的三种模式：块选 / 整列 / 整行（用户 2026-11-22，参考 NoteDigger） */
+  selMode: SelMode
   playMs: number
   onSelect: (id: string | null) => void
+  /** 框选松手时一次选中一批（块选 / 列选 / 行选） */
+  onSelectMany: (ids: string[]) => void
   onSeek: (ms: number) => void
   onAudition: (midi: number) => void
   onAdd: (n: { midi: number; startMs: number; endMs: number }) => string
@@ -166,9 +171,16 @@ type Drag =
       moved: boolean
       /** 这一下"点而不拖"要不要当"确认/取消确认"（只有绘制模式才算，用户 m02483） */
       confirm: boolean
+      /** 一起拖的音（多选后按住其中一个拖，整组走；用户 2026-11-22） */
+      group?: Array<{ id: string; midi: number; startMs: number; endMs: number }>
     }
   | { kind: 'resize'; id: string; startMs: number }
   | { kind: 'create'; id: string; startMs: number; moved: boolean }
+  /**
+   * 选择模式在空白处拖出的框（用户 2026-11-22，参考 NoteDigger）：
+   * 记录像素起止点，松手时按 `mode` 换算成时间/音高范围再选音符。
+   */
+  | { kind: 'selectBox'; mode: SelMode; x0: number; y0: number; x1: number; y1: number; moved: boolean }
   /** 按在钢琴键上（只用来做高亮，松手就清） */
   | { kind: 'key'; midi: number }
 
@@ -194,6 +206,8 @@ export function NoteRoll(props: Props) {
   const [hoverX, setHoverX] = useState<number | null>(null)
   /* 按住 Alt 临时当绘制模式用（用户 m05672）：选择模式下 Alt 一按就能画，松开回到选择 */
   const [altHeld, setAltHeld] = useState(false)
+  /* 选择框（用户 2026-11-22）：像素坐标 + 当前模式，画成绝对定位的半透明层 */
+  const [selBox, setSelBox] = useState<{ x0: number; y0: number; x1: number; y1: number; mode: SelMode } | null>(null)
   const drag = useRef<Drag | null>(null)
   /* 同一行里重叠的音要上下错开（用户 m00741）：车道算法在 noteLanes.ts，画和点共用同一份 */
   const lanes = useMemo(() => assignLanes(notes), [notes])
@@ -884,9 +898,17 @@ export function NoteRoll(props: Props) {
       /* 区间带内部不再"拖整段"（用户 m03712 第 4 条：区间里点格子也要试听 + 定位当前时点）。
        * 想整体挪区间：拖两端握柄，或在时间尺上重新划一段。 */
       if (hit) {
-        props.onSelect(hit.id)
+        /* 多选后按住其中一个拖：保留整组高亮，整组一起走（用户 2026-11-22）；
+         * 点一个没选中的音才按当前模式重选。 */
+        const inGroup = props.selectedIds.length > 1 && props.selectedIds.includes(hit.id)
+        if (!inGroup) props.onSelect(hit.id)
         props.onAudition(hit.midi)
         props.onSeek(hit.startMs)
+        const group = inGroup
+          ? props.notes
+              .filter((n) => props.selectedIds.includes(n.id))
+              .map((n) => ({ id: n.id, midi: n.midi, startMs: n.startMs, endMs: n.endMs }))
+          : undefined
         /* 拖动改音高/位置、拖右缘改时值 —— 两种模式都行（用户 m02483）。
          * 只有"画新音 / 删音 / 确认"还留在绘制模式，见下面的 onAdd 与 onPointerUp。 */
         if (x >= xAt(hit.endMs) - EDGE_PX) {
@@ -902,15 +924,24 @@ export function NoteRoll(props: Props) {
             endMs: hit.endMs,
             moved: false,
             confirm: draw,
+            group,
           }
         }
+        return
+      }
+
+      /* 选择模式在空白处按下：**先别清选择、别挪播放头**，拖出框再松手才算框选；
+       * 点一下不拖（下面 onPointerUp）才当成"清选择 + 挪播放头/试听"。
+       * 这是 NoteDigger 的选择手势（用户 2026-11-22）。 */
+      if (!draw) {
+        drag.current = { kind: 'selectBox', mode: props.selMode, x0: x, y0: y, x1: x, y1: y, moved: false }
+        setSelBox({ x0: x, y0: y, x1: x, y1: y, mode: props.selMode })
         return
       }
 
       props.onSelect(null)
       props.onAudition(midiAt(y))
       props.onSeek(rawMs)
-      if (!draw) return
       const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, pickupBeats: props.pickupBeats, firstBeatMs: props.firstBeatMs }
       /* 起点取"光标所在的那一格"（向下取整），不是最近的格点 ——
        * 否则点在格子后半段时，新音会跑到十字准星右边一格，用户看到的就是"偏右上角"。 */
@@ -946,6 +977,14 @@ export function NoteRoll(props: Props) {
         })()
         e.currentTarget.style.cursor =
           lh === 'l' || lh === 'r' || edge ? 'ew-resize' : draw ? PEN_CURSOR : 'pointer'
+        return
+      }
+      if (d.kind === 'selectBox') {
+        /* 框选只更新那层半透明框，松手才真选；移动 2px 才算"拖过"，否则当作点了一下 */
+        d.x1 = x
+        d.y1 = y
+        if (Math.abs(x - d.x0) > 2 || Math.abs(y - d.y0) > 2) d.moved = true
+        setSelBox({ x0: d.x0, y0: d.y0, x1: x, y1: y, mode: d.mode })
         return
       }
       const opt = { bpm: props.bpm, beatsPerBar: props.beatsPerBar, pickupBeats: props.pickupBeats, firstBeatMs: props.firstBeatMs }
@@ -986,6 +1025,27 @@ export function NoteRoll(props: Props) {
         const dRow = Math.round((d.grabY - y) / rowH) /* 往上拖 = 升 key，一格一个半音 */
         if (!d.moved && Math.abs(delta) < beatMs(props.bpm) / 8 && dRow === 0) return
         d.moved = true
+        if (d.group && d.group.length > 1) {
+          /* 整组拖：时间/音高都用同一个位移；先夹住位移，别让某个音撞到 0 或音域边界后
+           * 自己停住、把整组的相对关系扯散（用户 2026-11-22）。 */
+          const start = snapMs(d.startMs + delta, opt, props.snap)
+          let moveMs = start - d.startMs
+          const minStart = Math.min(...d.group.map((g) => g.startMs))
+          const maxEnd = Math.max(...d.group.map((g) => g.endMs))
+          moveMs = Math.max(-minStart, Math.min(props.durationMs - maxEnd, moveMs))
+          const minMidi = Math.min(...d.group.map((g) => g.midi))
+          const maxMidi = Math.max(...d.group.map((g) => g.midi))
+          const moveSemis = Math.max(MIDI_LOW - minMidi, Math.min(MIDI_HIGH - maxMidi, dRow))
+          for (const g of d.group) {
+            const from = g.startMs + moveMs
+            props.onPatch(g.id, {
+              startMs: from,
+              endMs: from + (g.endMs - g.startMs),
+              midi: g.midi + moveSemis,
+            })
+          }
+          return
+        }
         const start = snapMs(d.startMs + delta, opt, props.snap)
         props.onPatch(d.id, {
           startMs: start,
@@ -1015,12 +1075,32 @@ export function NoteRoll(props: Props) {
     const d = drag.current
     drag.current = null
     setPressMidi(null)
+    setSelBox(null)
 
     // 时间尺上"点一下不拖" = 取消播放时段（用户 m03936：单纯点击时间轴取消时段）
     if (d?.kind === 'loop' && !d.moved) props.onLoop(null)
     // 绘制模式下"点一下不拖"= 确认/取消确认（选择模式点音符只试听，用户 m02483）
     if (d?.kind === 'move' && !d.moved && d.confirm) props.onToggleConfirmed(d.id)
-  }, [props])
+    if (d?.kind === 'selectBox') {
+      if (!d.moved) {
+        /* 选择模式里"点一下空白"：保持原来的行为——清选择、把播放头挪过去、试听这一行 */
+        props.onSelect(null)
+        props.onAudition(midiAt(d.y1))
+        props.onSeek(msAt(d.x1))
+        return
+      }
+      const low = Math.min(midiAt(d.y0), midiAt(d.y1))
+      const high = Math.max(midiAt(d.y0), midiAt(d.y1))
+      const ids = selectNotes(props.notes, {
+        mode: d.mode,
+        startMs: msAt(d.x0),
+        endMs: msAt(d.x1),
+        midiLo: Math.max(MIDI_LOW, low),
+        midiHi: Math.min(MIDI_HIGH, high),
+      })
+      props.onSelectMany(ids)
+    }
+  }, [midiAt, msAt, props])
 
   const onContext = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -1052,6 +1132,24 @@ export function NoteRoll(props: Props) {
     }
   }, [hoverX, hoverY, props.lockPitch])
 
+  /** 选择框的像素矩形（用户 2026-11-22）：列选铺满高度、行选铺满宽度；坐标夹在内容区里 */
+  const selRect = (() => {
+    if (!selBox) return null
+    const cx = (v: number) => Math.max(KEY_W, Math.min(metrics.w, v))
+    const cy = (v: number) => Math.max(RULER_H, Math.min(metrics.h, v))
+    const x0 = Math.min(cx(selBox.x0), cx(selBox.x1))
+    const x1 = Math.max(cx(selBox.x0), cx(selBox.x1))
+    const y0 = Math.min(cy(selBox.y0), cy(selBox.y1))
+    const y1 = Math.max(cy(selBox.y0), cy(selBox.y1))
+    if (selBox.mode === 'col') {
+      return { left: x0, top: RULER_H, width: Math.max(1, x1 - x0), height: Math.max(0, metrics.h - RULER_H) }
+    }
+    if (selBox.mode === 'row') {
+      return { left: KEY_W, top: y0, width: Math.max(0, metrics.w - KEY_W), height: Math.max(1, y1 - y0) }
+    }
+    return { left: x0, top: y0, width: Math.max(1, x1 - x0), height: Math.max(1, y1 - y0) }
+  })()
+
   return (
     <div className="pane roll" ref={wrapRef}>
       {/* 顶上那条"音符表 + 操作说明"占一行高度、信息又跟帮助弹层重复，用户 m02483 让撤掉，
@@ -1059,6 +1157,8 @@ export function NoteRoll(props: Props) {
       <div className="roll-host" ref={hostRef}>
       <canvas
         ref={canvasRef}
+        data-sel-mode={props.selMode}
+        data-sel-count={props.selectedIds.length}
         style={{
           width: metrics.w,
           height: metrics.h,
@@ -1075,6 +1175,14 @@ export function NoteRoll(props: Props) {
         }}
         onContextMenu={onContext}
       />
+      {/* 框选那一层（用户 2026-11-22）：只画不接事件，松手后用 selRect 对应的范围选音 */}
+      {selRect && selBox && (
+        <div
+          className={`roll-sel-box sel-${selBox.mode}`}
+          data-sel-box={selBox.mode}
+          style={{ left: selRect.left, top: selRect.top, width: selRect.width, height: selRect.height }}
+        />
+      )}
       {/* 音名·简谱信息牌：跟着鼠标走（用户 m02483），只在音高格区域显示 */}
       {hoverMidi !== null && hoverY !== null && hoverX !== null && hoverY >= RULER_H && (
         <div

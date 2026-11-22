@@ -20,6 +20,12 @@ export interface LoadedAudio {
   samples: Float32Array
   sampleRate: number
   durationMs: number
+  /**
+   * 录音才有：录到的**原始压缩字节**（webm/opus）与 MIME。
+   * 用它写 IndexedDB 暂存（比 WAV 小），恢复时重新解码（用户 2026-11-22）。
+   */
+  encodedBytes?: ArrayBuffer
+  encodedType?: string
 }
 
 const AUDIO_EXT = /\.(mp3|wav|m4a|aac|flac|ogg|oga|opus|webm)$/i

@@ -60,9 +60,16 @@ npm run smoke
 - **两种模式的边界**（用户 m02483）：**选择**模式可以拖音符改音高/位置、拖右缘改时值；
   **画新音、删音（右键 / Delete）、点音符改确认只在绘制模式**。改指针交互时别把"删音"漏回选择模式；
   `probe` 里有"选择模式拖音符/改时值可以，右键与 Delete 不删"的用例守着。
-  选择工具还有三种模式（`store.selMode` = `block | col | row`，`Alt+R` 轮换，用户 m02483）：
-  块选只选点到的音，整列选时值有重叠的音，整行选同音高的音；`selectedIds` 一起高亮，
-  在绘制模式下 Delete 会把这一批一起删。反引号仍然只切绘制/选择。
+  选择工具还有三种模式（`store.selMode` = `block | col | row`，`Alt+R` 轮换，用户 m02483；
+  2026-11-22 参考 NoteDigger 补上**拖框选择**）：
+  块选只选点到的音，整列选时值有重叠的音，整行选同音高的音；**在空白处按住拖一个框**时，
+  块选 = 音头落在矩形里、列选 = 时值区间与时间范围重叠、行选 = 音高落在行范围里；
+  拖的时候画 `.roll-sel-box`（块选矩形 / 列选竖带 / 行选横带），松手才落选择。
+  **多选后按住其中一个音拖 = 整组一起移**（时间位移统一、音高统一，撞到音域/开头时夹位移，
+  不把相对音程扯散）；`↑/↓` / `Shift+↑/↓` 也整组移，`Delete` 整组删（绘制模式）。
+  纯计算在 `src/ui/selection.ts`（`selectNotes`），`smoke` 盖 5 条、`probe` 真拖 3 种模式 + 整组拖。
+  选择按钮三颗图标要能区分：**块选 = 虚线矩形 + 音头；整列 = 竖带 + 左右箭头；整行 = 横带 + 上下箭头**。
+  `selectedIds` 一起高亮，在绘制模式下 Delete 会把这一批一起删。反引号仍然只切绘制/选择。
 - **吸附下拉在右栏编辑页最上面**（用户 m02483 从顶栏挪下来），顶栏不再放它；画布上方那条
   "音符表 + 操作说明"窄栏也已撤掉（省纵向空间，说明看帮助弹层和悬浮提示），**别再把它加回去**。
 - **右栏三个页签**（用户 m02483）：`sideView` = `'edit' | 'analysis' | 'settings'`，同一个 `.side` 容器
@@ -111,7 +118,12 @@ npm run smoke
   **不要再加"（点一下试听）"那行字**）。画布是整块 canvas、没有 DOM 子元素，所以这两块都在
   `pointermove` 里按命中区算、用绝对定位的兄弟节点画，**别回到 canvas 里画字**。
 - 音符**以 `store.notes`（秒轴、可编辑）为准**，`analysis.notes` 只是初稿；
-  别把 `analysis.notes` 直接画到界面或喂给播放（否则人工改动白做）。
+  别把 `analysis.notes` 直接画到界面或喂给播放（否则人工改动白改）。
+- **八度纠偏**（用户 2026-11-22："分析成谱的音比频谱显示低了八度"）：`analysis/notes.ts` 在
+  Viterbi + 连段之后，用**原始频谱**对每个音段的 `当前 / -12 / +12` 半音重新打分：
+  **压 1、2 次谐波，抬 3、5 次谐波**；候选必须有 3/5 次谐波支撑（纯次谐波/低频噪声不能把音拉低）；
+  只移动一个八度，且证据差 > 0.2 才动。改判据/权重必须跑 `smoke` 的 5 条八度用例。
+  **不要在 `harmonicScores` 里简单加“低八度惩罚”**——弱基频的真实音会被误拉低。
 - 音符有 `confirmed` 一栏：**只有确认过的音**才进 `grid`/`jps`/预览（用户口径"输出以绘制所选的音为准"）。
   新增任何"导出/预览"路径都要经过 `derive()` 里的 `confirmed` 过滤，别绕过它。
 - **键盘形制已冻结**（用户 2026-11-19 明确："按现在的方案固化下来，键盘格的形制不要再随意改动"）：
@@ -253,3 +265,39 @@ npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM 
 - **验收**：`smoke` 里有 roundtrip 断言；桌面壳手动验"改几笔 → 直接关掉 → 重开 → 状态还在
   （状态栏是「缓存」）→ 按 Ctrl+S → 音频旁边才出现 `.bp.json`（状态栏变「已存」）"，
   并确认 `jpsToSvgPages` 的 `errors` 为空。
+
+## 十一、录音成谱（用户 2026-11-22）
+
+用途：**哼唱辅助记谱**——哼一小段，录下来，分析成谱。
+
+- **入口**：顶栏文件组后面的**麦克风**按钮（`data-rec-mic="1"`）。点一下在图标下方开
+  `RecordMiniBar`（四个图标：录音/暂停、停止、分析成谱、右栏 + 计时）。当前方案有未保存修改时，
+  先弹确认框：「保存并新建 / 不保存，直接新建 / 取消」。
+- **纯口径**：`src/model/recording.ts`——合成路径 `recording:<名字>`、`isRecordingPath()`、
+  录音方案名（本地时间、文件名安全）、保存音频建议名。**只有这里认前缀**，别处不要自己判。
+- **录音**：`src/audio/recorder.ts`（`getUserMedia` + `MediaRecorder` → `decodeBytes`），
+  暂停的空档不进音频；`src/audio/wav.ts` 编 16-bit PCM WAV；
+  `src/audio/saveAudio.ts` 桌面走 Rust `bp_save_audio`（原生另存为 + 写盘回读比对），
+  浏览器走 `showSaveFilePicker` / 下载。
+- **方案状态**：录音方案的 `filePath` 是合成路径，`buildProject()` 能建出方案：
+  - **`saveProject()` 对合成路径直接抛错**（不能往 `recording:` 旁边写 `.bp.json`）；
+  - **`scheduleSave()` 只在音频字节已进 IndexedDB 后才写 `bp.cache`**（`recordingAudioCachedRef`）；
+    录音中每 1.5 秒把 WebM 快照写进 IndexedDB，同时刷新 `bp.cache`；
+  - 保存方案统一走 `saveSmart()`：录音方案 → `saveRecordingAndPlan()`（弹保存音频 → 写 WAV →
+    `store.setFileRef()` 换成真实路径 → `saveProject()` 写 `.bp.json` → 删掉 IndexedDB 暂存 → 收起小条）；
+    普通方案 → `saveProject()`。
+- **录音暂存（用户 2026-11-22 追加）**：原始 WebM 写 **IndexedDB**（`src/audio/recordingCache.ts`，
+  键 = 合成路径），方案写 `bp.cache`；启动时桌面走 `readCache → restoreProject`，浏览器走
+  `browserBootedRef` 那段，`restoreProject` 认出合成路径后从 IndexedDB 读回、解码、恢复。
+  **录音中/刚录完关掉应用都能接着干**；`stopRecording` 会写最终字节并 `clearRecCacheTimer`，
+  新方案/保存成功后删掉旧音频，别让 IndexedDB 越攒越大。**不要再退回"只放内存"**——
+  否则跟其它模式不一致，用户会以为功能没做完。
+- **分析**：录音停止后 `samplesRef` 与 `recordedBufferRef` 都有值，并**自动跑一趟 `notes:false`**
+  （只出频谱/节奏/调性，不填音符）——表格里马上能看到录音的热力图、播放键也能用；
+  小条的「分析成谱」再走 `doAnalyze()`（`notes:true`，有音符时仍会确认 + 留恢复快照）。
+- **测试**：`smoke` 盖 WAV 头/采样、合成路径/命名/计时（纯函数）+ 八度纠偏 5 条 + 选择框 5 条
+  （当前 **108/108**）；`ui-probe` 用 `--use-fake-device-for-media-stream` +
+  `--use-fake-ui-for-media-stream` 真录一段，验
+  "麦克风按钮 → 小条 → 录音/暂停/停止 → 分析成谱 → 右栏 → 未保存提示 → 不保存直接新建
+  → 录音中刷新恢复 → 停止后刷新恢复"，并真拖块选/整列/整行/整组移动（当前 **195/195**）。
+  改这段交互后**要跑 `npm run probe`**；动 Rust 命令跑 `cargo check --manifest-path src-tauri/Cargo.toml --lib`。

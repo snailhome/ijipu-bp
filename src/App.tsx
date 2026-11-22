@@ -11,10 +11,15 @@
  * 数据流：打开音频 → worker 分析 → store 出 grid/jps → 画布与预览都读 store。
  * 播放两种模式（原音频 / 合成音）共用播放头；Tab 随时切换；空格播放；反引号切点击模式。
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { keyColor, keyDisplayName } from './analysis/pitchNames'
-import { loadAudioFromPath, pickAndLoadAudio, type LoadedAudio } from './audio/decode'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { keyColor, keyDisplayName, MIDI_HIGH, MIDI_LOW } from './analysis/pitchNames'
+import { loadAudioFromPath, pickAndLoadAudio, decodeBytes, type LoadedAudio } from './audio/decode'
 import { play, setAudioBuffer, setStemBuffers, setPlayTrack, makeAudioBuffer, stop, audition, setPlayRate as applyPlayRate, setMetronome as applyMetronome, type PlayMode } from './audio/player'
+// 录音成谱（用户 2026-11-22）：麦克风录音 → 小条 → 保存 WAV / 分析
+import { formatElapsed, startMicRecording, type MicRecording } from './audio/recorder'
+import { deleteRecordingAudio, getRecordingAudio, putRecordingAudio } from './audio/recordingCache'
+import { saveRecordingAudio } from './audio/saveAudio'
+import { formatRecordingName, isRecordingPath, recordingPathOf, recordingSaveName } from './model/recording'
 import { parseMidi, writeMidi } from './model/midi'
 import {
   canSeparate,
@@ -42,9 +47,10 @@ import type { AnalyzeResult, LoopRange, SnapMode, Spectrum } from './model/types
 import { NoteRoll } from './ui/NoteRoll'
 import { StripPreview } from './ui/StripPreview'
 
-/** 分析拿哪一路音频：跟着右栏"混音 / 人声 / 伴奏"的当前选择走（用户 m00810） */
-type AnalyzeSource = 'mix' | 'vocals' | 'instrumental'
-const SOURCE_LABEL: Record<AnalyzeSource, string> = { mix: '混音', vocals: '人声', instrumental: '伴奏' }
+/** 分析拿哪一路音频：跟着右栏"混音 / 人声 / 伴奏"的当前选择走（用户 m00810）；
+ *  `record` 是录音刚停止时的"只出频谱、先不出音符"那一趟（用户 2026-11-22） */
+type AnalyzeSource = 'mix' | 'vocals' | 'instrumental' | 'record'
+const SOURCE_LABEL: Record<AnalyzeSource, string> = { mix: '混音', vocals: '人声', instrumental: '伴奏', record: '录音' }
 
 /** 浏览器/开发环境下方案的 localStorage 键前缀（桌面壳走真实文件，不碰它） */
 const PROJECT_LS_PREFIX = 'bp.project:'
@@ -113,6 +119,31 @@ function Icon({ name }: { name: string }) {
           <circle cx="11" cy="2.6" r="1.2" fill="currentColor" stroke="none" />
         </svg>
       )
+    case 'mic':
+      /* 麦克风：录音成谱的总开关（用户 2026-11-22） */
+      return (
+        <svg {...common}>
+          <rect x="5.8" y="1.8" width="4.4" height="7.2" rx="2.2" />
+          <path d="M3.8 7.2a4.2 4.2 0 008.4 0" />
+          <path d="M8 11.4v2.4M6 13.8h4" />
+        </svg>
+      )
+    case 'stop':
+      /* 方框：停止录音 */
+      return (
+        <svg {...common}>
+          <rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.2" fill="currentColor" stroke="none" />
+        </svg>
+      )
+    case 'panelRight':
+      /* 一个框 + 右列：右栏开关 */
+      return (
+        <svg {...common}>
+          <rect x="1.8" y="3" width="12.4" height="10" rx="1.4" />
+          <path d="M9.6 3v10" />
+          <path d="M11 5.4h1.8M11 8h1.8M11 10.6h1.8" opacity=".7" />
+        </svg>
+      )
     case 'analysisPanel':
       /* 频谱柱 + 放大镜：右栏的「分析」页签（节奏 / 分轨） */
       return (
@@ -175,20 +206,28 @@ function Icon({ name }: { name: string }) {
           <path d="M8 11V5.6M8 5.6l2.8-1.8" />
         </svg>
       )
-    case 'selCol':
-      /* 整列选择：竖向虚线带 */
+    case 'selBlock':
+      /* 块选：虚线矩形框住一块（NoteDigger 的框选） */
       return (
         <svg {...common}>
-          <rect x="5.2" y="2.2" width="5.6" height="11.6" rx="1" strokeDasharray="2 2" />
-          <path d="M8 4.4v7.2" />
+          <rect x="2.4" y="3.2" width="11.2" height="9.6" rx="1" strokeDasharray="2 2" />
+          <rect x="5.8" y="6.5" width="4.4" height="3" rx="0.8" fill="currentColor" stroke="none" />
+        </svg>
+      )
+    case 'selCol':
+      /* 整列选择：竖向虚线带 + 左右箭头（只按时间选） */
+      return (
+        <svg {...common}>
+          <rect x="5.2" y="1.8" width="5.6" height="9.6" rx="1" strokeDasharray="2 2" />
+          <path d="M2.4 13.4h11.2M2.4 13.4l2-2M2.4 13.4l2 2M13.6 13.4l-2-2M13.6 13.4l2 2" />
         </svg>
       )
     case 'selRow':
-      /* 整行选择：横向虚线带 */
+      /* 整行选择：横向虚线带 + 上下箭头（只按音高选） */
       return (
         <svg {...common}>
-          <rect x="2.2" y="5.2" width="11.6" height="5.6" rx="1" strokeDasharray="2 2" />
-          <path d="M4.4 8h7.2" />
+          <rect x="1.8" y="5.2" width="9.6" height="5.6" rx="1" strokeDasharray="2 2" />
+          <path d="M13.4 2.4v11.2M13.4 2.4l-2 2M13.4 2.4l2 2M13.4 13.6l-2-2M13.4 13.6l2-2" />
         </svg>
       )
     case 'save':
@@ -248,12 +287,6 @@ function Icon({ name }: { name: string }) {
       return (
         <svg {...common}>
           <path d="M11.2 2.6l2.2 2.2L5.8 12.4 3 13l.6-2.8z" />
-        </svg>
-      )
-    case 'cursor':
-      return (
-        <svg {...common}>
-          <path d="M4 2.8l8.2 4.4-3.6 1.1-1.2 3.6z" />
         </svg>
       )
     case 'magnet':
@@ -405,7 +438,8 @@ function HoverTip() {
     }
 
     /* 顶栏按钮 + 左右侧栏的按钮 / 滑条 / 输入框 / 复选框；分组标题（小三角）不弹，免得挡视线 */
-    const TIP_SEL = '.toolbar button, .toolbar input[type="range"], .side button:not(.group-head), .side .field, .side .check'
+    const TIP_SEL =
+      '.toolbar button, .toolbar input[type="range"], .side button:not(.group-head), .side .field, .side .check, .record-mini button'
     const hit = (e: Event) => (e.target as HTMLElement | null)?.closest?.(TIP_SEL) as HTMLElement | null
 
     const onOver = (e: PointerEvent) => {
@@ -419,7 +453,7 @@ function HoverTip() {
       if (!target) return
       /* 在控件内部从 svg 挪到 button 也会触发 pointerout，那种不算离开 */
       const to = (e.relatedTarget as HTMLElement | null)?.closest?.(
-        '.toolbar button, .toolbar input[type="range"], .side button:not(.group-head), .side .field, .side .check',
+        '.toolbar button, .toolbar input[type="range"], .side button:not(.group-head), .side .field, .side .check, .record-mini button',
       )
       if (!to || to !== target) hide()
     }
@@ -453,6 +487,130 @@ function HoverTip() {
     </div>
   )
 }
+/** 录音小条的状态（空闲 / 正在录 / 暂停 / 已停、可分析） */
+type RecState = 'idle' | 'recording' | 'paused' | 'ready'
+
+/** 录音小条与顶栏的间隙（px），与 jp 的试听小条同一口径 */
+const REC_GAP = 6
+
+/**
+ * 录音小工具条（用户 2026-11-22）：点顶栏麦克风按钮后挂在它的正下方。
+ *
+ * 四个按钮：录音·暂停录音 / 停止录音 / 分析成谱 / 右栏。
+ * 位置**跟着顶栏那颗麦克风按钮**量（`data-rec-mic`），窗口变宽变窄跟着走；
+ * 量不到时退化到顶栏左下角，但工具条仍然要能点。
+ */
+function RecordMiniBar({
+  recState,
+  elapsedMs,
+  busy,
+  sideOpen,
+  onRecord,
+  onPause,
+  onStop,
+  onAnalyze,
+  onToggleSide,
+}: {
+  recState: RecState
+  elapsedMs: number
+  busy: boolean
+  sideOpen: boolean
+  onRecord: () => void
+  onPause: () => void
+  onStop: () => void
+  onAnalyze: () => void
+  onToggleSide: () => void
+}) {
+  const [pos, setPos] = useState<{ top: number; left: number; anchor: 'center' | 'left' } | null>(null)
+  useLayoutEffect(() => {
+    const place = () => {
+      const bar = document.querySelector<HTMLElement>('.toolbar')
+      const btn = document.querySelector<HTMLElement>('[data-rec-mic="1"]')
+      if (!bar) return
+      const br = bar.getBoundingClientRect()
+      const kr = btn?.getBoundingClientRect()
+      if (btn && kr && kr.width > 0 && btn.offsetParent !== null) {
+        setPos({
+          top: Math.max(Math.round(kr.bottom + REC_GAP), Math.round(br.bottom + REC_GAP)),
+          left: Math.round(kr.left + kr.width / 2),
+          anchor: 'center',
+        })
+        return
+      }
+      setPos({ top: Math.round(br.bottom + REC_GAP), left: 12, anchor: 'left' })
+    }
+    place()
+    window.addEventListener('resize', place)
+    return () => window.removeEventListener('resize', place)
+  }, [])
+
+  if (!pos) return null
+  const active = recState === 'recording' || recState === 'paused'
+  const canAnalyze = recState === 'ready' && !busy
+  const recordLabel = recState === 'recording' ? COPY.recordPause : recState === 'paused' ? COPY.recordResume : COPY.recordStart
+  const recordTip = recState === 'recording' ? COPY.recordPauseTip : recState === 'paused' ? COPY.recordResumeTip : COPY.recordStartTip
+  return (
+    <div
+      className="record-mini"
+      role="toolbar"
+      aria-label="录音小工具条"
+      style={{
+        top: pos.top,
+        left: pos.left,
+        transform: pos.anchor === 'center' ? 'translateX(-50%)' : 'none',
+      }}
+    >
+      <button
+        type="button"
+        className={recState === 'recording' ? 'record-mini-btn rec-on' : 'record-mini-btn'}
+        data-rec-action={recState === 'recording' ? 'pause' : 'record'}
+        onClick={active ? onPause : onRecord}
+        disabled={busy}
+        title={recordTip}
+        aria-label={recordLabel}
+      >
+        <Icon name={recState === 'recording' ? 'pause' : 'mic'} />
+      </button>
+      <button
+        type="button"
+        className="record-mini-btn"
+        data-rec-action="stop"
+        onClick={onStop}
+        disabled={!active || busy}
+        title={COPY.recordStopTip}
+        aria-label={COPY.recordStop}
+      >
+        <Icon name="stop" />
+      </button>
+      <button
+        type="button"
+        className="record-mini-btn"
+        data-rec-action="analyze"
+        onClick={onAnalyze}
+        disabled={!canAnalyze}
+        title={COPY.recordAnalyzeTip}
+        aria-label={COPY.recordAnalyze}
+      >
+        <Icon name="analyze" />
+      </button>
+      <button
+        type="button"
+        className={sideOpen ? 'record-mini-btn rec-on' : 'record-mini-btn'}
+        data-rec-action="side"
+        onClick={onToggleSide}
+        title={COPY.recordSideTip}
+        aria-label={COPY.recordSide}
+      >
+        <Icon name="panelRight" />
+      </button>
+      <span className="record-mini-time" title={COPY.recordElapsedTip} aria-label={COPY.recordElapsedTip}>
+        {formatElapsed(elapsedMs)}
+      </span>
+    </div>
+  )
+}
+
+
 /** 帮助面板的内容（用户 m05893：顶栏键盘图标点开就能查按键 / 快捷键 / 鼠标操作） */
 const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
   {
@@ -460,8 +618,19 @@ const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
     rows: [
       ['Ctrl + O', '打开音频'],
       ['Ctrl + J', '打开方案'],
-      ['Ctrl + S', '保存方案（真正写 .bp.json）'],
+      ['Ctrl + S', '保存方案（普通方案写 .bp.json；录音方案先选 .wav 存音频）'],
       ['Ctrl + E', '导出 .jps（只导确认过的音）'],
+    ],
+  },
+  {
+    title: '录音成谱',
+    rows: [
+      ['麦克风按钮', '新建录音方案（当前方案有未保存修改会先问一句）'],
+      ['录音 / 暂停录音', '开始采集；暂停的空档不会进音频，再点继续'],
+      ['停止录音', '把这段录音整理成可分析的音频'],
+      ['分析成谱', '对录音自动判音，画到表格里并生成初稿'],
+      ['右栏', '开 / 关右侧栏（调节 / 分析 / 设置）'],
+      ['保存方案', '先选一个 .wav 存音频，再把方案写到它旁边；录音只在内存里，记得存'],
     ],
   },
   {
@@ -521,9 +690,9 @@ const SNAP_CHOICES: Array<{ v: SnapMode; label: string }> = [
 
 /** 选择工具三种模式的名称和说明（用户 m02483：参照 noteDigger） */
 const SEL_INFO: Record<SelMode, { label: string; tip: string }> = {
-  block: { label: '块选', tip: '点音符只选它一个；拖音符改音高/位置、拖右边缘改时值' },
-  col: { label: '整列', tip: '点一个音：选同一时间范围（时值有重叠）的所有音' },
-  row: { label: '整行', tip: '点一个音：选同一音高的所有音' },
+  block: { label: '块选', tip: '点音符只选它一个；空白处拖一个矩形，选音头在框里、音高也在行范围里的音' },
+  col: { label: '整列', tip: '点一个音：选同一时间范围（时值有重叠）的所有音；空白处横着拖一条竖带，按时间选' },
+  row: { label: '整行', tip: '点一个音：选同一音高的所有音；空白处竖着拖一条横带，按音高选' },
 }
 
 const SEP_URL = {
@@ -617,6 +786,8 @@ export default function App() {
     body: string
     ok: string
     run: () => void
+    /** 第二选择（例如"不保存，直接新建"）；不给就只有一个主操作 + 取消 */
+    secondary?: { label: string; run: () => void }
   } | null>(null)
   /* 上一次危险操作前的快照（状态栏给一个「恢复」入口） */
   const [recovery, setRecovery] = useState<{ label: string; at: string; count: number } | null>(null)
@@ -683,6 +854,36 @@ export default function App() {
   useEffect(() => {
     applyMetronome(metronome, bpm, beatsPerBar, firstBeatMs)
   }, [metronome, bpm, beatsPerBar, firstBeatMs])
+
+  /* 录音成谱（用户 2026-11-22）：小条开合、录音状态、计时、当前录音器与解码后的 buffer */
+  const [recBarOpen, setRecBarOpen] = useState(false)
+  const [recState, setRecState] = useState<RecState>('idle')
+  const [recElapsed, setRecElapsed] = useState(0)
+  const recorderRef = useRef<MicRecording | null>(null)
+  const recordedBufferRef = useRef<AudioBuffer | null>(null)
+  /** 录音原始字节已经进 IndexedDB（决定 `bp.cache` 能不能写；用户 2026-11-22） */
+  const recordingAudioCachedRef = useRef(false)
+  /** 录音过程中定时把音频快照写 IndexedDB 的计时器 */
+  const recCacheTimerRef = useRef<number | null>(null)
+  /** 录音缓存的代次：停止/新建时 +1，晚到的旧快照不许再覆盖最终字节 */
+  const recCacheTokenRef = useRef(0)
+  /** 当前方案是不是"还没保存音频的录音方案"（合成路径 `recording:`） */
+  const recPlan = isRecordingPath(filePath)
+
+  /* 录音计时（用户 2026-11-22）：录音/暂停时每 200ms 刷一次；暂停的时间由 recorder 扣掉 */
+  useEffect(() => {
+    if (recState !== 'recording' && recState !== 'paused') return
+    const id = window.setInterval(() => setRecElapsed(recorderRef.current?.elapsedMs() ?? 0), 200)
+    return () => window.clearInterval(id)
+  }, [recState])
+  /* 关掉页面/组件卸载时别把麦克风一直占着 */
+  useEffect(
+    () => () => {
+      recorderRef.current?.cancel()
+      recorderRef.current = null
+    },
+    [],
+  )
   /* 右侧栏（调性/参数/显示/源码）能不能收起来——宽屏看谱时把它关掉能多出一大块 */
   const [showSide, setShowSide] = useState(true)
   /* 调性分析那一组能不能折起来（调号选择挪进组里了） */
@@ -782,8 +983,8 @@ export default function App() {
         /* 重新分析不该把播放头弹回开头：setAnalysis 会把它归零，先记下再放回去 */
         const backMs = st.currentMs
         st.setAnalysis(msg.result)
-        /* 频谱归位：分析混音 → 混音留底；分析人声/伴奏 → 只换那一轨的热力图 */
-        if (!pending || pending.source === 'mix') mixSpecRef.current = msg.result.spectrum
+        /* 频谱归位：分析混音/录音 → 混音留底；分析人声/伴奏 → 只换那一轨的热力图 */
+        if (!pending || pending.source === 'mix' || pending.source === 'record') mixSpecRef.current = msg.result.spectrum
         else if (stemSpecRef.current) stemSpecRef.current[pending.source] = msg.result.spectrum
         /* 打开音频时读到了方案：分析结果一回来，就把参数、音符、视野盖回去（用户 m01794）。
          * 必须等 setAnalysis 之后，因为它会把 notes 换成机器初稿。 */
@@ -819,6 +1020,9 @@ export default function App() {
               ? `分析完成（${SOURCE_LABEL[pending.source]}）：BPM ${msg.result.bpm}，${n} 个音已全部当谱音，jps 已生成 —— 接着人工听、改`
               : `分析完成（${SOURCE_LABEL[pending.source]}）：没找到音。试试调「去谐波」，或者换一轨再分析`,
           )
+        } else if (pending?.source === 'record') {
+          /* 录音停止后的"先出频谱"那一趟：表格已经有热力图了，提示下一步分析成谱 */
+          setNotice(COPY.recordSpectrumReady)
         } else {
           setNotice(
             `分析完成${pending ? `（${SOURCE_LABEL[pending.source]}）` : ''}：BPM ${msg.result.bpm}，${
@@ -980,6 +1184,8 @@ export default function App() {
     const st = set.getState()
     const p = buildProject(st)
     if (!p) return null
+    /* 录音方案还没保存音频：不能往合成路径旁边写 `.bp.json`（先走 saveRecordingAndPlan） */
+    if (isRecordingPath(p.audio.path)) throw new Error(COPY.recordPlanGuard)
     const path = projectPathFor(p.audio.path)
     const text = serializeProject(p)
     if (isTauriShell()) {
@@ -998,11 +1204,343 @@ export default function App() {
     return path
   }, [set])
 
+  /* ---------- 录音成谱（用户 2026-11-22） ----------
+   * 录音先当"还没保存音频的录音方案"（filePath = `recording:<名字>`）：
+   * **原始音频字节暂存 IndexedDB**、方案写 `bp.cache`，录音中/刚录完关掉应用也能恢复；
+   * 保存方案时弹保存音频对话框写 WAV，再写它旁边的 .bp.json，最后清掉 IndexedDB 暂存。 */
+
+  /** 把解码好的录音装进编辑器；停止录音后再由 stopRecording 跑一趟"只出频谱"的分析 */
+  const loadRecordedAudio = useCallback(
+    (loaded: LoadedAudio) => {
+      const st = set.getState()
+      stop()
+      st.setPlaying(false)
+      st.setLoaded({
+        fileName: loaded.name,
+        filePath: loaded.path ?? recordingPathOf(loaded.name),
+        durationMs: loaded.durationMs,
+      })
+      setAudioBuffer(loaded.buffer)
+      samplesRef.current = { samples: new Float32Array(loaded.samples), sampleRate: loaded.sampleRate }
+      recordedBufferRef.current = loaded.buffer
+      pendingAnalyzeRef.current = null
+      pendingRestoreRef.current = null
+      setSavedAt(null)
+      setCachedAt(null)
+      savedSigRef.current = null
+      setDirty(true)
+      setRecElapsed(loaded.durationMs)
+      st.setBusy(null)
+    },
+    [set],
+  )
+
+  /** 停掉"录音快照 → IndexedDB"的定时器 */
+  const clearRecCacheTimer = useCallback(() => {
+    if (recCacheTimerRef.current !== null) {
+      window.clearInterval(recCacheTimerRef.current)
+      recCacheTimerRef.current = null
+    }
+  }, [])
+
+  /**
+   * 录音过程中定时把**原始压缩字节**写 IndexedDB，并把方案写进 `bp.cache`。
+   * 用户 2026-11-22：录音中/刚录完就关掉应用，也要能下次接着干——和打开音频的自动缓存一致。
+   */
+  const persistRecordingCache = useCallback(async () => {
+    const rec = recorderRef.current
+    if (!rec) return
+    const path = set.getState().filePath
+    if (!path || !isRecordingPath(path)) return
+    const token = recCacheTokenRef.current
+    try {
+      const blob = await rec.snapshot()
+      if (!blob || token !== recCacheTokenRef.current) return
+      await putRecordingAudio(path, blob)
+      if (token !== recCacheTokenRef.current) return
+      recordingAudioCachedRef.current = true
+      const p = buildProject(set.getState())
+      if (p && isRecordingPath(p.audio.path)) {
+        writeCache(p)
+        setCachedAt(p.savedAt)
+      }
+    } catch {
+      /* 缓存失败不打断录音；至少还能点「保存方案」把音频存下来 */
+    }
+  }, [set, writeCache])
+
+  /* 卸载时把录音快照定时器停掉（组件真正卸载/HMR 时都别留下野计时器） */
+  useEffect(() => {
+    return () => {
+      if (recCacheTimerRef.current !== null) {
+        window.clearInterval(recCacheTimerRef.current)
+        recCacheTimerRef.current = null
+      }
+    }
+  }, [])
+
+  /** 停止录音：整理成可分析的音频。返回是否成功（失败/没录到都 false） */
+  const stopRecording = useCallback(async (): Promise<boolean> => {
+    const rec = recorderRef.current
+    if (!rec) return false
+    recorderRef.current = null
+    recCacheTokenRef.current += 1
+    clearRecCacheTimer()
+    const st = set.getState()
+    st.setBusy(COPY.recordPreparing)
+    try {
+      const loaded = await rec.stop()
+      loadRecordedAudio(loaded)
+      /* 最终字节写 IndexedDB：比过程快照更全；写成功才允许方案缓存跟着走 */
+      const path = loaded.path ?? recordingPathOf(loaded.name)
+      if (loaded.encodedBytes) {
+        try {
+          await putRecordingAudio(path, new Blob([loaded.encodedBytes], { type: loaded.encodedType || 'audio/webm' }))
+          recordingAudioCachedRef.current = true
+        } catch {
+          /* 写不进就算了：本次仍能保存音频，只是关掉应用后恢复不了 */
+        }
+      }
+      if (recordingAudioCachedRef.current) {
+        const p = buildProject(set.getState())
+        if (p && isRecordingPath(p.audio.path)) {
+          writeCache(p)
+          setCachedAt(p.savedAt)
+        }
+      }
+      setRecState('ready')
+      /**
+       * 用户 2026-11-22：「录音结束后要缓存音频，并显示在波纹表格上」。
+       * 停止后先**只出频谱**（`notes:false`）：表格里马上有热力图、播放键也能用，
+       * 但先不填音符；「分析成谱」再跑一趟 `notes:true` 出初稿。
+       */
+      const src = samplesRef.current
+      const w = workerRef.current
+      if (w && src) {
+        st.setBusy(COPY.analyzing)
+        pendingAnalyzeRef.current = { confirm: false, source: 'record' }
+        const copy = new Float32Array(src.samples)
+        w.postMessage(
+          {
+            samples: copy,
+            sampleRate: src.sampleRate,
+            suppress: st.suppress,
+            beatsPerBar: st.beatsPerBar,
+            notes: false,
+          },
+          [copy.buffer as ArrayBuffer],
+        )
+      } else {
+        setNotice(COPY.recordReadyTip)
+      }
+      return true
+    } catch (e) {
+      st.setBusy(null)
+      st.setError(e instanceof Error ? e.message : String(e))
+      setRecState('idle')
+      return false
+    }
+  }, [clearRecCacheTimer, loadRecordedAudio, set, writeCache])
+
+  /** 开始录一段（会先把当前录音方案清成空谱：再录一遍就是新的一稿） */
+  const startRecording = useCallback(async () => {
+    const st = set.getState()
+    if (!isRecordingPath(st.filePath)) {
+      st.setError(COPY.recordNeedPlan)
+      return
+    }
+    if (recorderRef.current) return
+    st.setError(null)
+    st.setBusy(null)
+    const name = st.fileName ?? formatRecordingName()
+    try {
+      const rec = await startMicRecording(name)
+      recorderRef.current = rec
+      recCacheTokenRef.current += 1
+      recordingAudioCachedRef.current = false
+      clearRecCacheTimer()
+      /* 新的一遍：清掉上一遍的音频/音符/分析，但保留方案本身（同一个合成路径） */
+      stop()
+      st.setPlaying(false)
+      st.setLoaded({ fileName: name, filePath: st.filePath ?? recordingPathOf(name), durationMs: 0 })
+      st.setTitle(name)
+      setAudioBuffer(null)
+      samplesRef.current = null
+      recordedBufferRef.current = null
+      pendingAnalyzeRef.current = null
+      setSavedAt(null)
+      setCachedAt(null)
+      savedSigRef.current = null
+      setDirty(true)
+      setRecElapsed(0)
+      setRecState('recording')
+      setNotice(COPY.recordStartedTip)
+      /* 录音中每 1.5 秒把已录到的 WebM 快照写进 IndexedDB：
+       * 用户 2026-11-22——录音中/刚录完关掉应用，下次也能接着干。 */
+      window.setTimeout(() => void persistRecordingCache(), 600)
+      recCacheTimerRef.current = window.setInterval(() => void persistRecordingCache(), 1500)
+    } catch (e) {
+      st.setError(e instanceof Error ? e.message : String(e))
+      setRecState('idle')
+    }
+  }, [clearRecCacheTimer, persistRecordingCache, set])
+
+  /** 暂停 / 继续录音 */
+  const toggleRecordingPause = useCallback(() => {
+    const rec = recorderRef.current
+    if (!rec) return
+    if (recState === 'recording') {
+      rec.pause()
+      setRecElapsed(rec.elapsedMs())
+      setRecState('paused')
+      return
+    }
+    if (recState === 'paused') {
+      rec.resume()
+      setRecState('recording')
+    }
+  }, [recState])
+
+  /**
+   * 保存录音：先（必要时）停止录音 → 弹保存音频对话框写 WAV → 把方案路径换成真实路径
+   * → 写 `.bp.json`。返回方案路径；用户取消/失败返回 null。
+   */
+  const saveRecordingAndPlan = useCallback(async (): Promise<string | null> => {
+    const st = set.getState()
+    recCacheTokenRef.current += 1
+    if (recorderRef.current) {
+      const ok = await stopRecording()
+      if (!ok) return null
+    }
+    const buf = recordedBufferRef.current
+    if (!buf) {
+      st.setError(COPY.recordNoAudio)
+      return null
+    }
+    const oldPath = st.filePath
+    const suggested = recordingSaveName(st.fileName ?? formatRecordingName())
+    try {
+      const path = await saveRecordingAudio(buf, suggested)
+      if (!path) return null
+      const name = path.split(/[\\/]/).pop() ?? suggested
+      st.setFileRef({ fileName: name, filePath: path })
+      const saved = await saveProject()
+      if (!saved) throw new Error(COPY.recordWriteFail)
+      /* 音频已经落盘：IndexedDB 里的录音暂存没用了，清掉；录音会话结束，小条收起来 */
+      if (oldPath && isRecordingPath(oldPath)) void deleteRecordingAudio(oldPath)
+      recordingAudioCachedRef.current = false
+      clearRecCacheTimer()
+      setRecBarOpen(false)
+      setRecState('idle')
+      return saved
+    } catch (e) {
+      st.setError(`${COPY.recordSaveFailPrefix}${e instanceof Error ? e.message : String(e)}`)
+      return null
+    }
+  }, [clearRecCacheTimer, saveProject, set, stopRecording])
+
+  /** 顶栏「保存方案」/ Ctrl+S：录音方案先存音频，普通方案只存 .bp.json */
+  const saveSmart = useCallback(async (): Promise<string | null> => {
+    const st = set.getState()
+    if (isRecordingPath(st.filePath)) {
+      const saved = await saveRecordingAndPlan()
+      if (saved) setNotice(`${COPY.recordSavedTip}：${saved}`)
+      return saved
+    }
+    const saved = await saveProject()
+    if (saved) setNotice(`${COPY.projectSavedTip}：${saved}`)
+    return saved
+  }, [saveProject, saveRecordingAndPlan, set])
+
+  /** 新建录音方案前，把当前未保存的方案存掉。返回 true = 可以继续新建。 */
+  const saveCurrentForNewRecording = useCallback(async (): Promise<boolean> => {
+    const st = set.getState()
+    if (!dirty) return true
+    /* 刚建好还没录到东西的录音方案：没有可保存的音频，直接当作"没什么要存" */
+    if (isRecordingPath(st.filePath) && !recordedBufferRef.current) return true
+    if (isRecordingPath(st.filePath)) return (await saveRecordingAndPlan()) !== null
+    if (!st.filePath) return true
+    try {
+      return (await saveProject()) !== null
+    } catch (e) {
+      st.setError(`当前方案存不下来：${e instanceof Error ? e.message : String(e)}`)
+      return false
+    }
+  }, [dirty, saveProject, saveRecordingAndPlan, set])
+
+  /** 真正开一份新的录音方案：空音频、空谱、空分析；录音只在内存在，不写缓存 */
+  const beginNewRecordingPlan = useCallback(() => {
+    recorderRef.current?.cancel()
+    recorderRef.current = null
+    recCacheTokenRef.current += 1
+    clearRecCacheTimer()
+    recordingAudioCachedRef.current = false
+    const st = set.getState()
+    const oldPath = st.filePath
+    stop()
+    st.setPlaying(false)
+    if (oldPath && isRecordingPath(oldPath)) void deleteRecordingAudio(oldPath)
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(CACHE_KEY)
+    const name = formatRecordingName()
+    st.setLoaded({ fileName: name, filePath: recordingPathOf(name), durationMs: 0 })
+    st.setTitle(name)
+    st.setBusy(null)
+    st.setError(null)
+    setAudioBuffer(null)
+    samplesRef.current = null
+    recordedBufferRef.current = null
+    pendingAnalyzeRef.current = null
+    pendingRestoreRef.current = null
+    setSelectedId(null)
+    setSavedAt(null)
+    setCachedAt(null)
+    savedSigRef.current = null
+    setDirty(true)
+    setRecElapsed(0)
+    setRecState('idle')
+    setRecBarOpen(true)
+    setNotice(COPY.recordCachedTip)
+  }, [clearRecCacheTimer, set])
+
+  /** 顶栏麦克风按钮：开 / 关录音小条；从"普通方案"进来时先新建（未保存先问） */
+  const toggleRecordBar = useCallback(() => {
+    if (recBarOpen) {
+      if (recState === 'recording' || recState === 'paused') {
+        setNotice(COPY.recordStopFirst)
+        return
+      }
+      setRecBarOpen(false)
+      return
+    }
+    /* 已经是录音方案（还没保存音频）：只是把小条叫回来，不新建 */
+    if (isRecordingPath(set.getState().filePath)) {
+      setRecBarOpen(true)
+      return
+    }
+    if (dirty) {
+      setConfirmAsk({
+        title: COPY.recordNewTitle,
+        body: COPY.recordNewBody,
+        ok: COPY.recordNewSave,
+        run: () => {
+          void (async () => {
+            if (await saveCurrentForNewRecording()) beginNewRecordingPlan()
+          })()
+        },
+        secondary: { label: COPY.recordNewDiscard, run: beginNewRecordingPlan },
+      })
+      return
+    }
+    beginNewRecordingPlan()
+  }, [beginNewRecordingPlan, dirty, recBarOpen, recState, saveCurrentForNewRecording])
+
   /** 自动（缓存）保存：连续改动时最多每 1.2 秒写一次缓存；只更新状态栏的"缓存"时间。
    *  分析中/正在恢复方案时不写：此时 notes 还是空的（或机器初稿），一写就把好缓存盖掉。 */
   const scheduleSave = useCallback(() => {
     const st = set.getState()
     if (!st.filePath) return
+    /* 录音方案：只有音频字节已经写进 IndexedDB 才写缓存（否则恢复时没有音频，别给人假安心） */
+    if (isRecordingPath(st.filePath) && !recordingAudioCachedRef.current) return
     if (st.busy || pendingRestoreRef.current) return
     if (saveTimerRef.current !== null) return
     saveTimerRef.current = window.setTimeout(() => {
@@ -1025,12 +1563,29 @@ export default function App() {
       setNotice(null)
       st.setBusy(kind === 'cache' ? '正在恢复本机缓存…' : '正在打开方案…')
       try {
+        if (isRecordingPath(p.audio.path)) {
+          /* 录音方案：音频不在磁盘上，在 IndexedDB；读回原始字节再解码（用户 2026-11-22） */
+          const blob = await getRecordingAudio(p.audio.path)
+          if (!blob) throw new Error(COPY.recordCacheMissing)
+          const bytes = await blob.arrayBuffer()
+          const loaded = await decodeBytes(bytes, p.audio.name, p.audio.path)
+          recordingAudioCachedRef.current = true
+          setRecState('ready')
+          setRecBarOpen(true)
+          await applyLoaded(loaded, p)
+          setRecElapsed(loaded.durationMs)
+          return
+        }
         const loaded = await loadAudioFromPath(p.audio.path)
         if (!loaded) throw new Error(`方案里的音频不在了：${p.audio.path}`)
         await applyLoaded(loaded, p)
       } catch (e) {
         st.setError(e instanceof Error ? e.message : String(e))
         st.setBusy(null)
+        if (isRecordingPath(p.audio.path)) {
+          setRecState('idle')
+          setRecBarOpen(false)
+        }
       }
     },
     [applyLoaded, set],
@@ -1176,6 +1731,20 @@ export default function App() {
       }
     })()
   }, [applyLoaded, restoreProject, set])
+
+  /**
+   * 浏览器里的启动恢复（用户 2026-11-22）：桌面壳走上面那段 `bp_initial_audio` / 缓存；
+   * 浏览器没有启动参数，但录音方案的音频在 IndexedDB、方案在 `bp.cache`，也能接着干。
+   * 只认**录音方案**——普通浏览器的音频路径是 null，恢复不了。
+   */
+  const browserBootedRef = useRef(false)
+  useEffect(() => {
+    if (isTauriShell()) return
+    if (browserBootedRef.current) return
+    browserBootedRef.current = true
+    const cache = readCache()
+    if (cache && isRecordingPath(cache.audio.path)) void restoreProject(cache, 'cache')
+  }, [readCache, restoreProject])
 
   /* ---------- 自动（缓存）保存：参数、音符、视野一变，1.2 秒内写成本机缓存 ----------
    * **不写 .bp.json**（用户 m02483）：要存成文件得按 Ctrl+S 或点「保存方案」。
@@ -1356,6 +1925,12 @@ export default function App() {
       },
     })
   }, [rememberForRecovery, runAnalyze, set])
+
+  /** 录音小条的「分析成谱」：只在录音已就绪、且没有别的任务在跑时重跑分析（会走 doAnalyze 的确认） */
+  const analyzeRecording = useCallback(() => {
+    if (recState !== 'ready' || busy) return
+    doAnalyze()
+  }, [busy, doAnalyze, recState])
 
   /** 顶栏「和弦」：对当前看的那一轨识别和弦（Note Digger 的 chordEst 复刻）。
    * 频谱已经在内存里，直接拷给 worker；不重算频谱、不改音符、不进 jps。 */
@@ -1659,6 +2234,12 @@ export default function App() {
     [set],
   )
 
+  /** 框选松手：一次选中一批（NoteRoll 的三种模式已经算好 id，这里只落到高亮/Delete 用的状态） */
+  const selectMany = useCallback((ids: string[]) => {
+    setSelectedIds(ids)
+    setSelectedId(ids[0] ?? null)
+  }, [])
+
   /* ---------- 热键 ---------- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1752,13 +2333,21 @@ export default function App() {
         e.preventDefault()
         jumpBar(1)
       } else if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
-        /* 选中音符上下改音高（Shift 一个八度，用户 m05736 第 1 条） */
-        if (!selectedId) return
-        const cur = st.notes.find((n) => n.id === selectedId)
-        if (!cur) return
+        /* 选中音符上下改音高（Shift 一个八度，用户 m05736 第 1 条）；
+         * 多选时整组一起移，位移夹在音域里，别把相对音程扯散（用户 2026-11-22）。 */
+        const ids = selectedIds.length ? selectedIds : selectedId ? [selectedId] : []
+        const sel = st.notes.filter((n) => ids.includes(n.id))
+        if (!sel.length) return
         e.preventDefault()
         const step = e.shiftKey ? 12 : 1
-        st.patchNote(selectedId, { midi: cur.midi + (e.code === 'ArrowUp' ? step : -step) })
+        const want = e.code === 'ArrowUp' ? step : -step
+        const minMidi = Math.min(...sel.map((n) => n.midi))
+        const maxMidi = Math.max(...sel.map((n) => n.midi))
+        const delta = Math.max(MIDI_LOW - minMidi, Math.min(MIDI_HIGH - maxMidi, want))
+        if (delta === 0) return
+        st.beginEdit()
+        for (const n of sel) st.patchNote(n.id, { midi: n.midi + delta })
+        st.endEdit()
       } else if (e.code === 'KeyA' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault()
         st.setAllConfirmed(true)
@@ -1781,8 +2370,7 @@ export default function App() {
           setNotice('还没有打开音频，没地方存方案')
           return
         }
-        void saveProject()
-          .then((p) => setNotice(p ? `${COPY.projectSavedTip}：${p}` : null))
+        void saveSmart()
           .catch((err: unknown) => {
             st.setError(`方案存不下来：${err instanceof Error ? err.message : String(err)}`)
           })
@@ -1794,7 +2382,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey, true) // 捕获阶段：先于控件自己的默认行为
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [goStart, jumpBar, openAudio, openProject, removeNote, saveProject, selectedId, selectedIds, set, switchMode, togglePlay])
+  }, [goStart, jumpBar, openAudio, openProject, removeNote, saveSmart, selectedId, selectedIds, set, switchMode, togglePlay])
 
   /* ---------- 导出 ---------- */
   const exportJps = useCallback(async () => {
@@ -1942,7 +2530,7 @@ export default function App() {
             <button
               className="icon-btn"
               onClick={() => void openAudio()}
-              disabled={!!busy}
+              disabled={!!busy || recState === 'recording' || recState === 'paused'}
               title="选一段音频（wav / mp3 / m4a / flac…）打开，马上开始分析"
               aria-label={COPY.openAudio}
               data-key="Ctrl+O"
@@ -1952,7 +2540,7 @@ export default function App() {
             <button
               className="icon-btn"
               onClick={() => void openProject()}
-              disabled={!!busy}
+              disabled={!!busy || recState === 'recording' || recState === 'paused'}
               title={COPY.projectOpenTip}
               aria-label={COPY.projectOpen}
               data-key="Ctrl+J"
@@ -1962,14 +2550,12 @@ export default function App() {
             <button
               className={dirty ? 'icon-btn dirty' : 'icon-btn'}
               onClick={() => {
-                void saveProject()
-                  .then((p) => setNotice(p ? `${COPY.projectSavedTip}：${p}` : null))
-                  .catch((e: unknown) => {
-                    set.getState().setError(`方案存不下来：${e instanceof Error ? e.message : String(e)}`)
-                  })
+                void saveSmart().catch((e: unknown) => {
+                  set.getState().setError(`方案存不下来：${e instanceof Error ? e.message : String(e)}`)
+                })
               }}
-              disabled={!filePath || !!busy}
-              title={dirty ? '有修改未保存：点一下写进 .bp.json（Ctrl+S）' : COPY.projectSaveTip}
+              disabled={!filePath || !!busy || (recPlan && recState === 'idle')}
+              title={recPlan ? (recState === 'idle' ? COPY.recordNoAudio : COPY.recordSaveTip) : dirty ? '有修改未保存：点一下写进 .bp.json（Ctrl+S）' : COPY.projectSaveTip}
               aria-label={COPY.projectSave}
               data-key="Ctrl+S"
             >
@@ -1984,6 +2570,20 @@ export default function App() {
               data-key="Ctrl+E"
             >
               <Icon name="export" />
+            </button>
+          </span>
+
+          {/* 录音成谱（用户 2026-11-22）：放在文件组后面，点一下在图标下开录音小条 */}
+          <span className="tgroup" title={COPY.recordGroup}>
+            <button
+              className={`icon-btn${recBarOpen ? ' on' : ''}${recState === 'recording' || recState === 'paused' ? ' rec-live' : ''}`}
+              data-rec-mic="1"
+              onClick={toggleRecordBar}
+              aria-pressed={recBarOpen}
+              title={COPY.recordMicTip}
+              aria-label={COPY.recordMic}
+            >
+              <Icon name="mic" />
             </button>
           </span>
 
@@ -2182,7 +2782,7 @@ export default function App() {
               data-key="Alt+R"
               title={SEL_INFO[selMode].tip}
             >
-              <Icon name={selMode === 'block' ? 'cursor' : selMode === 'col' ? 'selCol' : 'selRow'} />
+              <Icon name={selMode === 'block' ? 'selBlock' : selMode === 'col' ? 'selCol' : 'selRow'} />
             </button>
           </div>
 
@@ -2266,6 +2866,21 @@ export default function App() {
         </div>
       </div>
 
+      {/* 录音小条（用户 2026-11-22）：位置跟着顶栏那颗麦克风按钮 */}
+      {recBarOpen && (
+        <RecordMiniBar
+          recState={recState}
+          elapsedMs={recElapsed}
+          busy={!!busy}
+          sideOpen={showSide}
+          onRecord={() => void startRecording()}
+          onPause={toggleRecordingPause}
+          onStop={() => void stopRecording()}
+          onAnalyze={analyzeRecording}
+          onToggleSide={() => setShowSide((v) => !v)}
+        />
+      )}
+
       <div className={showSide ? "body" : "body noside"} style={showSide ? ({ gridTemplateColumns: `minmax(0,1fr) ${sideW}px`, "--side-w": `${sideW}px` } as React.CSSProperties) : undefined}>
         {/* 右栏宽度拖拽条（用户 m07044）：只在右栏打开时出现 */}
         {showSide && (
@@ -2323,7 +2938,9 @@ export default function App() {
             midiMode={midiMode}
             selectedId={selectedId}
             selectedIds={selectedIds}
+            selMode={selMode}
             onSelect={selectWithMode}
+            onSelectMany={selectMany}
             onSeek={seek}
             onAudition={(midi) => void audition(midi)}
             onAdd={(n) => useBp.getState().addNote(n)}
@@ -2922,6 +3539,17 @@ export default function App() {
             </div>
             <div className="modal-foot">
               <button onClick={() => setConfirmAsk(null)}>{COPY.confirmCancel}</button>
+              {confirmAsk.secondary && (
+                <button
+                  onClick={() => {
+                    const run = confirmAsk.secondary?.run
+                    setConfirmAsk(null)
+                    run?.()
+                  }}
+                >
+                  {confirmAsk.secondary.label}
+                </button>
+              )}
               <button
                 className="primary"
                 onClick={() => {

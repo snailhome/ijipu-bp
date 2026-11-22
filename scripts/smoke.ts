@@ -30,6 +30,12 @@ import type { ProjectSource } from '../src/model/project'
 import { parseMidi, writeMidi } from '../src/model/midi'
 import { useBp } from '../src/model/store'
 import type { RawNote } from '../src/model/types'
+// 录音成谱（用户 2026-11-22）：WAV 编码与"合成路径/命名"口径都是纯函数
+import { encodeWav } from '../src/audio/wav'
+import { formatElapsed } from '../src/audio/recorder'
+import { formatRecordingName, isRecordingPath, recordingPathOf, recordingSaveName } from '../src/model/recording'
+// 选择工具三种模式（用户 2026-11-22，参考 NoteDigger）：纯计算
+import { selectNotes } from '../src/ui/selection'
 
 const SR = 44100
 const results: { name: string; ok: boolean; detail: string }[] = []
@@ -66,6 +72,22 @@ function concat(parts: Float32Array[]): Float32Array {
 
 function silence(ms: number): Float32Array {
   return new Float32Array(Math.round((ms / 1000) * SR))
+}
+
+/** 复音色测试：f0 的 1..N 次谐波按 weights 叠加（诊断"人声/乐器低八度"用） */
+function harmonicTone(f0: number, ms: number, weights: number[], amp = 0.3): Float32Array {
+  const n = Math.round((ms / 1000) * SR)
+  const out = new Float32Array(n)
+  const fade = Math.min(n, Math.round(0.01 * SR))
+  for (let i = 0; i < n; i++) {
+    let g = 1
+    if (i < fade) g = i / fade
+    else if (i > n - fade) g = (n - i) / fade
+    let s = 0
+    for (let h = 0; h < weights.length; h++) s += weights[h] * Math.sin((2 * Math.PI * f0 * (h + 1) * i) / SR)
+    out[i] = s * amp * g
+  }
+  return out
 }
 
 /* ---------------- 1. FFT ---------------- */
@@ -663,6 +685,109 @@ const melody = concat([
   const empty = writeMidi([], { bpm: 90, beatsPerBar: 3 })
   const parsedEmpty = parseMidi(empty.buffer as ArrayBuffer)
   check('空谱也能写 / 读 MIDI（速度拍号还在）', parsedEmpty.notes.length === 0 && parsedEmpty.bpm === 90 && parsedEmpty.beatsPerBar === 3, JSON.stringify(parsedEmpty))
+}
+
+/* ---------------- 18. 录音成谱：WAV 编码 + 方案路径/命名口径（用户 2026-11-22） ---------------- */
+{
+  const mono = {
+    numberOfChannels: 1,
+    length: 5,
+    sampleRate: 8000,
+    getChannelData: () => Float32Array.from([-1, -0.5, 0, 0.5, 1]),
+  }
+  const wav = encodeWav(mono)
+  const wv = new DataView(wav)
+  const ascii = (at: number, n: number) =>
+    String.fromCharCode(...Array.from({ length: n }, (_, i) => wv.getUint8(at + i)))
+  const wavHead =
+    ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WAVE' && ascii(12, 4) === 'fmt ' && ascii(36, 4) === 'data'
+  check('WAV 头：RIFF/WAVE/fmt/data 都在', wavHead, ascii(0, 4) + ' / ' + ascii(8, 4))
+  check(
+    'WAV 头：单声道 / 8kHz / 16-bit / 数据长度 = 帧数×2',
+    wv.getUint16(22, true) === 1 &&
+      wv.getUint32(24, true) === 8000 &&
+      wv.getUint16(34, true) === 16 &&
+      wv.getUint32(40, true) === 10 &&
+      wav.byteLength === 54,
+    JSON.stringify({ ch: wv.getUint16(22, true), sr: wv.getUint32(24, true), data: wv.getUint32(40, true), bytes: wav.byteLength }),
+  )
+  const pcm = new Int16Array(wav, 44)
+  check(
+    'WAV 采样：负半轴到 -32768、正半轴到 32767、0 与半幅对得上',
+    pcm[0] === -32768 && Math.abs(pcm[1] + 16384) <= 1 && pcm[2] === 0 && Math.abs(pcm[3] - 16384) <= 1 && pcm[4] === 32767,
+    Array.from(pcm).join(','),
+  )
+  const stereo = {
+    numberOfChannels: 2,
+    length: 2,
+    sampleRate: 44100,
+    getChannelData: (c: number) => (c === 0 ? Float32Array.from([1, 0]) : Float32Array.from([0, -1])),
+  }
+  const swav = encodeWav(stereo)
+  const spcm = new Int16Array(swav, 44)
+  check(
+    'WAV 立体声按 L R L R 交错',
+    swav.byteLength === 44 + 8 && spcm[0] === 32767 && spcm[1] === 0 && spcm[2] === 0 && spcm[3] === -32768,
+    Array.from(spcm).join(','),
+  )
+
+  check('录音合成路径：只认 recording: 前缀', isRecordingPath('recording:录音 1') === true && isRecordingPath('/tmp/a.wav') === false && isRecordingPath(null) === false)
+  const name = formatRecordingName(new Date(2026, 10, 22, 21, 5, 8))
+  check('录音方案名用本地时间且文件名安全', name === '录音 2026-11-22 21-05-08', name)
+  check('录音名字 → 合成路径', recordingPathOf(name) === `recording:${name}`, recordingPathOf(name))
+  check(
+    '保存音频的建议名：补 .wav、非法字符替换',
+    recordingSaveName('a/b:c') === 'a-b-c.wav' && recordingSaveName('我的哼唱.WAV') === '我的哼唱.wav',
+    `${recordingSaveName('a/b:c')} / ${recordingSaveName('我的哼唱.WAV')}`,
+  )
+  check('录音计时格式：mm:ss / h:mm:ss', formatElapsed(0) === '00:00' && formatElapsed(65_000) === '01:05' && formatElapsed(3_661_000) === '1:01:01', `${formatElapsed(65_000)} / ${formatElapsed(3_661_000)}`)
+}
+
+/* ---------------- 19. 八度纠偏：基频弱 / 二次谐波强时不能把音判高或判低（用户 2026-11-22） ---------------- */
+{
+  const cases: Array<{ name: string; f0: number; weights: number[]; want: number }> = [
+    { name: 'A4 弱基频（二次谐波最强）', f0: 440, weights: [0.03, 1, 0.5, 0.3], want: 69 },
+    { name: 'A3 弱基频（二次谐波最强）', f0: 220, weights: [0.03, 1, 0.5, 0.3], want: 57 },
+    { name: 'A5 弱基频（二次谐波最强）', f0: 880, weights: [0.15, 1, 0.5, 0.3], want: 81 },
+    { name: 'A4 基频最强', f0: 440, weights: [1, 0.5, 0.3, 0.2], want: 69 },
+    { name: 'A3 基频最强（带三/五次谐波）', f0: 220, weights: [1, 0.5, 0.5, 0.3, 0.3], want: 57 },
+  ]
+  for (const c of cases) {
+    const r = analyzeSamples(harmonicTone(c.f0, 900, c.weights), SR)
+    const got = r.notes[0]?.midi
+    check(
+      `八度纠偏：${c.name} → ${midiToName(c.want)}（不能高/低八度）`,
+      got === c.want,
+      `期望 ${midiToName(c.want)}，检出 ${got === undefined ? '没音' : midiToName(got)}（${r.notes.map((n) => midiToName(n.midi)).join(',')}）`,
+    )
+  }
+}
+
+/* ---------------- 20. 选择工具三种模式（用户 2026-11-22，参考 NoteDigger） ---------------- */{
+  const ns = [
+    { id: 'a', midi: 60, startMs: 0, endMs: 1500, velocity: 0.8, confirmed: false },
+    { id: 'b', midi: 64, startMs: 300, endMs: 600, velocity: 0.8, confirmed: false },
+    { id: 'c', midi: 60, startMs: 1000, endMs: 1400, velocity: 0.8, confirmed: false },
+    { id: 'd', midi: 67, startMs: 2000, endMs: 2400, velocity: 0.8, confirmed: false },
+  ]
+  const block = selectNotes(ns, { mode: 'block', startMs: 200, endMs: 1100, midiLo: 59, midiHi: 61 })
+  check(
+    '块选：只选"音头落在框里 + 音高在行范围里"的音（跨过框的长音 a 不算）',
+    block.join(',') === 'c',
+    JSON.stringify(block),
+  )
+  const col = selectNotes(ns, { mode: 'col', startMs: 800, endMs: 900, midiLo: 60, midiHi: 60 })
+  check(
+    '整列：按时间重叠选（长音 a 跨过 800–900 也算），不按音高过滤',
+    col.join(',') === 'a',
+    JSON.stringify(col),
+  )
+  const row = selectNotes(ns, { mode: 'row', startMs: 5000, endMs: 6000, midiLo: 60, midiHi: 60 })
+  check('整行：按音高选（不管时间），60 的两个音都选上', row.join(',') === 'a,c', JSON.stringify(row))
+  const empty = selectNotes(ns, { mode: 'block', startMs: 5000, endMs: 6000, midiLo: 80, midiHi: 90 })
+  check('空框：一个都不选', empty.length === 0, JSON.stringify(empty))
+  const reversed = selectNotes(ns, { mode: 'block', startMs: 1100, endMs: 200, midiLo: 61, midiHi: 59 })
+  check('起止点反向（从右下往左上拖）：归一化后仍选到 c', reversed.join(',') === 'c', JSON.stringify(reversed))
 }
 
 const failed = results.filter((r) => !r.ok)

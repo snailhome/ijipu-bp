@@ -84,6 +84,46 @@ async fn bp_save_jps(
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+/// 保存录音音频（WAV）：弹原生另存为，写盘后**回读字节比对**。
+///
+/// 用户 2026-11-22：录音方案的「保存方案」先落到一个真实音频文件，再把 `.bp.json`
+/// 写在它旁边；所以这条命令只负责"选路径 + 把前端编好的 WAV 字节写进去"。
+#[tauri::command]
+async fn bp_save_audio(
+    app: tauri::AppHandle,
+    suggested: String,
+    bytes: Vec<u8>,
+) -> Result<Option<String>, String> {
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_title("保存录音音频")
+            .add_filter("WAV 音频", &["wav"])
+            .set_file_name(&suggested)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| format!("对话框没起来：{e}"))?;
+
+    let Some(p) = picked else { return Ok(None) };
+    let mut path = path_of(p)?;
+    /* 用户在对话框里把后缀删了也补回来：方案路径按 .wav 拼，后面打开才找得到 */
+    let is_wav = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.eq_ignore_ascii_case("wav"))
+        .unwrap_or(false);
+    if !is_wav {
+        path.set_extension("wav");
+    }
+    std::fs::write(&path, &bytes).map_err(|e| format!("写不进去 {}：{e}", path.display()))?;
+    let back = std::fs::read(&path).map_err(|e| format!("回读失败：{e}"))?;
+    if back != bytes {
+        return Err("写入校验没过：回读字节与要写的不一致".into());
+    }
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
 /// 读方案文本（UTF-8）。方案文件跟音频放一起，路径由前端拼。
 #[tauri::command]
 fn bp_read_text(path: String) -> Result<String, String> {
@@ -132,6 +172,7 @@ pub fn run() {
             bp_read_audio,
             bp_initial_audio,
             bp_save_jps,
+            bp_save_audio,
             bp_read_text,
             bp_write_text,
             bp_pick_project,

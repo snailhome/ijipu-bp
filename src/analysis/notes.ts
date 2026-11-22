@@ -7,6 +7,8 @@
  *     （同音 0、差 1 个半音 0.55、差 2 个 1.3、八度 2.0……见 JUMP_COST）
  *  3. 路径不变的一段 = 一个音；太短的段丢掉，同音相邻段合并
  *  4. 掐掉两头"看不出来"的一截（音尾衰减会被窗拖住）
+ *  5. 八度纠偏：用原始频谱在"当前 / ±12 半音"里再核对一次，
+ *     压基频+二次、抬三/五次谐波，修"弱基频被判高八度 / 次谐波被判低八度"（用户 2026-11-22）
  *
  * 为什么不用"每帧 argmax + 中值滤波"（P0 第一版）：
  * 真曲子实测（独奏陶笛 287 秒）出了 710 个音，谱面上全是 `#1 #2` 这种相邻半音抖动 ——
@@ -70,6 +72,67 @@ function harmonicScores(data: Float32Array, row: number, out: Float32Array): num
     if (s > max) max = s
   }
   return max
+}
+
+/**
+ * 八度纠偏（用户 2026-11-22："分析成谱的音比频谱显示低了八度"）。
+ *
+ * Viterbi 只看"谐波求和分"，遇到**基频弱、二次谐波强**的人声/乐器时，
+ * 容易把二次谐波当成基频（高八度）；遇到**低八度泛音/周期加倍**时又会往下掉。
+ * 这里在一条音段定下来后，用**原始频谱**再比一次"当前音 / 低八度 / 高八度"：
+ *
+ *  - 权重故意压**基频**和**二次谐波**，抬**三次、五次谐波**——
+ *    真正的基频会有 3f/5f，而"把二次谐波当基频"的候选，它的 3f/5f 在更高的地方、通常很弱；
+ *  - 只比当前 ±12 半音，不再往下找两个八度（否则弱基频的 A4 会被拉到 A3）；
+ *  - 分数接近时保留原判，避免把本来对的音翻掉。
+ */
+const OCTAVE_WEIGHTS = [0.6, 0.15, 1, 0.2, 0.8, 0.15]
+/** 1、2、3、4、5、6 次谐波相对基频的半音数（3rd=+19、5th=+28，不是八度！） */
+const OCTAVE_STEPS = [0, 12, 19, 24, 28, 31]
+
+function octaveScore(mean: Float32Array, bin: number): number {
+  let s = 0
+  for (let h = 0; h < OCTAVE_WEIGHTS.length; h++) {
+    const idx = bin + OCTAVE_STEPS[h]
+    if (idx >= BIN_COUNT) break
+    s += OCTAVE_WEIGHTS[h] * Math.log1p(mean[idx] * 20)
+  }
+  return s
+}
+
+/** 候选基频有没有"三次/五次谐波"支撑：纯次谐波/低频噪声只有 1、2 次，不能靠它降八度 */
+function hasHarmonicSupport(mean: Float32Array, bin: number): boolean {
+  const e3 = bin + 19 < BIN_COUNT ? mean[bin + 19] : 0
+  const e5 = bin + 28 < BIN_COUNT ? mean[bin + 28] : 0
+  const base = mean[bin] + (bin + 12 < BIN_COUNT ? mean[bin + 12] : 0)
+  return e3 + e5 > Math.max(0.02, base * 0.12)
+}
+
+/** 用音段 [from,to] 的平均频谱，在当前 bin / ±12 里挑一个更可信的基频 */
+function correctedBin(spec: Spectrum, from: number, to: number, bin: number): number {
+  const mean = new Float32Array(BIN_COUNT)
+  const n = Math.max(1, to - from + 1)
+  for (let f = from; f <= to; f++) {
+    const row = f * BIN_COUNT
+    for (let b = 0; b < BIN_COUNT; b++) mean[b] += spec.data[row + b]
+  }
+  for (let b = 0; b < BIN_COUNT; b++) mean[b] /= n
+  const cur = octaveScore(mean, bin)
+  let bestBin = bin
+  let bestScore = cur
+  for (const d of [-12, 12]) {
+    const b = bin + d
+    if (b < 0 || b >= BIN_COUNT) continue
+    /* 只有 1、2 次谐波、没有 3/5 次的"低八度"多半是次谐波/噪声，不能把音拉下去 */
+    if (!hasHarmonicSupport(mean, b)) continue
+    const s = octaveScore(mean, b)
+    if (s > bestScore) {
+      bestScore = s
+      bestBin = b
+    }
+  }
+  /* 证据不够强就不动：0.2 大约相当于"三次谐波明显更合理"这一档 */
+  return bestScore > cur + 0.2 ? bestBin : bin
 }
 
 /**
@@ -213,8 +276,17 @@ export function trackMonophonic(spec: Spectrum, opts: TrackOptions = {}): RawNot
     }
   }
 
+  // 4.6) 八度纠偏：用原始频谱再核对一次，修"二次谐波强→高八度 / 低八度泛音→低八度"
+  const corrected = merged.map((seg) => ({ ...seg, bin: correctedBin(spec, seg.from, seg.to, seg.bin) }))
+  const finalSegs: typeof merged = []
+  for (const seg of corrected) {
+    const last = finalSegs[finalSegs.length - 1]
+    if (last && last.bin === seg.bin && seg.from - last.to - 1 <= 2) last.to = seg.to
+    else finalSegs.push({ ...seg })
+  }
+
   // 5) 出 RawNote（力度 = 该段时域 RMS 相对于全曲最响帧，0.2..1）
-  return merged.map((seg, i) => {
+  return finalSegs.map((seg, i) => {
     let rms = 0
     for (let k = seg.from; k <= seg.to; k++) rms += frameRms[k]
     rms /= Math.max(1, seg.to - seg.from + 1)

@@ -149,6 +149,11 @@ interface State {
   setBusy: (s: string | null) => void
   setError: (s: string | null) => void
   setLoaded: (p: { fileName: string; filePath: string | null; durationMs: number }) => void
+  /**
+   * 只改"这份谱对应哪个音频文件"（不动音符/分析/视图）。
+   * 录音方案保存音频后从合成路径换成真实路径时用（用户 2026-11-22）。
+   */
+  setFileRef: (p: { fileName: string; filePath: string }) => void
   setAnalysis: (a: AnalyzeResult) => void
   /** 恢复方案：覆盖参数与音符（analysis 由调用方先设好）。id 重新编号，避免和本进程新画的音撞号 */
   applyProject: (p: ProjectFile) => void
@@ -357,6 +362,7 @@ export const useBp = create<State>((set, get) => ({
     gestureDepth = 0
     gestureSaved = false
   },
+  setFileRef: (p) => set({ fileName: p.fileName, filePath: p.filePath }),
   setAnalysis: (a) => {
     set({
       analysis: a,

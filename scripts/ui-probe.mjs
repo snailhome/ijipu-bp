@@ -179,6 +179,9 @@ const chrome = spawn(
     '--disable-gpu',
     '--no-first-run',
     '--no-default-browser-check',
+    /* 录音用例（用户 2026-11-22）：headless 里给一个假的音频输入，并自动授权麦克风 */
+    '--use-fake-ui-for-media-stream',
+    '--use-fake-device-for-media-stream',
     `--remote-debugging-port=${PORT}`,
     `--user-data-dir=${userDataDir}`,
     '--window-size=1440,960',
@@ -2422,6 +2425,388 @@ try {
     s.setPlayRate(1)
   })()`)
   await sleep(250)
+
+  /* ── 选择工具三种模式（用户 2026-11-22，参考 NoteDigger）：在空白处拖框选音符 ── */
+  {
+    /* 固定一份 4 个音的谱：60/64/60/67，其中 60 的两个音用来验"整行/块选" */
+    await cdp.eval(`(() => {
+      const s = window.__bp.getState()
+      s.setLoaded({ fileName: 'sel.wav', filePath: null, durationMs: 4000 })
+      s.setAnalysis({
+        durationMs: 4000,
+        sampleRate: 44100,
+        spectrum: {
+          frames: 200, hopMs: 20, sampleRate: 44100,
+          data: new Float32Array(200 * 88),
+          frameRms: new Float32Array(200).fill(0.1),
+        },
+        notes: [
+          { id: 'n1', midi: 60, startMs: 200, endMs: 900, velocity: 0.8, confirmed: false },
+          { id: 'n2', midi: 64, startMs: 1000, endMs: 1700, velocity: 0.8, confirmed: false },
+          { id: 'n3', midi: 60, startMs: 1800, endMs: 2600, velocity: 0.8, confirmed: false },
+          { id: 'n4', midi: 67, startMs: 2800, endMs: 3400, velocity: 0.8, confirmed: false },
+        ],
+        bpm: 120, firstBeatMs: 0,
+        keyCandidates: [{ tonic: 0, share: 1 }],
+      })
+      s.setView({ zoom: 1, panMs: 0 })
+      s.setTopMidi(76)
+      s.setMode('select')
+      s.setSelMode('block')
+    })()`)
+    await sleep(450)
+    const geo = await cdp.eval(`(() => {
+      const m = window.__bpRoll
+      const c = document.querySelector('.pane.roll canvas')
+      const r = c.getBoundingClientRect()
+      const s = window.__bp.getState()
+      return { ox: r.x, oy: r.y, left: m.left, width: m.w, top: m.top, rowH: m.rowH, rulerH: m.rulerH, span: s.durationMs / s.view.zoom, pan: s.view.panMs }
+    })()`)
+    const xAt = (ms) => geo.ox + geo.left + ((ms - geo.pan) / geo.span) * (geo.width - geo.left)
+    const yAt = (midi) => geo.oy + geo.rulerH + (geo.top - midi + 0.5) * geo.rowH
+    const selCount = () => cdp.eval(`document.querySelector('.pane.roll canvas')?.dataset.selCount`)
+    const selModeDom = () => cdp.eval(`document.querySelector('.pane.roll canvas')?.dataset.selMode`)
+
+    /* 块选：从 150ms 拖到 2650ms、只框 60 这一行 ⇒ n1 + n3（n2 是 64、n4 在框外） */
+    const bx = { x1: xAt(150), y1: yAt(60) - geo.rowH * 0.3, x2: xAt(2650), y2: yAt(60) + geo.rowH * 0.3 }
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: bx.x1, y: bx.y1, button: 'left', clickCount: 1 })
+    for (let i = 1; i <= 8; i++) {
+      await cdp.send('Input.dispatchMouseEvent', {
+        type: 'mouseMoved',
+        x: bx.x1 + ((bx.x2 - bx.x1) * i) / 8,
+        y: bx.y1 + ((bx.y2 - bx.y1) * i) / 8,
+        button: 'left',
+        buttons: 1,
+      })
+      await sleep(35)
+    }
+    const overlay = await cdp.eval(`(() => {
+      const b = document.querySelector('.roll-sel-box')
+      if (!b) return null
+      const r = b.getBoundingClientRect()
+      return { cls: b.className, w: Math.round(r.width), h: Math.round(r.height) }
+    })()`)
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: bx.x2, y: bx.y2, button: 'left', clickCount: 1 })
+    await sleep(250)
+    const blockCount = await selCount()
+    check(
+      '块选：拖的时候出现矩形选择框；松手选中框住音头的两个 60 音（64/67 不选）',
+      !!overlay && String(overlay.cls).includes('sel-block') && overlay.w > 20 && overlay.h > 4 && blockCount === '2',
+      JSON.stringify({ overlay, blockCount, mode: await selModeDom() }),
+    )
+
+    /* 多选后按住其中一个拖：整组一起走（时间 + 音高），选择不塌成一个 */
+    const beforeGroup = await cdp.eval(`window.__bp.getState().notes.filter((n) => n.id === 'n1' || n.id === 'n3').map((n) => ({ id: n.id, startMs: n.startMs, endMs: n.endMs, midi: n.midi }))`)
+    await cdp.dragAt(xAt(500), yAt(60), xAt(700), yAt(61), 6)
+    await sleep(250)
+    const afterGroup = await cdp.eval(`window.__bp.getState().notes.filter((n) => n.id === 'n1' || n.id === 'n3').map((n) => ({ id: n.id, startMs: n.startMs, endMs: n.endMs, midi: n.midi }))`)
+    const byId = (arr, id) => arr.find((n) => n.id === id)
+    const g1 = byId(beforeGroup, 'n1')
+    const g3 = byId(beforeGroup, 'n3')
+    const h1 = byId(afterGroup, 'n1')
+    const h3 = byId(afterGroup, 'n3')
+    const d1 = h1 && g1 ? h1.startMs - g1.startMs : NaN
+    const d3 = h3 && g3 ? h3.startMs - g3.startMs : NaN
+    const groupCount = await selCount()
+    check(
+      '多选后拖其中一个：整组一起移（时间位移相同、音高都 +1），选择仍是两个',
+      !!h1 && !!h3 && d1 > 50 && Math.abs(d1 - d3) <= 2 && h1.midi === g1.midi + 1 && h3.midi === g3.midi + 1 && groupCount === '2' &&
+        Math.abs((h1.endMs - h1.startMs) - (g1.endMs - g1.startMs)) <= 2,
+      JSON.stringify({ beforeGroup, afterGroup, d1, d3, groupCount }),
+    )
+
+    /* 整列：只拖时间 1150–1250ms（整组刚拖过，n1 已挪到 400–1100），音高行随便 ⇒ 与这段重叠的 n2（1000–1700） */
+    await cdp.eval(`window.__bp.getState().setSelMode('col')`)
+    await sleep(150)
+    await cdp.dragAt(xAt(1150), yAt(70), xAt(1250), yAt(70), 5)
+    await sleep(250)
+    const colCount = await selCount()
+    check(
+      '整列：只按时间选（1150–1250ms 与 n2 重叠），不看音高',
+      colCount === '1' && (await selModeDom()) === 'col',
+      JSON.stringify({ colCount, mode: await selModeDom() }),
+    )
+
+    /* 整行：只拖 61 这一行的高度（整组刚升了半音），横向位置随便 ⇒ 两个 61 音（n1 + n3） */
+    await cdp.eval(`window.__bp.getState().setSelMode('row')`)
+    await sleep(150)
+    await cdp.dragAt(xAt(3000), yAt(61) - geo.rowH * 0.3, xAt(3000), yAt(61) + geo.rowH * 0.3, 4)
+    await sleep(250)
+    const rowCount = await selCount()
+    check(
+      '整行：只按音高选（61 这一行两个音都选上），不看时间',
+      rowCount === '2' && (await selModeDom()) === 'row',
+      JSON.stringify({ rowCount, mode: await selModeDom() }),
+    )
+
+    /* 空白处点一下（不拖）= 清选择（保持原来的点空白行为） */
+    await cdp.eval(`window.__bp.getState().setSelMode('block')`)
+    await sleep(120)
+    await cdp.clickAt(xAt(3500), yAt(70))
+    await sleep(200)
+    check('选择模式点空白（不拖）：清掉选择', (await selCount()) === '0', String(await selCount()))
+
+    /* 三种模式的图标要各不相同、跟着选择按钮换 */
+    const iconOf = async (mode) => {
+      await cdp.eval(`window.__bp.getState().setSelMode(${JSON.stringify(mode)})`)
+      await sleep(120)
+      return cdp.eval(`(() => {
+        const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '').startsWith('选择（'))
+        return b ? b.innerHTML : ''
+      })()`)
+    }
+    const iBlock = await iconOf('block')
+    const iCol = await iconOf('col')
+    const iRow = await iconOf('row')
+    check(
+      '选择按钮三种模式各有图标（块选矩形 / 整列竖带 / 整行横带，互不相同）',
+      !!iBlock && !!iCol && !!iRow && iBlock !== iCol && iCol !== iRow && iBlock !== iRow,
+      JSON.stringify({ block: iBlock.length, col: iCol.length, row: iRow.length }),
+    )
+  }
+
+  /* ── 录音成谱（用户 2026-11-22）：麦克风按钮 → 录音小条 → 录音 / 暂停 / 停止 / 分析 / 右栏 ── */
+  {
+    const waitUntil = async (expr, ms = 12_000) => {
+      const t0 = Date.now()
+      while (Date.now() - t0 < ms) {
+        if (await cdp.eval(expr)) return true
+        await sleep(180)
+      }
+      return false
+    }
+
+    /** 刷新页面（模拟"关掉应用再打开"），等录音方案从 IndexedDB + bp.cache 恢复出来 */
+    const reloadAndWait = async () => {
+      await cdp.send('Page.reload', { ignoreCache: false })
+      let live = null
+      for (let i = 0; i < 80; i++) {
+        await sleep(250)
+        try {
+          live = await cdp.eval(`(() => {
+            if (!document.querySelector('.toolbar') || !window.__bp) return null
+            const s = window.__bp.getState()
+            const a = document.querySelector('.record-mini [data-rec-action="analyze"]')
+            return {
+              name: s.fileName, path: s.filePath, duration: s.durationMs,
+              bar: !!document.querySelector('.record-mini'),
+              analysis: !!s.analysis, busy: !!s.busy,
+              analyzeEnabled: a ? !a.disabled : null,
+            }
+          })()`)
+        } catch {
+          live = null /* 刷新瞬间执行上下文被销毁，下一轮再来 */
+        }
+        if (live && live.analysis && !live.busy) break
+      }
+      return live
+    }
+
+    /* 归零到"没有方案"：点麦克风不会弹未保存确认，直接进新的录音方案 */
+    await cdp.eval(`(() => {
+      const s = window.__bp.getState()
+      s.setLoaded({ fileName: 'probe.wav', filePath: null, durationMs: 0 })
+      window.__bp.setState({ notes: [], analysis: null, history: [], future: [], filePath: null, fileName: null })
+    })()`)
+    await sleep(350)
+
+    const micPlace = await cdp.eval(`(() => {
+      const labels = [...document.querySelectorAll('.tb-left button')].map((b) => b.getAttribute('aria-label') || '')
+      const at = (l) => labels.indexOf(l)
+      return { mic: at('新建录音方案'), midi: at('MIDI 编辑器'), save: at('保存方案') }
+    })()`)
+    check(
+      '顶栏文件组后面有麦克风按钮（在 MIDI 组之前）',
+      micPlace.mic >= 0 && micPlace.mic > micPlace.save && micPlace.mic < micPlace.midi,
+      JSON.stringify(micPlace),
+    )
+
+    await cdp.eval(`document.querySelector('[data-rec-mic]')?.click()`)
+    await sleep(350)
+    const bar = await cdp.eval(`(() => {
+      const b = document.querySelector('.record-mini')
+      if (!b) return null
+      const s = window.__bp.getState()
+      return {
+        n: b.querySelectorAll('button').length,
+        labels: [...b.querySelectorAll('button')].map((x) => x.getAttribute('aria-label') || ''),
+        time: b.querySelector('.record-mini-time')?.textContent || '',
+        path: s.filePath,
+        name: s.fileName,
+      }
+    })()`)
+    check(
+      '点麦克风 → 图标下方出现录音小条（4 个按钮 + 计时），当前方案变成录音方案',
+      !!bar && bar.n === 4 && bar.labels.includes('录音') && String(bar.path).startsWith('recording:') && String(bar.name).startsWith('录音 '),
+      JSON.stringify(bar),
+    )
+
+    await cdp.eval(`document.querySelector('.record-mini [data-rec-action="record"]')?.click()`)
+    await sleep(1300)
+    const recOn = await cdp.eval(`(() => ({
+      pause: !!document.querySelector('.record-mini [data-rec-action="pause"]'),
+      live: !!document.querySelector('[data-rec-mic]')?.classList.contains('rec-live'),
+      time: document.querySelector('.record-mini-time')?.textContent || '',
+    }))()`)
+    check(
+      '点录音开始采集：按钮变暂停、顶栏麦克风变红、计时在走',
+      recOn.pause && recOn.live && recOn.time !== '00:00',
+      JSON.stringify(recOn),
+    )
+
+    await cdp.eval(`document.querySelector('.record-mini [data-rec-action="pause"]')?.click()`)
+    await sleep(350)
+    const pausedLabel = await cdp.eval(
+      `document.querySelector('.record-mini [data-rec-action="record"]')?.getAttribute('aria-label')`,
+    )
+    check('暂停录音：按钮变「继续录音」', pausedLabel === '继续录音', String(pausedLabel))
+    await cdp.eval(`document.querySelector('.record-mini [data-rec-action="record"]')?.click()`)
+    await sleep(650)
+
+    await cdp.eval(`document.querySelector('.record-mini [data-rec-action="stop"]')?.click()`)
+    const stopped = await waitUntil(
+      `(() => { const s = window.__bp.getState(); return !s.busy && s.durationMs > 0 && !!s.analysis })()`,
+      15_000,
+    )
+    const afterStop = await cdp.eval(`(() => {
+      const s = window.__bp.getState()
+      const a = document.querySelector('.record-mini [data-rec-action="analyze"]')
+      return {
+        duration: s.durationMs,
+        notes: s.notes.length,
+        analysis: !!s.analysis,
+        spectrumFrames: s.analysis?.spectrum?.frames ?? 0,
+        analyzeDisabled: a ? a.disabled : null,
+        path: s.filePath,
+      }
+    })()`)
+    check(
+      '停止录音：录音**已显示在表格里**（频谱就绪、音符还没填），分析成谱按钮亮起',
+      stopped && afterStop.duration > 500 && afterStop.notes === 0 && afterStop.analysis === true && afterStop.spectrumFrames > 0 && afterStop.analyzeDisabled === false,
+      JSON.stringify(afterStop),
+    )
+
+    await cdp.eval(`document.querySelector('.record-mini [data-rec-action="analyze"]')?.click()`)
+    const analyzed = await waitUntil(`(() => { const s = window.__bp.getState(); return !s.busy && !!s.analysis })()`, 25_000)
+    const afterAnalyze = await cdp.eval(`(() => {
+      const s = window.__bp.getState()
+      return { analysis: !!s.analysis, notes: s.notes.length, jps: !!s.jps, duration: s.durationMs }
+    })()`)
+    check(
+      '分析成谱：自动判音并画到表格（analysis 有、谱面已生成）',
+      analyzed && afterAnalyze.analysis && afterAnalyze.duration > 500,
+      JSON.stringify(afterAnalyze),
+    )
+
+    const sideBefore = await cdp.eval(`!!document.querySelector('.side') && !document.querySelector('.side.off')`)
+    await cdp.eval(`document.querySelector('.record-mini [data-rec-action="side"]')?.click()`)
+    await sleep(300)
+    const sideAfter = await cdp.eval(`!!document.querySelector('.side') && !document.querySelector('.side.off')`)
+    check('录音小条的「右栏」能开 / 关右栏', sideBefore !== sideAfter, JSON.stringify({ sideBefore, sideAfter }))
+    await cdp.eval(`document.querySelector('.record-mini [data-rec-action="side"]')?.click()`)
+    await sleep(250)
+
+    const nameBefore = await cdp.eval(`window.__bp.getState().fileName`)
+    await cdp.eval(`document.querySelector('[data-rec-mic]')?.click()`)
+    await sleep(300)
+    const closed = await cdp.eval(`!document.querySelector('.record-mini')`)
+    await cdp.eval(`document.querySelector('[data-rec-mic]')?.click()`)
+    await sleep(350)
+    const reopened = await cdp.eval(
+      `({ bar: !!document.querySelector('.record-mini'), name: window.__bp.getState().fileName })`,
+    )
+    check(
+      '录音方案关掉小条再点麦克风：小条回来，不新建方案',
+      closed && reopened.bar && reopened.name === nameBefore,
+      JSON.stringify({ closed, reopened }),
+    )
+
+    /* 未保存提示：换成普通方案并弄脏，点麦克风应先问「保存并新建 / 不保存 / 取消」 */
+    await cdp.eval(`document.querySelector('[data-rec-mic]')?.click()`)
+    await sleep(250)
+    await cdp.eval(`(() => {
+      const s = window.__bp.getState()
+      s.setLoaded({ fileName: 'prompt.wav', filePath: '/tmp/prompt.wav', durationMs: 1000 })
+      s.setTitle('prompt-dirty')
+    })()`)
+    await sleep(600)
+    await cdp.eval(`document.querySelector('[data-rec-mic]')?.click()`)
+    await sleep(350)
+    const prompt = await cdp.eval(`(() => {
+      const m = document.querySelector('.modal-confirm')
+      if (!m) return null
+      return {
+        title: m.querySelector('.modal-head strong')?.textContent || '',
+        buttons: [...m.querySelectorAll('.modal-foot button')].map((b) => (b.textContent || '').trim()),
+      }
+    })()`)
+    check(
+      '当前方案有未保存修改时点麦克风：先问「保存并新建 / 不保存，直接新建 / 取消」',
+      !!prompt &&
+        prompt.title === '当前方案还没保存，先保存吗？' &&
+        prompt.buttons.join('|') === '取消|不保存，直接新建|保存并新建',
+      JSON.stringify(prompt),
+    )
+    await cdp.eval(
+      `[...document.querySelectorAll('.modal-confirm .modal-foot button')].find((b) => (b.textContent || '').includes('不保存'))?.click()`,
+    )
+    await sleep(450)
+    const newPlan = await cdp.eval(`(() => {
+      const s = window.__bp.getState()
+      return { bar: !!document.querySelector('.record-mini'), path: s.filePath, name: s.fileName, notes: s.notes.length }
+    })()`)
+    check(
+      '确认框选「不保存，直接新建」：进新的录音方案（空谱、合成路径）',
+      newPlan.bar && String(newPlan.path).startsWith('recording:') && newPlan.notes === 0,
+      JSON.stringify(newPlan),
+    )
+
+    /* 录音中直接"关掉"（刷新页面）：快照应该已经写进 IndexedDB，方案在 bp.cache */
+    await cdp.eval(`document.querySelector('.record-mini [data-rec-action="record"]')?.click()`)
+    await sleep(2300)
+    const cacheInfo = await cdp.eval(`(() => {
+      const t = localStorage.getItem('bp.cache')
+      if (!t) return null
+      const o = JSON.parse(t)
+      return { path: o?.audio?.path ?? null, name: o?.audio?.name ?? null }
+    })()`)
+    check(
+      '录音进行中：bp.cache 已经指向录音方案（音频字节已进 IndexedDB）',
+      !!cacheInfo && String(cacheInfo.path).startsWith('recording:'),
+      JSON.stringify(cacheInfo),
+    )
+    const live1 = await reloadAndWait()
+    check(
+      '录音中直接关掉 / 重开：从 IndexedDB 恢复这段录音（小条回来、表格有频谱）',
+      !!live1 &&
+        String(live1.path).startsWith('recording:') &&
+        live1.duration > 500 &&
+        live1.bar &&
+        live1.analysis &&
+        live1.analyzeEnabled === true,
+      JSON.stringify(live1),
+    )
+
+    /* 重新录一段、点停止、再"关掉"：最终字节也应该在 IndexedDB 里 */
+    await cdp.eval(`document.querySelector('.record-mini [data-rec-action="record"]')?.click()`)
+    await sleep(1600)
+    await cdp.eval(`document.querySelector('.record-mini [data-rec-action="stop"]')?.click()`)
+    const stoppedOk = await waitUntil(`(() => {
+      const s = window.__bp.getState()
+      return !s.busy && s.durationMs > 500 && !!s.analysis
+    })()`, 20_000)
+    const live2 = await reloadAndWait()
+    check(
+      '刚录完就关掉 / 重开：录音和方案都还在（停止时写的最终字节也能恢复）',
+      stoppedOk &&
+        !!live2 &&
+        String(live2.path).startsWith('recording:') &&
+        live2.duration > 500 &&
+        live2.bar &&
+        live2.analysis,
+      JSON.stringify({ stoppedOk, live2 }),
+    )
+  }
 
   /* --shot <path>：把当前界面截一张干净图
      （顺手灌回一份假的频谱与两个音、全标确认、圈一段区间，谱面才有内容可看）

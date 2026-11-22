@@ -383,6 +383,32 @@ button.primary {
   display: block;
 }
 
+/* 框选那一层（用户 2026-11-22）：块选矩形 / 列选竖带 / 行选横带，只画不接事件 */
+.roll-sel-box {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  border: 1px solid rgba(79, 209, 197, 0.9);
+  background: rgba(79, 209, 197, 0.14);
+  box-shadow: 0 0 0 1px rgba(8, 19, 26, 0.35) inset;
+}
+
+.roll-sel-box.sel-col {
+  border-left-style: dashed;
+  border-right-style: dashed;
+  border-top: none;
+  border-bottom: none;
+  background: rgba(79, 209, 197, 0.1);
+}
+
+.roll-sel-box.sel-row {
+  border-top-style: dashed;
+  border-bottom-style: dashed;
+  border-left: none;
+  border-right: none;
+  background: rgba(79, 209, 197, 0.1);
+}
+
 /* 简谱流线谱条：纸色，高度固定；横轴与上面的表格同一套映射 */
 .pane.strip {
   flex: 0 0 132px;
@@ -1221,4 +1247,74 @@ select option:checked {
   background: currentColor;
   -webkit-mask: url('/icons/设置.png') center / contain no-repeat;
   mask: url('/icons/设置.png') center / contain no-repeat;
+}
+
+/* ==========================================================================
+ * 录音小工具条（用户 2026-11-22）：顶栏麦克风按钮下方，四个图标按钮 + 计时
+ *
+ * 位置由 `RecordMiniBar` 量 `.toolbar [data-rec-mic]` 的 rect 后写行内 top/left；
+ * 这里只管外观。z-index 压在普通内容上、低于弹层。
+ * ========================================================================== */
+.record-mini {
+  position: fixed;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.38);
+}
+
+.record-mini-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+  transition:
+    color 0.12s,
+    border-color 0.12s,
+    background 0.12s;
+}
+
+.record-mini-btn:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(79, 209, 197, 0.1);
+}
+
+.record-mini-btn:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.record-mini-btn.rec-on {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(242, 114, 114, 0.14);
+}
+
+.record-mini-time {
+  min-width: 40px;
+  margin-left: 2px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* 顶栏麦克风按钮：录音中整颗变红，提醒"还在占着麦克风" */
+.toolbar .icon-btn.rec-live {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(242, 114, 114, 0.14);
 }
