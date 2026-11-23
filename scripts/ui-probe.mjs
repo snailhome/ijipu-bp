@@ -2886,7 +2886,7 @@ try {
       JSON.stringify(before),
     )
     check(
-      '窄屏顶栏只留 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 右栏',
+      '窄屏顶栏只留 品牌 + 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 绘制·选择 / 原音·合成 / 右栏',
       !!before &&
         before.hasMenu &&
         before.menuLabel === '菜单' &&
@@ -2896,6 +2896,9 @@ try {
         before.home &&
         before.undo &&
         before.redo &&
+        before.labels.includes('绘制') &&
+        before.labels.includes('原音频') &&
+        before.labels.includes('合成音') &&
         before.drawer === false &&
         !before.labels.includes('打开音频') &&
         !before.labels.includes('MIDI 编辑器') &&
@@ -2919,34 +2922,94 @@ try {
       JSON.stringify(brandOrder),
     )
 
-    /* 对齐（用户 2026-11-23 指定）：除右栏图标以外全部左对齐，右栏那颗单独贴最右 */
+    /* 对齐（用户 2026-11-23 指定）：除右栏图标以外全部左对齐，右栏那颗单独贴最右；
+       绘制/选择、原音/合成两组要跟着播放按钮（用户 2026-11-23 追加） */
     const align = await cdp.eval(`(() => {
       const bar = document.querySelector('.toolbar.narrow')
       const left = bar.querySelector('.tb-left')
       const right = bar.querySelector('.tb-right')
       const labelsIn = (root) => root ? [...root.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') || '') : []
-      const play = bar.querySelector('.play-btn')
+      const leftButtons = [...left.querySelectorAll('button')]
+      const last = leftButtons[leftButtons.length - 1]
       const side = bar.querySelector('.side-toggle')
       const br = bar.getBoundingClientRect()
-      const pr = play.getBoundingClientRect()
+      const lr = last ? last.getBoundingClientRect() : null
       const sr = side.getBoundingClientRect()
       return {
         left: labelsIn(left),
         right: labelsIn(right),
-        tailGap: Math.round(sr.right - pr.right),
+        lastLeftRight: lr ? Math.round(lr.right) : 0,
+        sideLeft: Math.round(sr.left),
         sideGapToEdge: Math.round(br.right - sr.right),
       }
     })()`)
     check(
-      '窄屏顶栏：除右栏图标外全部左对齐，右栏贴最右',
+      '窄屏顶栏：除右栏图标外全部左对齐，右栏贴最右，绘制/原音两组紧跟播放',
       !!align &&
-        align.left.length === 6 &&
-        ['菜单', '新建录音方案', '撤销', '重做', '回到开头', '播放'].every((l, i) => align.left[i] === l) &&
+        align.left.length === 10 &&
+        ['菜单', '新建录音方案', '撤销', '重做', '回到开头', '播放', '绘制', '选择（块选）', '原音频', '合成音'].every(
+          (l, i) => align.left[i] === l,
+        ) &&
         align.right.length === 1 &&
         /右侧栏/.test(align.right[0] || '') &&
-        align.tailGap > 60 &&
+        align.sideLeft - align.lastLeftRight > 20 &&
         align.sideGapToEdge <= 12,
       JSON.stringify(align),
+    )
+
+    /* 更窄的手机（360 / 320）也要一行放得下（顶栏失配时宁可横向滚动，不能把按钮挤扁） */
+    const narrowWidths = []
+    for (const w of [360, 320]) {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: w, height: 844, deviceScaleFactor: 2, mobile: true })
+      await sleep(300)
+      narrowWidths.push(
+        await cdp.eval(`(() => {
+          const bar = document.querySelector('.toolbar.narrow')
+          const btns = [...bar.querySelectorAll('button')].map((b) => Math.round(b.getBoundingClientRect().width))
+          return { w: window.innerWidth, overflow: bar.scrollWidth - bar.clientWidth, minBtn: Math.min(...btns), btns: btns.length }
+        })()`),
+      )
+    }
+    check(
+      '窄屏 360 / 320 顶栏按钮不被压扁（360 一行放下，320 至多横向滚一点）',
+      narrowWidths.length === 2 &&
+        narrowWidths.every((m) => m.minBtn >= 22 && m.btns === 11) &&
+        narrowWidths[0].overflow <= 0 &&
+        narrowWidths[1].overflow <= 40,
+      JSON.stringify(narrowWidths),
+    )
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+    await sleep(300)
+
+    /* 窄屏状态栏（用户 2026-11-23：手机上被挤成竖排）：每段单行、整条最多两行、隐藏快捷键提示 */
+    const status = await cdp.eval(`(() => {
+      const s = document.querySelector('.status')
+      if (!s) return null
+      const spans = [...s.children].filter((el) => el.tagName === 'SPAN' && !el.classList.contains('spacer'))
+      const tips = s.querySelector('.status-tips')
+      const home = s.querySelector('.status-home')
+      const sr = s.getBoundingClientRect()
+      const hr = home ? home.getBoundingClientRect() : null
+      return {
+        cls: s.className,
+        height: Math.round(sr.height),
+        maxSpanH: Math.max(...spans.map((el) => Math.round(el.getBoundingClientRect().height))),
+        tipsHidden: tips ? getComputedStyle(tips).display === 'none' : null,
+        homeGap: hr ? Math.round(sr.right - hr.right) : null,
+        texts: spans.map((el) => (el.textContent || '').trim()).filter(Boolean).length,
+      }
+    })()`)
+    check(
+      '窄屏状态栏不再竖排：每段单行、整条两行内、快捷键提示已隐藏',
+      !!status &&
+        /narrow/.test(status.cls) &&
+        status.height <= 60 &&
+        status.maxSpanH <= 20 &&
+        status.tipsHidden === true &&
+        status.texts >= 2 &&
+        status.homeGap !== null &&
+        status.homeGap <= 14,
+      JSON.stringify(status),
     )
 
     await cdp.eval(`document.querySelector('.toolbar [data-menu-btn]')?.click()`)
@@ -2983,17 +3046,19 @@ try {
       'metronome',
       'loop',
       'autoPage',
-      'draw',
-      'select',
-      'audio',
-      'synth',
       'pitchName',
       'pitchNumber',
       'help',
     ]
     check(
-      '抽屉里收着其它顶栏按钮（文件 / MIDI / 谱音 / 节拍 / 导航 / 模式 / 音源 / 音名 / 帮助）',
-      !!opened && needIds.every((id) => opened.ids.includes(id)) && opened.rows === needIds.length,
+      '抽屉里收着其余按钮（文件 / MIDI / 谱音 / 节拍 / 导航 / 音名 / 帮助），绘制与原音已回顶栏',
+      !!opened &&
+        needIds.every((id) => opened.ids.includes(id)) &&
+        opened.rows === needIds.length &&
+        !opened.ids.includes('draw') &&
+        !opened.ids.includes('select') &&
+        !opened.ids.includes('audio') &&
+        !opened.ids.includes('synth'),
       JSON.stringify(opened && opened.ids),
     )
     check('抽屉里有「播放速度」滑条（窄屏顶栏那条已挪进来）', !!opened && opened.rate)

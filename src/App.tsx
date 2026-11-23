@@ -2864,62 +2864,6 @@ export default function App() {
       ],
     },
     {
-      id: 'mode',
-      title: '绘制 / 选择',
-      items: [
-        {
-          id: 'draw',
-          label: COPY.modeDraw,
-          icon: 'pencil',
-          tip: COPY.modeDrawTip,
-          hotkey: '`',
-          on: mode === 'draw',
-          onClick: () => set.getState().setMode('draw'),
-        },
-        {
-          id: 'select',
-          label: `选择（${SEL_INFO[selMode].label}）`,
-          icon: selMode === 'block' ? 'selBlock' : selMode === 'col' ? 'selCol' : 'selRow',
-          tip: SEL_INFO[selMode].tip,
-          hotkey: 'Alt+R',
-          on: mode === 'select',
-          onClick: () => {
-            const st = set.getState()
-            if (st.mode !== 'select') {
-              st.setMode('select')
-              return
-            }
-            const i = SEL_MODES.indexOf(st.selMode)
-            st.setSelMode(SEL_MODES[(i + 1) % SEL_MODES.length])
-          },
-        },
-      ],
-    },
-    {
-      id: 'source',
-      title: '听原音 / 合成',
-      items: [
-        {
-          id: 'audio',
-          label: COPY.sourceAudio,
-          icon: 'wave',
-          tip: '听原音频（跟合成音对比着听，Tab 切换）',
-          hotkey: 'Tab',
-          on: playMode === 'audio',
-          onClick: () => switchMode('audio'),
-        },
-        {
-          id: 'synth',
-          label: COPY.sourceSynth,
-          icon: 'note',
-          tip: '听合成音（按当前谱子发声，Tab 切换）',
-          hotkey: 'Tab',
-          on: playMode === 'synth',
-          onClick: () => switchMode('synth'),
-        },
-      ],
-    },
-    {
       id: 'pitch',
       title: '音名 / 数字',
       items: [
@@ -2959,6 +2903,61 @@ export default function App() {
       ],
     },
   ]
+
+  /* 绘制/选择、原音/合成这两组很常用（用户 2026-11-23 要求窄屏也放顶栏、排在播放后面），
+   * 宽屏与窄屏共用同一份 JSX —— 两处只渲染一处（narrow 条件），不会出现两套 DOM。 */
+  const modeSeg = (
+    <div className="seg" title={mode === 'draw' ? COPY.modeDrawTip : COPY.modeSelectTip}>
+      <button
+        className={mode === 'draw' ? 'on' : ''}
+        onClick={() => set.getState().setMode('draw')}
+        aria-label={COPY.modeDraw}
+        data-key="`"
+        title={COPY.modeDrawTip}
+      >
+        <Icon name="pencil" />
+      </button>
+      <button
+        className={mode === 'select' ? 'on' : ''}
+        onClick={() => {
+          const st = set.getState()
+          if (st.mode !== 'select') {
+            st.setMode('select')
+            return
+          }
+          const i = SEL_MODES.indexOf(st.selMode)
+          st.setSelMode(SEL_MODES[(i + 1) % SEL_MODES.length])
+        }}
+        aria-label={`选择（${SEL_INFO[selMode].label}）`}
+        data-key="Alt+R"
+        title={SEL_INFO[selMode].tip}
+      >
+        <Icon name={selMode === 'block' ? 'selBlock' : selMode === 'col' ? 'selCol' : 'selRow'} />
+      </button>
+    </div>
+  )
+  const sourceSeg = (
+    <div className="seg" title={COPY.abTip}>
+      <button
+        className={playMode === 'audio' ? 'on' : ''}
+        onClick={() => switchMode('audio')}
+        aria-label={COPY.sourceAudio}
+        data-key="Tab"
+        title="听原音频（跟合成音对比着听，Tab 切换）"
+      >
+        <Icon name="wave" />
+      </button>
+      <button
+        className={playMode === 'synth' ? 'on' : ''}
+        onClick={() => switchMode('synth')}
+        aria-label={COPY.sourceSynth}
+        data-key="Tab"
+        title="听合成音（按当前谱子发声，Tab 切换）"
+      >
+        <Icon name="note" />
+      </button>
+    </div>
+  )
 
   const candidates = analysis?.keyCandidates.slice(0, 6) ?? []
   const setLoop = useCallback(
@@ -3051,6 +3050,9 @@ export default function App() {
                 <Icon name={playing ? 'pause' : 'play'} />
               </button>
             </div>
+            {/* 绘制/选择、原音/合成（用户 2026-11-23）：跟在播放按钮后面，窄屏也留在顶栏 */}
+            {modeSeg}
+            {sourceSeg}
           </div>
           {/* 右栏图标单独占一列、贴最右 —— 这是唯一不左对齐的图标 */}
           <div className="tb-side tb-right">
@@ -3327,57 +3329,11 @@ export default function App() {
             </button>
           </span>
 
-          {/* 绘制 / 选择（用户 m02483 第 5 条：一组） */}
-          <div className="seg" title={mode === 'draw' ? COPY.modeDrawTip : COPY.modeSelectTip}>
-            <button
-              className={mode === 'draw' ? 'on' : ''}
-              onClick={() => useBp.getState().setMode('draw')}
-              aria-label={COPY.modeDraw}
-              data-key="`"
-              title={COPY.modeDrawTip}
-            >
-              <Icon name="pencil" />
-            </button>
-            <button
-              className={mode === 'select' ? 'on' : ''}
-              onClick={() => {
-                const st = useBp.getState()
-                if (st.mode !== 'select') {
-                  st.setMode('select')
-                  return
-                }
-                const i = SEL_MODES.indexOf(st.selMode)
-                st.setSelMode(SEL_MODES[(i + 1) % SEL_MODES.length])
-              }}
-              aria-label={`选择（${SEL_INFO[selMode].label}）`}
-              data-key="Alt+R"
-              title={SEL_INFO[selMode].tip}
-            >
-              <Icon name={selMode === 'block' ? 'selBlock' : selMode === 'col' ? 'selCol' : 'selRow'} />
-            </button>
-          </div>
+          {/* 绘制 / 选择（用户 m02483 第 5 条：一组）；内容与窄屏共用 modeSeg */}
+          {modeSeg}
 
-          {/* 原音频 / 合成音（用户 m02483 第 5 条：一组，方便 A/B） */}
-          <div className="seg" title={COPY.abTip}>
-            <button
-              className={playMode === 'audio' ? 'on' : ''}
-              onClick={() => switchMode('audio')}
-              aria-label={COPY.sourceAudio}
-              data-key="Tab"
-              title="听原音频（跟合成音对比着听，Tab 切换）"
-            >
-              <Icon name="wave" />
-            </button>
-            <button
-              className={playMode === 'synth' ? 'on' : ''}
-              onClick={() => switchMode('synth')}
-              aria-label={COPY.sourceSynth}
-              data-key="Tab"
-              title="听合成音（按当前谱子发声，Tab 切换）"
-            >
-              <Icon name="note" />
-            </button>
-          </div>
+          {/* 原音频 / 合成音（用户 m02483 第 5 条：一组，方便 A/B）；内容与窄屏共用 sourceSeg */}
+          {sourceSeg}
 
           {/* 音名 / 数字（用户 m02483：挪到原音 / 合成后面，Alt+Z 切换） */}
           <div className="seg" title="表格里写字用音名还是简谱数字（换调号数字跟着变）">
@@ -4170,8 +4126,11 @@ export default function App() {
       {/* 悬浮提示（用户 m02483）：快、名称在前、说明在后；顶栏和侧栏共用 */}
       <HoverTip />
 
-      <div className="status">
-        <span>{fileName ?? COPY.empty}</span>
+      <div className={narrow ? 'status narrow' : 'status'}>
+        {/* 文件名可能很长：窄屏截成省略号，别把后面的状态挤成竖排（用户 2026-11-23） */}
+        <span className="status-file" title={fileName ?? undefined}>
+          {fileName ?? COPY.empty}
+        </span>
         <span>{durationMs ? `${(durationMs / 1000).toFixed(1)}s` : ''}</span>
         <span>
           {analysis ? `确认 ${confirmedCount} / 共 ${notes.length} 个音` : ''}
@@ -4190,9 +4149,10 @@ export default function App() {
             {dirty ? '未保存' : '已保存'}
           </span>
         )}
-        {/* 两种保存各显示一个时间（用户 m02483）：缓存 = 随时保存，已存 = 真的写了 .bp.json */}
-        {cachedAt && <span className="hint" title={COPY.projectCacheTip}>缓存 {clockOfIso(cachedAt)}</span>}
-        {savedAt && <span className="hint" title={COPY.projectSaveTip}>已存 {clockOfIso(savedAt)}</span>}
+        {/* 两种保存各显示一个时间（用户 m02483）：缓存 = 随时保存，已存 = 真的写了 .bp.json。
+            窄屏隐藏这两项（保存状态已经说明白，省一行见 .status.narrow .status-time） */}
+        {cachedAt && <span className="hint status-time" title={COPY.projectCacheTip}>缓存 {clockOfIso(cachedAt)}</span>}
+        {savedAt && <span className="hint status-time" title={COPY.projectSaveTip}>已存 {clockOfIso(savedAt)}</span>}
         {/* 上一次危险操作前的快照（用户 m02483）：点它先确认再铺回去 */}
         {recovery && (
           <span className="hint" title={`${recovery.label}时共 ${recovery.count} 个音（${clockOfIso(recovery.at)}）`}>
@@ -4213,9 +4173,9 @@ export default function App() {
         )}
         <span>{busy ?? ''}</span>
         <span className="spacer" />
-        {error && <span className="err">{error}</span>}
-        {notice && <span className="hint">{notice}</span>}
-        <span className="hint">空格播放 · Tab 原音/合成 · ` 绘制/选择 · L 循环 · Shift+滚轮平移 · Ctrl+滚轮缩放</span>
+        {error && <span className="err status-notice">{error}</span>}
+        {notice && <span className="hint status-notice">{notice}</span>}
+        <span className="hint status-tips">空格播放 · Tab 原音/合成 · ` 绘制/选择 · L 循环 · Shift+滚轮平移 · Ctrl+滚轮缩放</span>
         {/* 用户 2026-11-22：状态栏只留「爱记谱首页」，放最右侧；「在爱记谱打开」只在 jps 源码面板 */}
         <button className="link-btn status-home" onClick={goSiteHome} title={COPY.siteHomeTip}>
           {COPY.siteHome} ↗
