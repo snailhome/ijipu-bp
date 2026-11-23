@@ -94,9 +94,24 @@ function activeBuffer(): AudioBuffer | null {
  * 试听时正在播的曲子不该被打断（`synth.stop()` 会停掉正在播的合成音）。
  */
 let auditionSynth: PianoSynth | null = null
-export async function audition(midi: number, durMs = 320): Promise<void> {
+
+/**
+ * 把音频上下文叫醒（用户 2026-11-23：手机上点钢琴键"发音延迟"）。
+ *
+ * 为什么要单独一个函数：AudioContext 在手机上首次创建是 `suspended`，
+ * `resume()` 必须在**用户手势**里调用才会被放行。在 `pointerdown` 里先叫醒，
+ * 等用户真的点到琴键时上下文已经 running，声音就跟手了。
+ */
+export function primeAudio(): void {
   const c = audioCtx()
-  await c.resume()
+  if (c.state !== 'running') void c.resume()
+}
+
+export function audition(midi: number, durMs = 320): void {
+  const c = audioCtx()
+  /* 不再 `await c.resume()`（用户 2026-11-23）：等它 resolve 才排声音，白等一截。
+   * 直接排进上下文，resume 一完成就响（排程在 suspended 状态下是允许的）。 */
+  if (c.state !== 'running') void c.resume()
   if (!auditionSynth) auditionSynth = new PianoSynth(c)
   auditionSynth.play(midiToName(midi), 0, durMs, 0.5)
 }

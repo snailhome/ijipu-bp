@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { BIN_COUNT, MIDI_HIGH, MIDI_LOW, keyJpsName, midiToName, midiToNumber } from '../analysis/pitchNames'
 import { displayValue } from '../analysis/spectrum'
+import { primeAudio } from '../audio/player'
 import { beatMs, snapMs, snapMsFloor } from '../jps/snap'
 import { barStartTick, isBarStartTick } from '../jps/bars'
 import { COPY } from '../brand/copy'
@@ -854,6 +855,9 @@ export function NoteRoll(props: Props) {
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      /* 用户 2026-11-23：手指一按下就把音频上下文叫醒（点钢琴键"发音延迟"——
+       * 首次点击时 resume 要几十毫秒，先叫醒，等按到琴键时已经 running）。 */
+      primeAudio()
       const rect = e.currentTarget.getBoundingClientRect()
       const x = e.clientX - rect.left
       const y = e.clientY - rect.top
@@ -1213,7 +1217,8 @@ export function NoteRoll(props: Props) {
       )}
       </div>
       {notes.length === 0 && (
-        <div className="pane-empty">
+        /* 空表格提示只占**键盘右边**的谱面区（用户 2026-11-23：以前整块居中，文字压到键盘列上） */
+        <div className="pane-empty" style={{ left: KEY_W }}>
           {props.midiMode
             ? '还没有音符：导入一个 MIDI，或切到「绘制」（反引号键）在格子里点几下'
             : spectrum

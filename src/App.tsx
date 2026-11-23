@@ -1057,7 +1057,19 @@ export default function App() {
     [],
   )
   /* 右侧栏（调性/参数/显示/源码）能不能收起来——宽屏看谱时把它关掉能多出一大块 */
-  const [showSide, setShowSide] = useState(true)
+  /* 右栏（用户 2026-11-23）：**首开默认收起** —— 手机上默认展开会把它那 300px 挤在画布旁边，
+   * 画布只剩键盘列。用户点开/收起后落 localStorage `bp.showSide`，下次按上次的选择。 */
+  const [showSide, setShowSide] = useState<boolean>(() => {
+    if (typeof localStorage === 'undefined') return false
+    return localStorage.getItem('bp.showSide') === '1'
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('bp.showSide', showSide ? '1' : '0')
+    } catch {
+      /* 隐私模式：记不住不影响用 */
+    }
+  }, [showSide])
   /* 调性分析那一组能不能折起来（调号选择挪进组里了） */
   const [keyOpen, setKeyOpen] = useState(true)
   const workerRef = useRef<Worker | null>(null)
@@ -2973,10 +2985,10 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* 窄屏顶栏（用户 2026-11-23）：只留 品牌图标 + 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 右栏，
-          其余按钮都收进左侧抽屉 —— 手机上横排按钮会换行，把画布挤没。
-          对齐（用户 2026-11-23 指定）：**除右栏图标以外，其它图标全部左对齐**（品牌在最左、菜单紧跟），
-          右栏那颗单独贴最右边（`.tb-right` 用 margin-left:auto）。 */}
+      {/* 窄屏顶栏（用户 2026-11-23）：只留 品牌 + 菜单 / 录音 / 撤销·重做 /（播放 + 回开头）/
+          绘制·选择 / 原音·合成 / 右栏，其余按钮都收进左侧抽屉 —— 手机上横排按钮会换行，把画布挤没。
+          对齐（用户 2026-11-23 指定）：左簇靠左；**播放 + 回开头居中**（回开头在播放后面）；
+          绘制/选择、原音/合成两组与右栏一起靠右。三段用 grid `1fr auto 1fr` 保证中间真在正中。 */}
       {narrow && (
         <div className="toolbar narrow">
           <div className="tb-side tb-left">
@@ -3033,11 +3045,9 @@ export default function App() {
                 <Icon name="redo" />
               </button>
             </span>
-            <span className="tgroup" title="导航">
-              <button className="icon-btn" onClick={goStart} title={COPY.goStartTip} aria-label={COPY.goStart} data-key="Home">
-                <Icon name="home" />
-              </button>
-            </span>
+          </div>
+          {/* 中间：播放 + 回开头（回开头从播放前面挪到后面，两个一起居中） */}
+          <div className="tb-side tb-center">
             <div className="play-wrap">
               <button
                 className={playing ? 'play-btn on' : 'play-btn'}
@@ -3050,12 +3060,16 @@ export default function App() {
                 <Icon name={playing ? 'pause' : 'play'} />
               </button>
             </div>
-            {/* 绘制/选择、原音/合成（用户 2026-11-23）：跟在播放按钮后面，窄屏也留在顶栏 */}
+            <span className="tgroup" title="导航">
+              <button className="icon-btn" onClick={goStart} title={COPY.goStartTip} aria-label={COPY.goStart} data-key="Home">
+                <Icon name="home" />
+              </button>
+            </span>
+          </div>
+          {/* 右簇：绘制/选择、原音/合成、右栏，一起靠右 */}
+          <div className="tb-side tb-right">
             {modeSeg}
             {sourceSeg}
-          </div>
-          {/* 右栏图标单独占一列、贴最右 —— 这是唯一不左对齐的图标 */}
-          <div className="tb-side tb-right">
             <span className="tgroup tb-util" title="侧栏">
               <button
                 className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}

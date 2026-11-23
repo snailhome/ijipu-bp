@@ -213,6 +213,31 @@ try {
   check('界面挂载（出现 .toolbar）', mounted)
   if (!mounted) throw new Error('界面没起来，后面的点击没意义')
 
+  /* 右栏（用户 2026-11-23）：**首开默认收起**（fresh profile ⇒ localStorage 里没有 bp.showSide）。
+   * 后面的用例都要用右栏，所以先断言"首开是收起"，再手动点开。 */
+  const sideBoot = await cdp.eval(`(() => {
+    const el = document.querySelector('.side')
+    const btn = document.querySelector('.toolbar .side-toggle')
+    return {
+      off: el ? el.classList.contains('off') : null,
+      label: btn ? btn.getAttribute('aria-label') : '',
+      stored: localStorage.getItem('bp.showSide'),
+    }
+  })()`)
+  check(
+    '首开默认收起右栏（没记录时；手机上默认展开会把画布挤到只剩键盘列）',
+    !!sideBoot && sideBoot.off === true && sideBoot.label === '展开右侧栏',
+    JSON.stringify(sideBoot),
+  )
+  await cdp.eval(`(() => { const el = document.querySelector('.side'); if (el && el.classList.contains('off')) document.querySelector('.toolbar .side-toggle').click() })()`)
+  await sleep(300)
+  const sideWoke = await cdp.eval(`(() => ({
+    off: document.querySelector('.side').classList.contains('off'),
+    stored: localStorage.getItem('bp.showSide'),
+  }))()`)
+  check('点开后记住选择（bp.showSide = 1，下次打开按上次的来）',
+    !!sideWoke && sideWoke.off === false && sideWoke.stored === '1', JSON.stringify(sideWoke))
+
   /* 右栏内三个页签（调节 / 分析 / 设置，用户 m02483）：读高亮页签判断当前在哪一页 */
   const sideViewNow = () =>
     cdp.eval(`(() => {
@@ -484,6 +509,28 @@ try {
 
   const hasRoll = await cdp.eval(`!!document.querySelector('.pane.roll canvas')`)
   check('音符表画布在', hasRoll)
+
+  /* 空表格提示 / 手机点按（用户 2026-11-23）：
+   * ① 空提示只占键盘右边（以前整块居中，字压到键盘列上）；
+   * ② 画布关掉系统点按高亮（以前手机上一点就整块闪）、触摸手势自己接管（按下去立即算，不等双击判定）。 */
+  const emptyHint = await cdp.eval(`(() => {
+    const el = document.querySelector('.pane-empty')
+    const cv = document.querySelector('.roll-host > canvas')
+    if (!el || !cv) return null
+    const er = el.getBoundingClientRect()
+    const cr = cv.getBoundingClientRect()
+    const cs = getComputedStyle(cv)
+    return {
+      hintLeft: Math.round(er.left - cr.left),
+      canvasTouch: cs.touchAction,
+      tap: cs.getPropertyValue('-webkit-tap-highlight-color'),
+    }
+  })()`)
+  check('空表格提示只占键盘右边（不压到键盘列）',
+    !!emptyHint && emptyHint.hintLeft >= 60, JSON.stringify(emptyHint))
+  check('谱面画布关掉系统点按高亮、触摸手势自己接管',
+    !!emptyHint && emptyHint.canvasTouch === 'none' && /rgba\(0, 0, 0, 0\)|transparent/.test(emptyHint.tap || ''),
+    JSON.stringify(emptyHint))
 
   // ── 造一段假分析结果，验"点画布画音 / 点音符确认"这条最关键的交互 ──
   const injected = await cdp.eval(`(() => {
@@ -1119,7 +1166,7 @@ try {
   await cdp.eval(`document.querySelector('.toolbar .side-toggle').click()`)
   await sleep(200)
   const sideBack = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
-  check('右侧栏默认展开、点图标能收起、再点能展开', sideOn && sideOff && sideBack)
+  check('点图标能收起右侧栏、再点能展开', sideOn && sideOff && sideBack)
   check('收起右侧栏后主区变宽', rollWOff > rollWOn + 100, `${Math.round(rollWOn)} → ${Math.round(rollWOff)}`)
 
   /* Ctrl+] = 收起 / 展开右栏（用户 m02483） */
@@ -2886,7 +2933,7 @@ try {
       JSON.stringify(before),
     )
     check(
-      '窄屏顶栏只留 品牌 + 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 绘制·选择 / 原音·合成 / 右栏',
+      '窄屏顶栏只留 品牌 + 菜单 / 录音 / 撤销·重做 /（播放 + 回开头）/ 绘制·选择 / 原音·合成 / 右栏',
       !!before &&
         before.hasMenu &&
         before.menuLabel === '菜单' &&
@@ -2922,38 +2969,41 @@ try {
       JSON.stringify(brandOrder),
     )
 
-    /* 对齐（用户 2026-11-23 指定）：除右栏图标以外全部左对齐，右栏那颗单独贴最右；
-       绘制/选择、原音/合成两组要跟着播放按钮（用户 2026-11-23 追加） */
+    /* 三段布局（用户 2026-11-23 指定）：左簇靠左；播放 + 回开头居中（回开头在播放后面）；
+       绘制/选择、原音/合成与右栏一起靠右 */
     const align = await cdp.eval(`(() => {
       const bar = document.querySelector('.toolbar.narrow')
-      const left = bar.querySelector('.tb-left')
-      const right = bar.querySelector('.tb-right')
       const labelsIn = (root) => root ? [...root.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') || '') : []
-      const leftButtons = [...left.querySelectorAll('button')]
-      const last = leftButtons[leftButtons.length - 1]
-      const side = bar.querySelector('.side-toggle')
+      const left = bar.querySelector('.tb-left')
+      const center = bar.querySelector('.tb-center')
+      const right = bar.querySelector('.tb-right')
       const br = bar.getBoundingClientRect()
-      const lr = last ? last.getBoundingClientRect() : null
-      const sr = side.getBoundingClientRect()
+      const cr = center.getBoundingClientRect()
+      const last = [...right.querySelectorAll('button')].pop()
+      const lr = last.getBoundingClientRect()
       return {
         left: labelsIn(left),
+        center: labelsIn(center),
         right: labelsIn(right),
-        lastLeftRight: lr ? Math.round(lr.right) : 0,
-        sideLeft: Math.round(sr.left),
-        sideGapToEdge: Math.round(br.right - sr.right),
+        barCx: Math.round(br.x + br.width / 2),
+        centerCx: Math.round(cr.x + cr.width / 2),
+        barRight: Math.round(br.right),
+        lastRight: Math.round(lr.right),
       }
     })()`)
     check(
-      '窄屏顶栏：除右栏图标外全部左对齐，右栏贴最右，绘制/原音两组紧跟播放',
+      '窄屏顶栏三段：左簇靠左，播放+回开头居中（回开头在播放后），绘制/原音与右栏靠右',
       !!align &&
-        align.left.length === 10 &&
-        ['菜单', '新建录音方案', '撤销', '重做', '回到开头', '播放', '绘制', '选择（块选）', '原音频', '合成音'].every(
-          (l, i) => align.left[i] === l,
-        ) &&
-        align.right.length === 1 &&
-        /右侧栏/.test(align.right[0] || '') &&
-        align.sideLeft - align.lastLeftRight > 20 &&
-        align.sideGapToEdge <= 12,
+        align.left.length === 4 &&
+        ['菜单', '新建录音方案', '撤销', '重做'].every((l, i) => align.left[i] === l) &&
+        align.center.length === 2 &&
+        align.center[0] === '播放' &&
+        align.center[1] === '回到开头' &&
+        align.right.length === 5 &&
+        ['绘制', '选择（块选）', '原音频', '合成音'].every((l, i) => align.right[i] === l) &&
+        /右侧栏/.test(align.right[4] || '') &&
+        Math.abs(align.centerCx - align.barCx) <= 2 &&
+        align.barRight - align.lastRight <= 10,
       JSON.stringify(align),
     )
 
