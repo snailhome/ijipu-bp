@@ -681,16 +681,38 @@ pre.src {
   min-width: 0;
 }
 
+/* 提示行（notice / error）也可能是长句子：允许压缩成省略号、别把整条状态栏顶到第二行
+   （用户 2026-11-23 实拍 1247px：第一行放满、第二行只剩提示和首页，看着像"错行"） */
+.status > span.status-notice {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 52ch;
+}
+
 .status-home {
   flex: 0 0 auto;
   margin-left: 4px;
 }
 
+/* 那串快捷键提示很长，只在够宽的窗口里显示（帮助弹层里有一份完整的）。
+   中等宽度下它会把状态栏挤出一行"只有它"的错行（用户 2026-11-23：1247px 实拍）。 */
+.status .status-tips {
+  display: none;
+}
+
+@media (min-width: 1500px) {
+  .status .status-tips {
+    display: inline;
+  }
+}
+
 /* 窄屏状态栏（用户 2026-11-23）：手机上一行塞不下，允许换行但压到两行内；
    触屏用不到那串快捷键提示，隐藏；缓存/存档时间与保存状态重复，也隐藏；
-   提示行（notice / error）右边留出首页按钮的位置，别被它压住。 */
+   提示行（notice / error）抢剩余宽度、可压缩，别把首页挤到下一行（1247 实拍"错行"）；
+   首页钉在右下角，右侧留 96px 给它，不压字。 */
 .status.narrow {
-  padding: 3px 8px;
+  position: relative;
+  padding: 3px 96px 3px 8px;
   gap: 4px 10px;
   font-size: 11.5px;
 }
@@ -702,11 +724,16 @@ pre.src {
 }
 
 .status.narrow .status-notice {
-  max-width: calc(100% - 90px);
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: none;
 }
 
 .status.narrow .status-home {
-  margin-left: auto;
+  position: absolute;
+  right: 8px;
+  bottom: 3px;
+  margin-left: 0;
 }
 
 .jps-actions {

@@ -3156,30 +3156,51 @@ try {
     await sleep(200)
 
     /* 阈值 1240（用户 2026-11-23 实测 1100px 窗口不理想）：宽版顶栏要到 1240 才单行，
-     * 所以 ≤1240 一律走窄版三段；1241 起回宽版（且必须是一行，不能折成两行）。 */
+     * 所以 ≤1240 一律走窄版三段；1241 起回宽版（且必须是一行，不能折成两行）。
+     * 1247 是用户实拍的那个宽度：宽版状态栏也不能"错行"（长快捷键提示在中等宽度隐藏）。 */
+    const measureTop = `(() => {
+      const b = document.querySelector('.toolbar')
+      const s = document.querySelector('.status')
+      const tips = s ? s.querySelector('.status-tips') : null
+      return {
+        narrow: b.classList.contains('narrow'),
+        vw: window.innerWidth,
+        h: Math.round(b.getBoundingClientRect().height),
+        labels: [...b.querySelectorAll('button')].map((x) => x.getAttribute('aria-label') || ''),
+        statusH: s ? Math.round(s.getBoundingClientRect().height) : 0,
+        tipsHidden: tips ? getComputedStyle(tips).display === 'none' : null,
+      }
+    })()`
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1240, height: 900, deviceScaleFactor: 1, mobile: false })
     await sleep(350)
-    const atNarrowEdge = await cdp.eval(`(() => {
-      const b = document.querySelector('.toolbar')
-      return { narrow: b.classList.contains('narrow'), vw: window.innerWidth, h: Math.round(b.getBoundingClientRect().height), labels: [...b.querySelectorAll('button')].map((x) => x.getAttribute('aria-label') || '') }
-    })()`)
+    const atNarrowEdge = await cdp.eval(measureTop)
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1247, height: 900, deviceScaleFactor: 1, mobile: false })
+    await sleep(350)
+    const atUserShot = await cdp.eval(measureTop)
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1300, height: 900, deviceScaleFactor: 1, mobile: false })
     await sleep(350)
-    const atWideEdge = await cdp.eval(`(() => {
-      const b = document.querySelector('.toolbar')
-      return { narrow: b.classList.contains('narrow'), vw: window.innerWidth, h: Math.round(b.getBoundingClientRect().height), labels: [...b.querySelectorAll('button')].map((x) => x.getAttribute('aria-label') || '') }
-    })()`)
+    const atWideEdge = await cdp.eval(measureTop)
     check(
-      '1240px 仍走窄版、1300px 回宽版（宽版这时才排得成一行）',
+      '1240px 仍走窄版、1247/1300px 回宽版（宽版这时才排得成一行）',
       atNarrowEdge.narrow === true &&
         !atNarrowEdge.labels.includes('打开音频') &&
+        atUserShot.narrow === false &&
         atWideEdge.narrow === false &&
         atWideEdge.labels.includes('打开音频') &&
         atWideEdge.h <= 60,
       JSON.stringify({
         atNarrowEdge: { ...atNarrowEdge, labels: atNarrowEdge.labels.length },
+        atUserShot: { ...atUserShot, labels: atUserShot.labels.length },
         atWideEdge: { ...atWideEdge, labels: atWideEdge.labels.length },
       }),
+    )
+    check(
+      '宽版（1247 / 1300）状态栏不错行：长的快捷键提示隐藏、整条 ≤ 两行',
+      atUserShot.tipsHidden === true &&
+        atUserShot.statusH <= 66 &&
+        atWideEdge.tipsHidden === true &&
+        atWideEdge.statusH <= 66,
+      JSON.stringify({ 1247: atUserShot.statusH, 1300: atWideEdge.statusH, tips: atUserShot.tipsHidden }),
     )
 
     /* 拉回宽屏：顶栏要恢复原样，抽屉相关的 DOM 不能残留 */
