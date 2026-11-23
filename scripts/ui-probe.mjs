@@ -2929,7 +2929,7 @@ try {
         before.overflow <= 0 &&
         before.height <= 60 &&
         /* 手机模拟下 innerWidth 会被 viewport meta 换算（390 → 429），只要还在窄屏档内即可 */
-        before.vw < 960,
+        before.vw < 1240,
       JSON.stringify(before),
     )
     check(
@@ -3155,26 +3155,31 @@ try {
     await cdp.eval(`document.querySelector('.toolbar [data-rec-mic="1"]')?.click()`)
     await sleep(200)
 
-    /* 阈值 960（用户 2026-11-23）：手机横屏（844/896/926）也在窄版里，961 起回宽版 */
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 960, height: 844, deviceScaleFactor: 1, mobile: true })
+    /* 阈值 1240（用户 2026-11-23 实测 1100px 窗口不理想）：宽版顶栏要到 1240 才单行，
+     * 所以 ≤1240 一律走窄版三段；1241 起回宽版（且必须是一行，不能折成两行）。 */
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1240, height: 900, deviceScaleFactor: 1, mobile: false })
     await sleep(350)
-    const at960 = await cdp.eval(`(() => {
+    const atNarrowEdge = await cdp.eval(`(() => {
       const b = document.querySelector('.toolbar')
-      return { narrow: b.classList.contains('narrow'), vw: window.innerWidth, labels: [...b.querySelectorAll('button')].map((x) => x.getAttribute('aria-label') || '') }
+      return { narrow: b.classList.contains('narrow'), vw: window.innerWidth, h: Math.round(b.getBoundingClientRect().height), labels: [...b.querySelectorAll('button')].map((x) => x.getAttribute('aria-label') || '') }
     })()`)
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 844, deviceScaleFactor: 1, mobile: true })
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1300, height: 900, deviceScaleFactor: 1, mobile: false })
     await sleep(350)
-    const at1000 = await cdp.eval(`(() => {
+    const atWideEdge = await cdp.eval(`(() => {
       const b = document.querySelector('.toolbar')
-      return { narrow: b.classList.contains('narrow'), vw: window.innerWidth, labels: [...b.querySelectorAll('button')].map((x) => x.getAttribute('aria-label') || '') }
+      return { narrow: b.classList.contains('narrow'), vw: window.innerWidth, h: Math.round(b.getBoundingClientRect().height), labels: [...b.querySelectorAll('button')].map((x) => x.getAttribute('aria-label') || '') }
     })()`)
     check(
-      '960px 仍走窄版、1000px 回宽版（阈值正好覆盖手机横屏）',
-      at960.narrow === true &&
-        !at960.labels.includes('打开音频') &&
-        at1000.narrow === false &&
-        at1000.labels.includes('打开音频'),
-      JSON.stringify({ at960: at960.narrow, at960vw: at960.vw, at1000: at1000.narrow, at1000vw: at1000.vw }),
+      '1240px 仍走窄版、1300px 回宽版（宽版这时才排得成一行）',
+      atNarrowEdge.narrow === true &&
+        !atNarrowEdge.labels.includes('打开音频') &&
+        atWideEdge.narrow === false &&
+        atWideEdge.labels.includes('打开音频') &&
+        atWideEdge.h <= 60,
+      JSON.stringify({
+        atNarrowEdge: { ...atNarrowEdge, labels: atNarrowEdge.labels.length },
+        atWideEdge: { ...atWideEdge, labels: atWideEdge.labels.length },
+      }),
     )
 
     /* 拉回宽屏：顶栏要恢复原样，抽屉相关的 DOM 不能残留 */

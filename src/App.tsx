@@ -771,10 +771,12 @@ function SideGroup({
  * 否则两套 DOM 会抢 `querySelector`（探针按 aria-label 点按钮会点到抽屉里那份，
  * 而抽屉平时是关着的）。宽度一变就重渲染，顶栏与抽屉切换是原子的。
  *
- * 960px 的来历：手机**横屏**也在这一档（iPhone 12/13 = 844、XR = 896、Pro Max = 926），
- * 820 会漏掉它们；再宽就是平板 / 桌面（宽版顶栏在这个宽度会折成两行，但按钮都还在）。
+ * 1240px 的来历（用户 2026-11-23 实测：1100px 的窗口"顶栏和状态栏都不太理想"）：
+ * 宽版顶栏要到 **1240** 才排得成单行（1200 仍折成两行、85px 高 —— 左簇的撤销/重做
+ * 被挤到第二行），状态栏在 1100 也被迫换行。所以 ≤1240 一律走窄版三段 + 抽屉；
+ * 手机横屏（844/896/926）自然也在这一档里。
  */
-const NARROW_TOPBAR_PX = 960
+const NARROW_TOPBAR_PX = 1240
 
 function useNarrowTopbar(): boolean {
   const query = `(max-width: ${NARROW_TOPBAR_PX}px)`
