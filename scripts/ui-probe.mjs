@@ -2904,6 +2904,51 @@ try {
       JSON.stringify(before && before.labels),
     )
 
+    /* 菜单按钮的位置（用户 2026-11-23 指定）：品牌图标在最左，菜单紧挨在它右边 */
+    const brandOrder = await cdp.eval(`(() => {
+      const left = document.querySelector('.toolbar.narrow .tb-left')
+      if (!left) return null
+      const kids = [...left.children]
+      const brand = kids.findIndex((el) => el.classList.contains('brand'))
+      const menu = kids.findIndex((el) => el.hasAttribute('data-menu-btn'))
+      return { brand, menu, n: kids.length }
+    })()`)
+    check(
+      '菜单按钮在品牌图标的右侧',
+      !!brandOrder && brandOrder.brand === 0 && brandOrder.menu === 1,
+      JSON.stringify(brandOrder),
+    )
+
+    /* 对齐（用户 2026-11-23 指定）：除右栏图标以外全部左对齐，右栏那颗单独贴最右 */
+    const align = await cdp.eval(`(() => {
+      const bar = document.querySelector('.toolbar.narrow')
+      const left = bar.querySelector('.tb-left')
+      const right = bar.querySelector('.tb-right')
+      const labelsIn = (root) => root ? [...root.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') || '') : []
+      const play = bar.querySelector('.play-btn')
+      const side = bar.querySelector('.side-toggle')
+      const br = bar.getBoundingClientRect()
+      const pr = play.getBoundingClientRect()
+      const sr = side.getBoundingClientRect()
+      return {
+        left: labelsIn(left),
+        right: labelsIn(right),
+        tailGap: Math.round(sr.right - pr.right),
+        sideGapToEdge: Math.round(br.right - sr.right),
+      }
+    })()`)
+    check(
+      '窄屏顶栏：除右栏图标外全部左对齐，右栏贴最右',
+      !!align &&
+        align.left.length === 6 &&
+        ['菜单', '新建录音方案', '撤销', '重做', '回到开头', '播放'].every((l, i) => align.left[i] === l) &&
+        align.right.length === 1 &&
+        /右侧栏/.test(align.right[0] || '') &&
+        align.tailGap > 60 &&
+        align.sideGapToEdge <= 12,
+      JSON.stringify(align),
+    )
+
     await cdp.eval(`document.querySelector('.toolbar [data-menu-btn]')?.click()`)
     await sleep(300)
     const opened = await cdp.eval(`(() => {

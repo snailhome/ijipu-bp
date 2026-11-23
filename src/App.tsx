@@ -2974,12 +2974,21 @@ export default function App() {
 
   return (
     <div className="app">
-      {/* 窄屏顶栏（用户 2026-11-23）：只留 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 右栏，
+      {/* 窄屏顶栏（用户 2026-11-23）：只留 品牌图标 + 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 右栏，
           其余按钮都收进左侧抽屉 —— 手机上横排按钮会换行，把画布挤没。
-          顺序照用户列的：录音 → 撤销/重做 → 回开头 → 播放 → 右栏。 */}
+          对齐（用户 2026-11-23 指定）：**除右栏图标以外，其它图标全部左对齐**（品牌在最左、菜单紧跟），
+          右栏那颗单独贴最右边（`.tb-right` 用 margin-left:auto）。 */}
       {narrow && (
         <div className="toolbar narrow">
           <div className="tb-side tb-left">
+            {/* 品牌图标在最左，菜单按钮在它右边（用户 2026-11-23 指定） */}
+            <span className="brand">
+              <img className="brand-logo" src="/icons/logo-bp.png" alt={COPY.appName} />
+              <span className="brand-text">
+                {COPY.appName}
+                <small>{APP_VERSION}</small>
+              </span>
+            </span>
             <button
               className={menuOpen ? 'icon-btn menu-btn on' : 'icon-btn menu-btn'}
               onClick={() => setMenuOpen((v) => !v)}
@@ -2990,13 +2999,6 @@ export default function App() {
             >
               <Icon name="menu" />
             </button>
-            <span className="brand">
-              <img className="brand-logo" src="/icons/logo-bp.png" alt={COPY.appName} />
-              <span className="brand-text">
-                {COPY.appName}
-                <small>{APP_VERSION}</small>
-              </span>
-            </span>
             {/* 录音按钮留在顶栏：点一下就在它下面开录音小条（小条靠 data-rec-mic 定位） */}
             <span className="tgroup" title={COPY.recordGroup}>
               <button
@@ -3010,8 +3012,6 @@ export default function App() {
                 <Icon name="mic" />
               </button>
             </span>
-          </div>
-          <div className="tb-side tb-right">
             <span className="tgroup" title="撤销 / 重做">
               <button
                 className="icon-btn"
@@ -3051,6 +3051,9 @@ export default function App() {
                 <Icon name={playing ? 'pause' : 'play'} />
               </button>
             </div>
+          </div>
+          {/* 右栏图标单独占一列、贴最右 —— 这是唯一不左对齐的图标 */}
+          <div className="tb-side tb-right">
             <span className="tgroup tb-util" title="侧栏">
               <button
                 className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}
