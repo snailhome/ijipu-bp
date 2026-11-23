@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { keyColor, keyDisplayName, MIDI_HIGH, MIDI_LOW } from './analysis/pitchNames'
 import { loadAudioFromPath, pickAndLoadAudio, decodeBytes, type LoadedAudio } from './audio/decode'
-import { play, setAudioBuffer, setStemBuffers, setPlayTrack, makeAudioBuffer, stop, audition, setPlayRate as applyPlayRate, setMetronome as applyMetronome, type PlayMode } from './audio/player'
+import { play, setAudioBuffer, setStemBuffers, setPlayTrack, makeAudioBuffer, stop, audition, primeAudio, setPlayRate as applyPlayRate, setMetronome as applyMetronome, type PlayMode } from './audio/player'
 // 录音成谱（用户 2026-11-22）：麦克风录音 → 小条 → 保存 WAV / 分析
 import { formatElapsed, startMicRecording, type MicRecording } from './audio/recorder'
 import { deleteRecordingAudio, getRecordingAudio, putRecordingAudio } from './audio/recordingCache'
@@ -1072,6 +1072,18 @@ export default function App() {
       /* 隐私模式：记不住不影响用 */
     }
   }, [showSide])
+
+  /* 音频上下文提前预热（用户 2026-11-23：手机上点键盘"声音总慢半拍"）。
+   * ① 应用挂载就建好 AudioContext（此时 suspended，不发声）；
+   * ② 用户**第一次在页面任意处按下**（顶栏、画布、菜单都行）就 resume —— 等真点琴键时
+   *    上下文已经 running，`audition()` 排程立刻出声。
+   * 在 `window` 捕获阶段挂、`once` 只跑一次，不影响任何按钮自己的点击。 */
+  useEffect(() => {
+    primeAudio()
+    const wake = () => primeAudio()
+    window.addEventListener('pointerdown', wake, { once: true, capture: true })
+    return () => window.removeEventListener('pointerdown', wake, true)
+  }, [])
   /* 调性分析那一组能不能折起来（调号选择挪进组里了） */
   const [keyOpen, setKeyOpen] = useState(true)
   const workerRef = useRef<Worker | null>(null)

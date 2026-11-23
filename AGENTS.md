@@ -152,12 +152,18 @@ npm run smoke
   （只有 `'1'` 才展开；**没记录 = 收起**），变化时写回。手机上默认展开会把它那 300px
   挤在画布旁边、画布只剩键盘列。`probe` 有"首开收起 + 点开后记住"两条用例守着。
 - **手机触摸与试听**（用户 2026-11-23）：
-  - `.roll-host > canvas` 必须带 `-webkit-tap-highlight-color: transparent` 与 `touch-action: none`。
-    少了第一条，手机上点谱面会有一层**系统"点按高亮"**（整块画布闪一下，用户报的就是"全屏高亮"）；
-    少了第二条，触摸手势会被浏览器拿着等双击缩放判定，拖框 / 画音符不跟手。
+  - `.pane.roll`、`.roll-host`、`.roll-host > canvas` **三处都要**带
+    `-webkit-tap-highlight-color: transparent` 与 `touch-action: none`。
+    少了第一条，手机上点谱面（键盘/表格是同一块 canvas）会有一层**系统"点按高亮"**
+    （整块画布闪一下，用户报的就是"全屏高亮"）；有的浏览器把高亮加在命中的**父容器**上，
+    所以只设 canvas 不够。少了 `touch-action:none`，触摸手势会被浏览器拿着等双击缩放判定，
+    拖框 / 画音符不跟手。
   - 点钢琴键"发音延迟"：`audio/player.ts` 的 `audition()` **不要再 `await ctx.resume()`**
-    （等它 resolve 才排声音等于白等），直接同步排程；`primeAudio()` 在 `NoteRoll` 的
-    `onPointerDown` 第一行调用（用户手势内 resume），等真按到琴键时上下文已经是 running。
+    （等它 resolve 才排声音等于白等），直接同步排程；**AudioContext 要提前预热** ——
+    App 挂载时就 `primeAudio()`（建好、仍是 suspended），并挂一次
+    `window` 捕获阶段的 `pointerdown`（`once`）在**页面任意处第一次按下**时 resume。
+    只在 canvas 的 pointerdown 里预热的话，第一次点琴键仍要现场建上下文 + resume，
+    声音会晚一截（用户 2026-11-23 实报）。
 - **空表格提示只占键盘右边**（用户 2026-11-23：以前整块居中，字压到键盘列上）：
   `.pane-empty` 的 `left` 由 `NoteRoll` 按 `KEY_W`（66）内联给，CSS 只留右侧 `padding`。
 - **键盘区按住上下拖 = 上下换音区**（用户 2026-11-23）：**未锁定**时（`lockPitch` 关）在左侧

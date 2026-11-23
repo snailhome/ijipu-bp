@@ -516,20 +516,28 @@ try {
   const emptyHint = await cdp.eval(`(() => {
     const el = document.querySelector('.pane-empty')
     const cv = document.querySelector('.roll-host > canvas')
+    const host = document.querySelector('.pane.roll')
     if (!el || !cv) return null
     const er = el.getBoundingClientRect()
     const cr = cv.getBoundingClientRect()
     const cs = getComputedStyle(cv)
+    const hs = host ? getComputedStyle(host) : null
     return {
       hintLeft: Math.round(er.left - cr.left),
       canvasTouch: cs.touchAction,
-      tap: cs.getPropertyValue('-webkit-tap-highlight-color'),
+      canvasTap: cs.getPropertyValue('-webkit-tap-highlight-color'),
+      hostTouch: hs ? hs.touchAction : null,
+      hostTap: hs ? hs.getPropertyValue('-webkit-tap-highlight-color') : null,
     }
   })()`)
   check('空表格提示只占键盘右边（不压到键盘列）',
     !!emptyHint && emptyHint.hintLeft >= 60, JSON.stringify(emptyHint))
-  check('谱面画布关掉系统点按高亮、触摸手势自己接管',
-    !!emptyHint && emptyHint.canvasTouch === 'none' && /rgba\(0, 0, 0, 0\)|transparent/.test(emptyHint.tap || ''),
+  check('谱面画布与容器都关掉系统点按高亮、触摸手势自己接管',
+    !!emptyHint &&
+      emptyHint.canvasTouch === 'none' &&
+      emptyHint.hostTouch === 'none' &&
+      /rgba\(0, 0, 0, 0\)|transparent/.test(emptyHint.canvasTap || '') &&
+      /rgba\(0, 0, 0, 0\)|transparent/.test(emptyHint.hostTap || ''),
     JSON.stringify(emptyHint))
 
   // ── 造一段假分析结果，验"点画布画音 / 点音符确认"这条最关键的交互 ──

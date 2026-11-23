@@ -379,14 +379,19 @@ button.primary {
   overflow: hidden;
 }
 
+/* 手机点谱面（键盘 / 表格是同一块 canvas，用户 2026-11-23）：
+ * 关掉系统"点按高亮"（会整块画布闪一下、还被当成"全屏高亮"），触摸手势自己接管
+ * （拖框 / 画音符 / 键盘上下拖都归我们，按下立即生效，不用等双击缩放判定）。
+ * 容器也设一遍：有的移动浏览器把高亮加在**点击命中的父容器**上，只设 canvas 不够。 */
+.pane.roll,
+.roll-host,
 .roll-host > canvas {
-  display: block;
-  /* 用户 2026-11-23：手机上点谱面会有一层系统"点按高亮"（整块画布闪一下，被当成"全屏高亮"）。
-   * 高亮由 canvas 自己画（琴键黄块/框选），这里把系统那层关掉。
-   * `touch-action: none`：浏览器不再接管画布上的触摸手势（拖动/框选都归我们），
-   * 手指按下立即生效，不用等双击缩放判定 ⇒ 试听发音也更跟手。 */
   -webkit-tap-highlight-color: transparent;
   touch-action: none;
+}
+
+.roll-host > canvas {
+  display: block;
 }
 
 /* 框选那一层（用户 2026-11-22）：块选矩形 / 列选竖带 / 行选横带，只画不接事件 */
