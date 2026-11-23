@@ -1620,6 +1620,33 @@ try {
     !yellowish(beforeKey) && yellowish(duringKey) && !yellowish(afterKey),
     `${beforeKey} → ${duringKey} → ${afterKey}`)
 
+  /* ── 键盘区按住上下拖 = 上下换音区（用户 2026-11-23；未锁定才生效） ── */
+  const dragKey = await cdp.eval(`(() => {
+    const m = window.__bpRoll || {}
+    const cv = document.querySelector('.pane.roll canvas')
+    const r = cv.getBoundingClientRect()
+    const ROW_H = m.rowH || 14, KEY_W = 66
+    const rulerH = typeof m.rulerH === 'number' ? m.rulerH : 36
+    return { x: r.x + KEY_W * 0.35, y1: r.y + rulerH + 5 * ROW_H + ROW_H / 2, step: 3 * ROW_H, top: m.top }
+  })()`)
+  await cdp.eval(`window.__bp.getState().setLockPitch(false)`)
+  await sleep(150)
+  await cdp.dragAt(dragKey.x, dragKey.y1, dragKey.x, dragKey.y1 + dragKey.step, 6)
+  await sleep(250)
+  const afterScroll = await cdp.eval(`window.__bpRoll.top`)
+  check('未锁定：键盘区按住向下拖 3 行 ⇒ 音区跟着下移 3 行（等价滚轮）',
+    afterScroll === dragKey.top - 3, `top ${dragKey.top} → ${afterScroll}`)
+  await cdp.eval(`window.__bp.getState().setLockPitch(true)`)
+  await sleep(150)
+  const lockedTop = await cdp.eval(`window.__bpRoll.top`)
+  await cdp.dragAt(dragKey.x, dragKey.y1, dragKey.x, dragKey.y1 + dragKey.step, 6)
+  await sleep(250)
+  const afterLockedDrag = await cdp.eval(`window.__bpRoll.top`)
+  check('锁定时：键盘区上下拖不换音区（只试听）',
+    afterLockedDrag === lockedTop, `top ${lockedTop} → ${afterLockedDrag}`)
+  await cdp.eval(`window.__bp.getState().setLockPitch(false)`)
+  await sleep(150)
+
   /* ── 黑键：按下时只有黑键那块变黄，左边仍是白的（用户 m04987 第五条，对照图 4） ── */
   const blackPt = await cdp.eval(`(() => {
     const m = window.__bpRoll || {}

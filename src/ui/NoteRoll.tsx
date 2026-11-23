@@ -184,6 +184,11 @@ type Drag =
   | { kind: 'selectBox'; mode: SelMode; x0: number; y0: number; x1: number; y1: number; moved: boolean }
   /** 按在钢琴键上（只用来做高亮，松手就清） */
   | { kind: 'key'; midi: number }
+  /**
+   * 未锁定时在键盘区按住上下拖 = 上下换音区（用户 2026-11-23，等价鼠标滚轮）。
+   * `startTop` 是按下那一刻的顶行；拖动按"挪过几行"改顶行，手指/鼠标跟手。
+   */
+  | { kind: 'keyScroll'; startY: number; startTop: number; moved: boolean }
 
 export function NoteRoll(props: Props) {
   const { notes, spectrum, durationMs, view, playMs, mode, bandOnly } = props
@@ -885,7 +890,11 @@ export function NoteRoll(props: Props) {
           props.onAudition(midi)
           /* 按下时这一格高亮成黄色，松手/移出就灭（用户 m04380） */
           setPressMidi(midi)
-          drag.current = { kind: 'key', midi }
+          /* 未锁定（`lockPitch` 关）时，按住上下拖 = 上下换音区（用户 2026-11-23，
+           * 等价鼠标滚轮）；锁定时只试听、不换音区 —— 锁就是锁这个。 */
+          drag.current = props.lockPitch
+            ? { kind: 'key', midi }
+            : { kind: 'keyScroll', startY: y, startTop: metrics.top, moved: false }
         }
         return
       }
@@ -957,7 +966,7 @@ export function NoteRoll(props: Props) {
       })
       drag.current = { kind: 'create', id, startMs, moved: false }
     },
-    [msAt, midiAt, mode, altHeld, noteAt, props, xAt],
+    [msAt, midiAt, mode, altHeld, noteAt, props, xAt, metrics.top, metrics.rows],
   )
 
   const onPointerMove = useCallback(
@@ -981,6 +990,17 @@ export function NoteRoll(props: Props) {
         })()
         e.currentTarget.style.cursor =
           lh === 'l' || lh === 'r' || edge ? 'ew-resize' : draw ? PEN_CURSOR : 'pointer'
+        return
+      }
+      if (d.kind === 'keyScroll') {
+        /* 未锁定时的键盘区上下拖（用户 2026-11-23）：挪过几行就换几行音区。
+         * 上拖 = 看更高音（跟滚轮向上同向）；3px 死区，免得"点一下试听"被当成拖动。 */
+        const dy = y - d.startY
+        if (!d.moved && Math.abs(dy) < 3) return
+        d.moved = true
+        const rowsMoved = Math.round(-dy / rowH)
+        const next = Math.max(MIDI_LOW + metrics.rows - 1, Math.min(MIDI_HIGH, d.startTop + rowsMoved))
+        setTopRow(next)
         return
       }
       if (d.kind === 'selectBox') {
@@ -1071,7 +1091,7 @@ export function NoteRoll(props: Props) {
         }
       }
     },
-    [midiAt, msAt, props],
+    [midiAt, msAt, props, rowH, metrics.rows],
   )
 
   const onPointerUp = useCallback(() => {
