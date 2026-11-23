@@ -112,6 +112,25 @@ function Icon({ name }: { name: string }) {
           <path d="M2 4.5h4l1.4 1.6H14v6.4H2z" />
         </svg>
       )
+    case 'menu':
+      /* 三条横线：窄屏顶栏的「菜单」总入口（用户 2026-11-23） */
+      return (
+        <svg {...common}>
+          <path d="M2.6 4.2h10.8M2.6 8h10.8M2.6 11.8h10.8" />
+        </svg>
+      )
+    case 'help':
+      /* 键盘：按键与鼠标操作（原来内联在顶栏，挪成图标给抽屉复用） */
+      return (
+        <svg {...common}>
+          <rect x="1.5" y="4" width="13" height="8" rx="1.6" />
+          <rect x="3.4" y="6" width="1.6" height="1.6" fill="currentColor" />
+          <rect x="6" y="6" width="1.6" height="1.6" fill="currentColor" />
+          <rect x="8.6" y="6" width="1.6" height="1.6" fill="currentColor" />
+          <rect x="11.2" y="6" width="1.6" height="1.6" fill="currentColor" />
+          <rect x="4.6" y="9" width="6.8" height="1.5" rx="0.5" fill="currentColor" />
+        </svg>
+      )
     case 'analyze':
       /* 频谱柱 + 一点高光：对当前这一轨"自动判音" */
       return (
@@ -523,6 +542,8 @@ function RecordMiniBar({
   onToggleSide: () => void
 }) {
   const [pos, setPos] = useState<{ top: number; left: number; anchor: 'center' | 'left' } | null>(null)
+  /* 小条自己的宽度：窄屏时麦克风可能靠左也靠边，居中挂会超出屏幕，按视口夹一下 */
+  const miniRef = useRef<HTMLDivElement | null>(null)
   useLayoutEffect(() => {
     const place = () => {
       const bar = document.querySelector<HTMLElement>('.toolbar')
@@ -531,11 +552,18 @@ function RecordMiniBar({
       const br = bar.getBoundingClientRect()
       const kr = btn?.getBoundingClientRect()
       if (btn && kr && kr.width > 0 && btn.offsetParent !== null) {
+        /* 第一次还没渲染，用估算值；渲染完 rAF 再量一次真实宽度（只补一次） */
+        const measured = miniRef.current?.offsetWidth ?? 0
+        const half = (measured || 196) / 2
+        const min = Math.round(half + 8)
+        const max = Math.max(min, Math.round(window.innerWidth - half - 8))
+        const center = Math.round(kr.left + kr.width / 2)
         setPos({
           top: Math.max(Math.round(kr.bottom + REC_GAP), Math.round(br.bottom + REC_GAP)),
-          left: Math.round(kr.left + kr.width / 2),
+          left: Math.min(max, Math.max(min, center)),
           anchor: 'center',
         })
+        if (!measured) requestAnimationFrame(place)
         return
       }
       setPos({ top: Math.round(br.bottom + REC_GAP), left: 12, anchor: 'left' })
@@ -552,6 +580,7 @@ function RecordMiniBar({
   const recordTip = recState === 'recording' ? COPY.recordPauseTip : recState === 'paused' ? COPY.recordResumeTip : COPY.recordStartTip
   return (
     <div
+      ref={miniRef}
       className="record-mini"
       role="toolbar"
       aria-label="录音小工具条"
@@ -733,6 +762,138 @@ function SideGroup({
   )
 }
 
+/* ===== 窄屏顶栏（用户 2026-11-23） =====
+ *
+ * 手机上把顶栏几十颗按钮全排开会换行、把画布挤没，所以窄屏只留
+ * 「菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 右栏」，其余按钮收进左侧抽屉。
+ *
+ * 为什么用 matchMedia 而不是 CSS 媒体查询：同一颗按钮只能渲染一份，
+ * 否则两套 DOM 会抢 `querySelector`（探针按 aria-label 点按钮会点到抽屉里那份，
+ * 而抽屉平时是关着的）。宽度一变就重渲染，顶栏与抽屉切换是原子的。
+ *
+ * 960px 的来历：手机**横屏**也在这一档（iPhone 12/13 = 844、XR = 896、Pro Max = 926），
+ * 820 会漏掉它们；再宽就是平板 / 桌面（宽版顶栏在这个宽度会折成两行，但按钮都还在）。
+ */
+const NARROW_TOPBAR_PX = 960
+
+function useNarrowTopbar(): boolean {
+  const query = `(max-width: ${NARROW_TOPBAR_PX}px)`
+  const [narrow, setNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia(query).matches,
+  )
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia(query)
+    const on = () => setNarrow(mq.matches)
+    on()
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [query])
+  return narrow
+}
+
+/** 窄屏抽屉里的一项：手机没有悬浮提示，所以名称都写在行内，说明只在长得下的地方给 */
+type LeftMenuItem = {
+  id: string
+  label: string
+  icon?: string
+  /** 自画图标（帮助那颗键盘图标） */
+  custom?: React.ReactNode
+  tip?: string
+  hotkey?: string
+  on?: boolean
+  disabled?: boolean
+  dirty?: boolean
+  onClick: () => void
+}
+type LeftMenuGroup = { id: string; title: string; items: LeftMenuItem[] }
+
+/**
+ * 窄屏左侧抽屉（用户 2026-11-23）：从顶栏「菜单」按钮滑出，点一项就执行并收起。
+ * 遮罩点一下 / 按 Esc 也能关；抽屉里不放悬浮提示（触屏没有 hover）。
+ */
+function LeftMenu({
+  groups,
+  playRate,
+  onPlayRate,
+  onClose,
+}: {
+  groups: LeftMenuGroup[]
+  playRate: number
+  onPlayRate: (v: number) => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        ev.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
+
+  return (
+    <>
+      <div className="drawer-mask" data-menu-mask="1" onClick={onClose} />
+      <aside className="left-drawer" role="menu" aria-label="顶栏菜单">
+        <div className="drawer-head">
+          <strong>菜单</strong>
+          <button type="button" className="drawer-close" onClick={onClose} aria-label="关闭菜单">
+            ×
+          </button>
+        </div>
+        <div className="drawer-body">
+          {groups.map((g) => (
+            <section className="drawer-group" key={g.id}>
+              <div className="drawer-title">{g.title}</div>
+              {g.items.map((it) => (
+                <button
+                  key={it.id}
+                  type="button"
+                  role="menuitem"
+                  className={`drawer-item${it.on ? ' on' : ''}${it.dirty ? ' dirty' : ''}`}
+                  aria-label={it.label}
+                  aria-pressed={it.on ? true : undefined}
+                  disabled={it.disabled}
+                  data-menu-id={it.id}
+                  onClick={() => {
+                    it.onClick()
+                    onClose()
+                  }}
+                >
+                  <span className="drawer-icon">{it.custom ?? (it.icon ? <Icon name={it.icon} /> : null)}</span>
+                  <span className="drawer-label">{it.label}</span>
+                  {it.hotkey && <kbd className="tip-key">{it.hotkey}</kbd>}
+                  {it.on && <span className="drawer-on">开</span>}
+                </button>
+              ))}
+            </section>
+          ))}
+          {/* 播放速度：wide 时在播放键右边，窄屏放不下，放进抽屉（手机上也能调） */}
+          <section className="drawer-group">
+            <div className="drawer-title">播放速度</div>
+            <label className="drawer-rate" title="只改播放快慢，不改音高">
+              <input
+                type="range"
+                min={PLAY_RATE_MIN}
+                max={PLAY_RATE_MAX}
+                step={0.05}
+                value={playRate}
+                onChange={(e) => onPlayRate(Number(e.target.value))}
+                style={fillStyle(((playRate - PLAY_RATE_MIN) / (PLAY_RATE_MAX - PLAY_RATE_MIN)) * 100)}
+                aria-label="播放速度"
+              />
+              <span className="drawer-rate-val">{playRate.toFixed(2)}×</span>
+            </label>
+          </section>
+        </div>
+      </aside>
+    </>
+  )
+}
+
 export default function App() {
   const fileName = useBp((s) => s.fileName)
   const filePath = useBp((s) => s.filePath)
@@ -804,6 +965,13 @@ export default function App() {
   const selMode = useBp((s) => s.selMode)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [helpOpen, setHelpOpen] = useState(false)
+  /* 窄屏顶栏（用户 2026-11-23）：窗口一窄就把大部分按钮收进左侧抽屉；
+   * 变宽时自动收起，免得抽屉挂着遮住画布 */
+  const narrow = useNarrowTopbar()
+  const [menuOpen, setMenuOpen] = useState(false)
+  useEffect(() => {
+    if (!narrow) setMenuOpen(false)
+  }, [narrow])
   /* 右侧栏两种视图：扒谱用的「编辑」与前期一次性的「设置」（用户 m06889） */
   /* 右栏三种视图：编辑（当前谱）/ 分析（调性、节奏、分轨）/ 设置（一次性） */
   const [sideView, setSideView] = useState<'edit' | 'analysis' | 'settings'>('edit')
@@ -2544,6 +2712,254 @@ export default function App() {
     setNotice(on ? 'MIDI 编辑器模式：隐藏频谱，用钢琴音色试听' : null)
   }, [set])
 
+  /* 窄屏左侧抽屉的菜单（用户 2026-11-23）：宽屏顶栏里除了保留下来的
+   * 「录音 / 撤销·重做 / 回开头 / 播放 / 右栏」，其余按钮都收进这里。
+   * 以后往顶栏加按钮：宽屏组与这份菜单各加一处，别只加一边（探针会查抽屉里的项）。 */
+  const leftMenuGroups: LeftMenuGroup[] = [
+    {
+      id: 'file',
+      title: '文件',
+      items: [
+        {
+          id: 'openAudio',
+          label: COPY.openAudio,
+          icon: 'folder',
+          tip: '选一段音频（wav / mp3 / m4a / flac…）打开，马上开始分析',
+          hotkey: 'Ctrl+O',
+          disabled: !!busy || recState === 'recording' || recState === 'paused',
+          onClick: () => void openAudio(),
+        },
+        {
+          id: 'openProject',
+          label: COPY.projectOpen,
+          icon: 'openProject',
+          tip: COPY.projectOpenTip,
+          hotkey: 'Ctrl+J',
+          disabled: !!busy || recState === 'recording' || recState === 'paused',
+          onClick: () => void openProject(),
+        },
+        {
+          id: 'saveProject',
+          label: COPY.projectSave,
+          icon: 'save',
+          tip: recPlan
+            ? recState === 'idle'
+              ? COPY.recordNoAudio
+              : COPY.recordSaveTip
+            : dirty
+              ? '有修改未保存：点一下写进 .bp.json'
+              : COPY.projectSaveTip,
+          hotkey: 'Ctrl+S',
+          dirty,
+          disabled: !filePath || !!busy || (recPlan && recState === 'idle'),
+          onClick: () => {
+            void saveSmart().catch((e: unknown) => {
+              set.getState().setError(`方案存不下来：${e instanceof Error ? e.message : String(e)}`)
+            })
+          },
+        },
+        {
+          id: 'exportJps',
+          label: COPY.exportJps,
+          icon: 'export',
+          tip: '只导出确认过的音，存成 .jps 文本',
+          hotkey: 'Ctrl+E',
+          disabled: confirmedCount === 0,
+          onClick: () => void exportJps(),
+        },
+      ],
+    },
+    {
+      id: 'midi',
+      title: 'MIDI',
+      items: [
+        {
+          id: 'midiMode',
+          label: 'MIDI 编辑器',
+          icon: 'midi',
+          tip: '切换 MIDI 编辑器模式：隐藏频谱、用钢琴音色试听，方便纯 MIDI 编辑',
+          on: midiMode,
+          onClick: toggleMidiMode,
+        },
+        {
+          id: 'midiIn',
+          label: '导入 MIDI',
+          icon: 'midiIn',
+          tip: '读入一个 .mid 文件，把音符铺到表格里（当前有谱会先确认并留恢复快照）',
+          onClick: openMidiImport,
+        },
+        {
+          id: 'midiOut',
+          label: '导出 MIDI',
+          icon: 'midiOut',
+          tip: '把确认过的音导出成 .mid 文件',
+          onClick: exportMidi,
+        },
+      ],
+    },
+    {
+      id: 'score',
+      title: '谱音',
+      items: [
+        {
+          id: 'confirmAll',
+          label: COPY.confirmAll,
+          icon: 'checkAll',
+          tip: notes.length === 0 ? COPY.confirmAllEmptyTip : COPY.confirmAllTip,
+          hotkey: 'Ctrl+A',
+          disabled: notes.length === 0 ? !analysis || !!busy : false,
+          onClick: () => {
+            if (notes.length === 0) runAnalyze()
+            else set.getState().setAllConfirmed(true)
+          },
+        },
+        {
+          id: 'clearAll',
+          label: COPY.clearAll,
+          icon: 'checkNone',
+          tip: COPY.clearAllTip,
+          disabled: !notes.length,
+          onClick: doClearAll,
+        },
+      ],
+    },
+    {
+      id: 'beat',
+      title: '节拍',
+      items: [
+        {
+          id: 'metronome',
+          label: '播放节拍',
+          icon: 'metro',
+          tip: '播放时按 BPM 打拍子（每小节第一拍重音），只在播放时响',
+          hotkey: 'Alt+J',
+          on: metronome,
+          onClick: () => set.getState().setMetronome(!metronome),
+        },
+      ],
+    },
+    {
+      id: 'nav',
+      title: '导航',
+      items: [
+        {
+          id: 'loop',
+          label: COPY.loop,
+          icon: 'loop',
+          tip: COPY.loopTip,
+          hotkey: 'Alt+L',
+          on: loopOn,
+          disabled: !loop,
+          onClick: () => set.getState().setLoopOn(!loopOn),
+        },
+        {
+          id: 'autoPage',
+          label: COPY.autoPage,
+          icon: 'page',
+          tip: COPY.autoPageTip,
+          hotkey: 'Alt+N',
+          on: autoPage,
+          onClick: () => set.getState().setAutoPage(!autoPage),
+        },
+      ],
+    },
+    {
+      id: 'mode',
+      title: '绘制 / 选择',
+      items: [
+        {
+          id: 'draw',
+          label: COPY.modeDraw,
+          icon: 'pencil',
+          tip: COPY.modeDrawTip,
+          hotkey: '`',
+          on: mode === 'draw',
+          onClick: () => set.getState().setMode('draw'),
+        },
+        {
+          id: 'select',
+          label: `选择（${SEL_INFO[selMode].label}）`,
+          icon: selMode === 'block' ? 'selBlock' : selMode === 'col' ? 'selCol' : 'selRow',
+          tip: SEL_INFO[selMode].tip,
+          hotkey: 'Alt+R',
+          on: mode === 'select',
+          onClick: () => {
+            const st = set.getState()
+            if (st.mode !== 'select') {
+              st.setMode('select')
+              return
+            }
+            const i = SEL_MODES.indexOf(st.selMode)
+            st.setSelMode(SEL_MODES[(i + 1) % SEL_MODES.length])
+          },
+        },
+      ],
+    },
+    {
+      id: 'source',
+      title: '听原音 / 合成',
+      items: [
+        {
+          id: 'audio',
+          label: COPY.sourceAudio,
+          icon: 'wave',
+          tip: '听原音频（跟合成音对比着听，Tab 切换）',
+          hotkey: 'Tab',
+          on: playMode === 'audio',
+          onClick: () => switchMode('audio'),
+        },
+        {
+          id: 'synth',
+          label: COPY.sourceSynth,
+          icon: 'note',
+          tip: '听合成音（按当前谱子发声，Tab 切换）',
+          hotkey: 'Tab',
+          on: playMode === 'synth',
+          onClick: () => switchMode('synth'),
+        },
+      ],
+    },
+    {
+      id: 'pitch',
+      title: '音名 / 数字',
+      items: [
+        {
+          id: 'pitchName',
+          label: COPY.pitchName,
+          icon: 'pitchName',
+          tip: '用音名写格子（C4、D4…）',
+          hotkey: 'Alt+Z',
+          on: pitchMode === 'name',
+          onClick: () => set.getState().setPitchMode('name'),
+        },
+        {
+          id: 'pitchNumber',
+          label: COPY.pitchNumber,
+          icon: 'pitchNumber',
+          tip: '用简谱数字写格子（1、2、3…，换调号跟着变）',
+          hotkey: 'Alt+Z',
+          on: pitchMode === 'number',
+          onClick: () => set.getState().setPitchMode('number'),
+        },
+      ],
+    },
+    {
+      id: 'help',
+      title: '帮助',
+      items: [
+        {
+          id: 'help',
+          label: '按键与鼠标操作',
+          custom: <Icon name="help" />,
+          tip: '列出全部按键、快捷键、鼠标操作',
+          hotkey: 'F1',
+          on: helpOpen,
+          onClick: () => setHelpOpen(true),
+        },
+      ],
+    },
+  ]
+
   const candidates = analysis?.keyCandidates.slice(0, 6) ?? []
   const setLoop = useCallback(
     (r: LoopRange | null) => {
@@ -2558,6 +2974,111 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* 窄屏顶栏（用户 2026-11-23）：只留 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 右栏，
+          其余按钮都收进左侧抽屉 —— 手机上横排按钮会换行，把画布挤没。
+          顺序照用户列的：录音 → 撤销/重做 → 回开头 → 播放 → 右栏。 */}
+      {narrow && (
+        <div className="toolbar narrow">
+          <div className="tb-side tb-left">
+            <button
+              className={menuOpen ? 'icon-btn menu-btn on' : 'icon-btn menu-btn'}
+              onClick={() => setMenuOpen((v) => !v)}
+              aria-label="菜单"
+              aria-expanded={menuOpen}
+              data-menu-btn="1"
+              title="打开菜单：文件 / MIDI / 谱音 / 节拍 / 导航 / 模式 / 音源 / 音名 / 帮助"
+            >
+              <Icon name="menu" />
+            </button>
+            <span className="brand">
+              <img className="brand-logo" src="/icons/logo-bp.png" alt={COPY.appName} />
+              <span className="brand-text">
+                {COPY.appName}
+                <small>{APP_VERSION}</small>
+              </span>
+            </span>
+            {/* 录音按钮留在顶栏：点一下就在它下面开录音小条（小条靠 data-rec-mic 定位） */}
+            <span className="tgroup" title={COPY.recordGroup}>
+              <button
+                className={`icon-btn${recBarOpen ? ' on' : ''}${recState === 'recording' || recState === 'paused' ? ' rec-live' : ''}`}
+                data-rec-mic="1"
+                onClick={toggleRecordBar}
+                aria-pressed={recBarOpen}
+                title={COPY.recordMicTip}
+                aria-label={COPY.recordMic}
+              >
+                <Icon name="mic" />
+              </button>
+            </span>
+          </div>
+          <div className="tb-side tb-right">
+            <span className="tgroup" title="撤销 / 重做">
+              <button
+                className="icon-btn"
+                onClick={() => set.getState().undo()}
+                disabled={historyLen === 0}
+                title={COPY.undoTip}
+                aria-label={COPY.undo}
+                data-key="Ctrl+Z"
+              >
+                <Icon name="undo" />
+              </button>
+              <button
+                className="icon-btn"
+                onClick={() => set.getState().redo()}
+                disabled={futureLen === 0}
+                title={COPY.redoTip}
+                aria-label={COPY.redo}
+                data-key="Ctrl+Shift+Z"
+              >
+                <Icon name="redo" />
+              </button>
+            </span>
+            <span className="tgroup" title="导航">
+              <button className="icon-btn" onClick={goStart} title={COPY.goStartTip} aria-label={COPY.goStart} data-key="Home">
+                <Icon name="home" />
+              </button>
+            </span>
+            <div className="play-wrap">
+              <button
+                className={playing ? 'play-btn on' : 'play-btn'}
+                onClick={togglePlay}
+                disabled={!analysis}
+                title={playing ? '暂停' : '播放'}
+                aria-label={playing ? COPY.pause : COPY.play}
+                data-key="空格"
+              >
+                <Icon name={playing ? 'pause' : 'play'} />
+              </button>
+            </div>
+            <span className="tgroup tb-util" title="侧栏">
+              <button
+                className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}
+                onClick={() => setShowSide((v) => !v)}
+                title={showSide ? '把右侧栏收起来，给看谱多留点地方' : '把右侧栏展开（调节 / 分析 / 设置）'}
+                aria-label={showSide ? '收起右侧栏' : '展开右侧栏'}
+                data-key="Ctrl+]"
+              >
+                <span className="side-toggle-icon" />
+              </button>
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* 窄屏左侧抽屉：菜单里的按钮都在这里（点一项就收起；遮罩 / Esc 也能关） */}
+      {narrow && menuOpen && (
+        <LeftMenu
+          groups={leftMenuGroups}
+          playRate={playRate}
+          onPlayRate={(v) => set.getState().setPlayRate(v)}
+          onClose={() => setMenuOpen(false)}
+        />
+      )}
+
+      {/* 宽屏顶栏（原样）：左 = 文件 → 录音 → MIDI → 谱音 → 撤销/重做；
+          右 = 节拍 → 导航 → 绘制/选择 → 原音/合成 → 音名/数字 → 帮助/侧栏 */}
+      {!narrow && (
       <div className="toolbar">
         <div className="tb-side tb-left">
           <span className="brand">
@@ -2912,6 +3433,7 @@ export default function App() {
           </span>
         </div>
       </div>
+      )}
 
       {/* 录音小条（用户 2026-11-22）：位置跟着顶栏那颗麦克风按钮 */}
       {recBarOpen && (

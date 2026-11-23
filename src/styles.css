@@ -859,7 +859,8 @@ a.link {
    浏览器默认的 range 在 Windows 上会留一段固定内缩，值到最大时拇指离右端还有一截，
    看着像"没到头"。这里 appearance:none 自己画，--fill 由 React 按当前值的百分比写进去。 */
 .side input[type='range'],
-.toolbar input[type='range'] {
+.toolbar input[type='range'],
+.drawer-rate input[type='range'] {
   -webkit-appearance: none;
   appearance: none;
   height: 18px;
@@ -871,7 +872,8 @@ a.link {
 }
 
 .side input[type='range']::-webkit-slider-runnable-track,
-.toolbar input[type='range']::-webkit-slider-runnable-track {
+.toolbar input[type='range']::-webkit-slider-runnable-track,
+.drawer-rate input[type='range']::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 2px;
   background: linear-gradient(
@@ -882,7 +884,8 @@ a.link {
 }
 
 .side input[type='range']::-webkit-slider-thumb,
-.toolbar input[type='range']::-webkit-slider-thumb {
+.toolbar input[type='range']::-webkit-slider-thumb,
+.drawer-rate input[type='range']::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   width: 12px;
@@ -894,21 +897,24 @@ a.link {
 }
 
 .side input[type='range']::-moz-range-track,
-.toolbar input[type='range']::-moz-range-track {
+.toolbar input[type='range']::-moz-range-track,
+.drawer-rate input[type='range']::-moz-range-track {
   height: 4px;
   border-radius: 2px;
   background: rgba(255, 255, 255, 0.18);
 }
 
 .side input[type='range']::-moz-range-progress,
-.toolbar input[type='range']::-moz-range-progress {
+.toolbar input[type='range']::-moz-range-progress,
+.drawer-rate input[type='range']::-moz-range-progress {
   height: 4px;
   border-radius: 2px;
   background: var(--accent);
 }
 
 .side input[type='range']::-moz-range-thumb,
-.toolbar input[type='range']::-moz-range-thumb {
+.toolbar input[type='range']::-moz-range-thumb,
+.drawer-rate input[type='range']::-moz-range-thumb {
   width: 12px;
   height: 12px;
   border-radius: 50%;
@@ -1335,4 +1341,226 @@ select option:checked {
   color: var(--danger);
   border-color: var(--danger);
   background: rgba(242, 114, 114, 0.14);
+}
+
+/* ==========================================================================
+ * 窄屏顶栏（用户 2026-11-23）
+ *
+ * 手机 / 窄窗口只留 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 右栏，
+ * 其余按钮进左侧抽屉。哪些按钮渲染在哪儿由 App.tsx 的 useNarrowTopbar 决定
+ * （同一颗按钮只渲染一份），这里只管排布：单行、不换行、左边菜单+logo，右边一串。
+ * ========================================================================== */
+.toolbar.narrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  flex-wrap: nowrap;
+}
+
+.toolbar.narrow .tb-side {
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.toolbar.narrow .tb-right {
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+.toolbar.narrow .brand {
+  margin-right: 0;
+}
+
+/* 手机上只留品牌图标：名字和版本号很吃宽度，留着按钮会被挤出去 */
+.toolbar.narrow .brand-text {
+  display: none;
+}
+
+.toolbar.narrow .icon-btn {
+  width: 28px;
+  height: 26px;
+}
+
+.toolbar.narrow .tgroup {
+  padding: 1px;
+}
+
+.toolbar.narrow .tgroup .icon-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.toolbar.narrow .play-wrap {
+  flex: 0 0 auto;
+}
+
+.toolbar.narrow .play-btn {
+  width: 40px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+/* 速度滑条是绝对定位的，窄屏会压到旁边的按钮；挪进抽屉的「播放速度」 */
+.toolbar.narrow .rate-slider,
+.toolbar.narrow .rate-val {
+  display: none;
+}
+
+/* ==========================================================================
+ * 窄屏左侧抽屉（用户 2026-11-23）
+ *
+ * 从顶栏「菜单」按钮滑出；点一项执行完就收起，遮罩点一下 / Esc 也能关。
+ * z-index：遮罩 47、抽屉 48 —— 在录音小条（45）与悬浮提示（46）之上，
+ * 但在帮助 / 确认弹层（50）之下。
+ * ========================================================================== */
+.drawer-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 47;
+  background: rgba(6, 9, 13, 0.55);
+  animation: drawer-fade 140ms ease-out;
+}
+
+.left-drawer {
+  position: fixed;
+  z-index: 48;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(86vw, 300px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  box-shadow: 12px 0 34px rgba(0, 0, 0, 0.5);
+  animation: drawer-in 160ms ease-out;
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+
+.drawer-close {
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--fg-dim);
+}
+
+.drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 8px 18px;
+}
+
+.drawer-group + .drawer-group {
+  margin-top: 10px;
+}
+
+.drawer-title {
+  padding: 6px 6px 4px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  letter-spacing: 0.6px;
+}
+
+.drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+}
+
+.drawer-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.drawer-item.on {
+  background: rgba(79, 209, 197, 0.14);
+  color: var(--accent);
+}
+
+.drawer-item.dirty .drawer-label {
+  color: #ffb353;
+}
+
+.drawer-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: inherit;
+}
+
+.drawer-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.drawer-on {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(79, 209, 197, 0.2);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+/* 抽屉里的「播放速度」：窄屏时顶栏那颗滑条藏起来了，这里顶替它 */
+.drawer-rate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 2px;
+}
+
+.drawer-rate input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+
+.drawer-rate-val {
+  min-width: 44px;
+  color: var(--fg-dim);
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  text-align: right;
+}
+
+@keyframes drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes drawer-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }

@@ -2839,6 +2839,205 @@ try {
     )
   }
 
+  /* ── 窄屏顶栏（用户 2026-11-23）：只留 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 右栏，
+        其余按钮进左侧抽屉。用 CDP 把视口压到手机宽度（390×844），matchMedia 会跟着切。 ── */
+  {
+    /* 先把录音小条收起来，免得它压着顶栏量尺寸 */
+    await cdp.eval(`(() => { if (document.querySelector('.record-mini')) document.querySelector('[data-rec-mic="1"]')?.click() })()`)
+    await sleep(200)
+    await cdp.send('Emulation.setDeviceMetricsOverride', {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 2,
+      mobile: true,
+    })
+    await sleep(500)
+    const before = await cdp.eval(`(() => {
+      const bar = document.querySelector('.toolbar')
+      if (!bar) return null
+      const labels = [...bar.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') || '')
+      const menu = bar.querySelector('[data-menu-btn]')
+      const r = bar.getBoundingClientRect()
+      return {
+        narrow: bar.classList.contains('narrow'),
+        labels,
+        hasMenu: !!menu,
+        menuLabel: menu ? menu.getAttribute('aria-label') : '',
+        rec: !!bar.querySelector('[data-rec-mic="1"]'),
+        play: !!bar.querySelector('.play-btn'),
+        side: !!bar.querySelector('.side-toggle'),
+        home: labels.includes('回到开头'),
+        undo: labels.includes('撤销'),
+        redo: labels.includes('重做'),
+        drawer: !!document.querySelector('.left-drawer'),
+        overflow: bar.scrollWidth - bar.clientWidth,
+        height: Math.round(r.height),
+        vw: window.innerWidth,
+      }
+    })()`)
+    check(
+      '窄屏（390px）顶栏切成单行窄版，不换行、不溢出',
+      !!before &&
+        before.narrow &&
+        before.overflow <= 0 &&
+        before.height <= 60 &&
+        /* 手机模拟下 innerWidth 会被 viewport meta 换算（390 → 429），只要还在窄屏档内即可 */
+        before.vw < 960,
+      JSON.stringify(before),
+    )
+    check(
+      '窄屏顶栏只留 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 右栏',
+      !!before &&
+        before.hasMenu &&
+        before.menuLabel === '菜单' &&
+        before.rec &&
+        before.play &&
+        before.side &&
+        before.home &&
+        before.undo &&
+        before.redo &&
+        before.drawer === false &&
+        !before.labels.includes('打开音频') &&
+        !before.labels.includes('MIDI 编辑器') &&
+        !before.labels.includes('播放节拍') &&
+        !before.labels.includes('音名'),
+      JSON.stringify(before && before.labels),
+    )
+
+    await cdp.eval(`document.querySelector('.toolbar [data-menu-btn]')?.click()`)
+    await sleep(300)
+    const opened = await cdp.eval(`(() => {
+      const d = document.querySelector('.left-drawer')
+      if (!d) return null
+      const items = [...d.querySelectorAll('[data-menu-id]')]
+      const r = d.getBoundingClientRect()
+      return {
+        ids: items.map((b) => b.getAttribute('data-menu-id')),
+        labels: items.map((b) => b.getAttribute('aria-label') || ''),
+        left: Math.round(r.left),
+        width: Math.round(r.width),
+        rate: !!d.querySelector('.drawer-rate input[type=range]'),
+        rows: items.length,
+      }
+    })()`)
+    check(
+      '窄屏点「菜单」从左边弹出抽屉',
+      !!opened && opened.left === 0 && opened.width >= 240 && opened.width <= 390,
+      JSON.stringify(opened),
+    )
+    const needIds = [
+      'openAudio',
+      'openProject',
+      'saveProject',
+      'exportJps',
+      'midiMode',
+      'midiIn',
+      'midiOut',
+      'confirmAll',
+      'clearAll',
+      'metronome',
+      'loop',
+      'autoPage',
+      'draw',
+      'select',
+      'audio',
+      'synth',
+      'pitchName',
+      'pitchNumber',
+      'help',
+    ]
+    check(
+      '抽屉里收着其它顶栏按钮（文件 / MIDI / 谱音 / 节拍 / 导航 / 模式 / 音源 / 音名 / 帮助）',
+      !!opened && needIds.every((id) => opened.ids.includes(id)) && opened.rows === needIds.length,
+      JSON.stringify(opened && opened.ids),
+    )
+    check('抽屉里有「播放速度」滑条（窄屏顶栏那条已挪进来）', !!opened && opened.rate)
+
+    /* 点抽屉里的一项：要真的执行，并且点完自动收起 */
+    const beforeMet = await cdp.eval(`window.__bp.getState().metronome`)
+    await cdp.eval(`[...document.querySelectorAll('.left-drawer [data-menu-id]')].find((b) => b.getAttribute('data-menu-id') === 'metronome')?.click()`)
+    await sleep(300)
+    const afterMet = await cdp.eval(`({ on: window.__bp.getState().metronome, open: !!document.querySelector('.left-drawer') })`)
+    check(
+      '抽屉里点「播放节拍」能生效，点完抽屉自动收起',
+      afterMet.on === !beforeMet && afterMet.open === false,
+      JSON.stringify({ beforeMet, afterMet }),
+    )
+    if (afterMet.on) await cdp.eval(`window.__bp.getState().setMetronome(false)`)
+
+    /* 遮罩也能关；Esc 也能关（两种都验一下，手机上常用点外面） */
+    await cdp.eval(`document.querySelector('.toolbar [data-menu-btn]')?.click()`)
+    await sleep(250)
+    await cdp.eval(`document.querySelector('.drawer-mask')?.click()`)
+    await sleep(250)
+    const closedByMask = await cdp.eval(`!document.querySelector('.left-drawer')`)
+    await cdp.eval(`document.querySelector('.toolbar [data-menu-btn]')?.click()`)
+    await sleep(250)
+    await cdp.pressKey('Escape', 'Escape', 27)
+    await sleep(250)
+    const closedByEsc = await cdp.eval(`!document.querySelector('.left-drawer')`)
+    check('抽屉能点遮罩关、也能按 Esc 关', closedByMask && closedByEsc, JSON.stringify({ closedByMask, closedByEsc }))
+
+    /* 窄屏录音按钮：小条要开在屏幕里（麦克风靠左，居中挂很容易超出左边界） */
+    await cdp.eval(`document.querySelector('.toolbar [data-rec-mic="1"]')?.click()`)
+    await sleep(400)
+    const recNarrow = await cdp.eval(`(() => {
+      const el = document.querySelector('.record-mini')
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { left: Math.round(r.left), right: Math.round(r.right), vw: window.innerWidth }
+    })()`)
+    check(
+      '窄屏点录音按钮能开小条，小条完整落在屏幕里',
+      !!recNarrow && recNarrow.left >= 0 && recNarrow.right <= recNarrow.vw,
+      JSON.stringify(recNarrow),
+    )
+    await cdp.eval(`document.querySelector('.toolbar [data-rec-mic="1"]')?.click()`)
+    await sleep(200)
+
+    /* 阈值 960（用户 2026-11-23）：手机横屏（844/896/926）也在窄版里，961 起回宽版 */
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 960, height: 844, deviceScaleFactor: 1, mobile: true })
+    await sleep(350)
+    const at960 = await cdp.eval(`(() => {
+      const b = document.querySelector('.toolbar')
+      return { narrow: b.classList.contains('narrow'), vw: window.innerWidth, labels: [...b.querySelectorAll('button')].map((x) => x.getAttribute('aria-label') || '') }
+    })()`)
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 844, deviceScaleFactor: 1, mobile: true })
+    await sleep(350)
+    const at1000 = await cdp.eval(`(() => {
+      const b = document.querySelector('.toolbar')
+      return { narrow: b.classList.contains('narrow'), vw: window.innerWidth, labels: [...b.querySelectorAll('button')].map((x) => x.getAttribute('aria-label') || '') }
+    })()`)
+    check(
+      '960px 仍走窄版、1000px 回宽版（阈值正好覆盖手机横屏）',
+      at960.narrow === true &&
+        !at960.labels.includes('打开音频') &&
+        at1000.narrow === false &&
+        at1000.labels.includes('打开音频'),
+      JSON.stringify({ at960: at960.narrow, at960vw: at960.vw, at1000: at1000.narrow, at1000vw: at1000.vw }),
+    )
+
+    /* 拉回宽屏：顶栏要恢复原样，抽屉相关的 DOM 不能残留 */
+    await cdp.send('Emulation.clearDeviceMetricsOverride')
+    await sleep(500)
+    const back = await cdp.eval(`(() => {
+      const bar = document.querySelector('.toolbar')
+      const labels = [...bar.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') || '')
+      return {
+        narrow: bar.classList.contains('narrow'),
+        drawer: !!document.querySelector('.left-drawer'),
+        mask: !!document.querySelector('.drawer-mask'),
+        openAudio: labels.includes('打开音频'),
+        midi: labels.includes('MIDI 编辑器'),
+      }
+    })()`)
+    check(
+      '窗口拉宽后顶栏恢复宽版，抽屉与遮罩都不残留',
+      back.narrow === false && back.drawer === false && back.mask === false && back.openAudio && back.midi,
+      JSON.stringify(back),
+    )
+  }
+
   /* --shot <path>：把当前界面截一张干净图
      （顺手灌回一份假的频谱与两个音、全标确认、圈一段区间，谱面才有内容可看）
      --pickup N：截图时把弱起设成 N 拍，用来核对小节线位置 */
