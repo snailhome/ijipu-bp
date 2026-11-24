@@ -225,8 +225,8 @@ try {
     }
   })()`)
   check(
-    '首开默认收起右栏（没记录时；手机上默认展开会把画布挤到只剩键盘列）',
-    !!sideBoot && sideBoot.off === true && sideBoot.label === '展开右侧栏',
+    '首开默认收起左侧栏（没记录时；手机上默认展开会把画布挤到只剩键盘列）',
+    !!sideBoot && sideBoot.off === true && sideBoot.label === '展开左侧栏',
     JSON.stringify(sideBoot),
   )
   await cdp.eval(`(() => { const el = document.querySelector('.side'); if (el && el.classList.contains('off')) document.querySelector('.toolbar .side-toggle').click() })()`)
@@ -316,7 +316,7 @@ try {
   )
   /* 有热键的控件：名称后面跟一枚热键小牌（用户 m02483） */
   const keyTipPos = await cdp.eval(`(() => {
-    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '收起右侧栏')
+    const b = [...document.querySelectorAll('.toolbar button')].find((x) => (x.getAttribute('aria-label') || '') === '收起左侧栏')
     if (!b) return null
     const r = b.getBoundingClientRect()
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
@@ -524,14 +524,15 @@ try {
     const hs = host ? getComputedStyle(host) : null
     return {
       hintLeft: Math.round(er.left - cr.left),
+      hintRight: Math.round(cr.right - er.right),
       canvasTouch: cs.touchAction,
       canvasTap: cs.getPropertyValue('-webkit-tap-highlight-color'),
       hostTouch: hs ? hs.touchAction : null,
       hostTap: hs ? hs.getPropertyValue('-webkit-tap-highlight-color') : null,
     }
   })()`)
-  check('空表格提示只占键盘右边（不压到键盘列）',
-    !!emptyHint && emptyHint.hintLeft >= 60, JSON.stringify(emptyHint))
+  check('空表格提示只占键盘左边（不压到右侧键盘列）',
+    !!emptyHint && emptyHint.hintRight >= 60, JSON.stringify(emptyHint))
   check('谱面画布与容器都关掉系统点按高亮、触摸手势自己接管',
     !!emptyHint &&
       emptyHint.canvasTouch === 'none' &&
@@ -771,7 +772,7 @@ try {
       const span = s.durationMs / s.view.zoom
       const ms = (n.startMs + n.endMs) / 2
       const y = RULER_H + (top - n.midi) * ROW_H + ROW_H / 2
-      const x = KEY_W + ((ms - s.view.panMs) / span) * (r.width - KEY_W)
+      const x = ((ms - s.view.panMs) / span) * (r.width - KEY_W)
       return { x, y } // 相对画布左上角
     })()`)
     const origin = await cdp.eval(`(() => {
@@ -830,7 +831,7 @@ try {
       const m = window.__bpRoll || {}
       const ROW_H = m.rowH || 14, RULER_H = m.rulerH || 36, KEY_W = 66
       const span = s.durationMs / s.view.zoom
-      const xAt = (ms) => KEY_W + ((ms - s.view.panMs) / span) * (r.width - KEY_W)
+      const xAt = (ms) => ((ms - s.view.panMs) / span) * (r.width - KEY_W)
       const y = RULER_H + (m.top - n.midi) * ROW_H + ROW_H / 2
       return {
         ox: r.x, oy: r.y, rowH: ROW_H,
@@ -985,7 +986,7 @@ try {
     const c = document.querySelector('.pane.roll canvas')
     const r = c.getBoundingClientRect()
     const KEY_W = 66
-    const xOf = (ms) => KEY_W + (ms / s.durationMs) * (r.width - KEY_W)
+    const xOf = (ms) => (ms / s.durationMs) * (r.width - KEY_W)
     return { x1: xOf(500), x2: xOf(2500), y: r.y + r.height / 2, ox: r.x, oy: r.y }
   })()`)
   await sleep(200)
@@ -1027,7 +1028,8 @@ try {
   // ── 键列右上角那把锁：锁上之后滚轮不再换音区（用户 m05515） ──
   const lockPt = await cdp.eval(`(() => {
     const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
-    return { x: r.x + 52, y: r.y + 18, gx: r.x + r.width * 0.6, gy: r.y + r.height * 0.5 }
+    /* 键盘列在右侧（2026-11-24），锁在它的右上角（中心 = 右缘 - 14） */
+    return { x: r.x + r.width - 14, y: r.y + 18, gx: r.x + r.width * 0.6, gy: r.y + r.height * 0.5 }
   })()`)
   await cdp.eval(`window.__bp.getState().setLockPitch(false)`)
   await sleep(150)
@@ -1064,7 +1066,7 @@ try {
     const s = window.__bp.getState()
     const KEY_W = 66
     const span = s.durationMs / s.view.zoom
-    const xOf = (ms) => KEY_W + ((ms - s.view.panMs) / span) * (r.width - KEY_W)
+    const xOf = (ms) => ((ms - s.view.panMs) / span) * (r.width - KEY_W)
     return { ox: r.x, oy: r.y, y: r.y + 8, x1: xOf(800), x2: xOf(2400) }
   })()`)
   await cdp.eval('window.__bp.getState().setLoop(null)')
@@ -1142,7 +1144,7 @@ try {
     const m = window.__bpRoll
     const span = s.durationMs / s.view.zoom
     const beat = 60000 / s.bpm
-    const xOf = (ms) => KEY_W + ((ms - s.view.panMs) / span) * (r.width - KEY_W)
+    const xOf = (ms) => ((ms - s.view.panMs) / span) * (r.width - KEY_W)
     /* 点在某个 1 拍格子的 70% 处：如果按"最近格点"会跑到下一格，按"所在格"应留在本格 */
     const ms = s.firstBeatMs + beat * 1.7
     return { ox: r.x, oy: r.y, x: xOf(ms), y: RULER_H + (m.top - 60) * ROW_H + ROW_H / 2, ms, beat }
@@ -1164,7 +1166,7 @@ try {
   )
   await cdp.eval('window.__bp.getState().setMode("select")')
 
-  // ── 右侧栏开关（收起时主区要真正占满，别留 280px 空白）──
+  // ── 左栏开关（收起时主区要真正占满，别留 280px 空白）──
   const sideOn = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
   const rollWOn = await cdp.eval(`document.querySelector('.pane.roll').getBoundingClientRect().width`)
   await cdp.eval(`document.querySelector('.toolbar .side-toggle').click()`)
@@ -1174,20 +1176,20 @@ try {
   await cdp.eval(`document.querySelector('.toolbar .side-toggle').click()`)
   await sleep(200)
   const sideBack = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
-  check('点图标能收起右侧栏、再点能展开', sideOn && sideOff && sideBack)
-  check('收起右侧栏后主区变宽', rollWOff > rollWOn + 100, `${Math.round(rollWOn)} → ${Math.round(rollWOff)}`)
+  check('点图标能收起左侧栏、再点能展开', sideOn && sideOff && sideBack)
+  check('收起左侧栏后主区变宽', rollWOff > rollWOn + 100, `${Math.round(rollWOn)} → ${Math.round(rollWOff)}`)
 
-  /* Ctrl+] = 收起 / 展开右栏（用户 m02483） */
+  /* Ctrl+] = 收起 / 展开左栏（用户 m02483） */
   await cdp.eval(`(() => { const el = document.querySelector('.side'); if (el && el.classList.contains('off')) document.querySelector('.toolbar .side-toggle').click() })()`)
   await sleep(250)
   await cdp.pressKey('BracketRight', ']', 221, 2)
   await sleep(250)
   const hotkeyOff = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && el.classList.contains('off') })()`)
-  check('Ctrl+] 能收起右侧栏', hotkeyOff === true, String(hotkeyOff))
+  check('Ctrl+] 能收起左侧栏', hotkeyOff === true, String(hotkeyOff))
   await cdp.pressKey('BracketRight', ']', 221, 2)
   await sleep(250)
   const hotkeyOn = await cdp.eval(`(() => { const el = document.querySelector('.side'); return !!el && !el.classList.contains('off') })()`)
-  check('再按 Ctrl+] 能展开右侧栏', hotkeyOn === true, String(hotkeyOn))
+  check('再按 Ctrl+] 能展开左侧栏', hotkeyOn === true, String(hotkeyOn))
 
   // ── 横向滚动条：一直在，放大后 thumb 变窄 ──
   const barWidth = await cdp.eval(`(() => {
@@ -1366,7 +1368,7 @@ try {
 
   const lockPoint = await cdp.eval(`(() => {
     const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
-    return { x: r.x + 54, y: r.y + 18 }
+    return { x: r.x + r.width - 14, y: r.y + 18 }
   })()`)
   await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: lockPoint.x, y: lockPoint.y, button: 'none' })
   await sleep(220)
@@ -1504,7 +1506,7 @@ try {
     const g = cv.getContext('2d')
     const dpr = cv.width / parseFloat(cv.style.width || String(cv.width)) || 1
     const span = s.durationMs / s.view.zoom
-    const px = m.left + ((s.currentMs - s.view.panMs) / span) * (m.w - m.left)
+    const px = m.left + ((s.currentMs - s.view.panMs) / span) * m.width
     const col = Math.max(0, Math.min(cv.width - 1, Math.round(px * dpr)))
     /* 线宽 1.5px，落在像素边界上会被抗锯齿摊到相邻两列，所以 ±1 列都算 */
     const reddish = (rowFrac) => {
@@ -1606,7 +1608,9 @@ try {
     for (let i = row; i < (m.rows || 20); i++) {
       if (!BLACK.has((((m.top - i) % 12) + 12) % 12)) { row = i; break }
     }
-    return { x: r.x + KEY_W * 0.35, y: r.y + rulerH + row * ROW_H + ROW_H / 2, wx: KEY_W * 0.35, wy: rulerH + row * ROW_H + ROW_H / 2 }
+    /* 键盘列在**右侧**（2026-11-24）：白键点靠左的白区（镜像后白键"脚"在左） */
+    const kx = r.width - KEY_W + KEY_W * 0.2
+    return { x: r.x + kx, y: r.y + rulerH + row * ROW_H + ROW_H / 2, wx: kx, wy: rulerH + row * ROW_H + ROW_H / 2 }
   })()`)
   const keyPixel = `(() => {
     const cv = document.querySelector('.pane.roll canvas')
@@ -1640,6 +1644,33 @@ try {
   check('键盘从上到下音高递减（上高下低，绘制与点击同一套换算）',
     !!keyOrder && keyOrder.top > keyOrder.bottom, JSON.stringify(keyOrder))
 
+  /* 用户 2026-11-24 反复反馈"手机端键盘上低下高"：直接看按下去的是哪个音 ——
+     点上方行必须是高音、点下方行必须是低音（键盘现在在右侧，x 取靠右的那一列）。 */
+  const kbPress = await cdp.eval(`(() => {
+    const m = window.__bpRoll
+    const cv = document.querySelector('.pane.roll canvas')
+    const r = cv.getBoundingClientRect()
+    return {
+      x: r.x + r.width - 30,
+      yTop: r.y + m.rulerH + 2 * m.rowH + m.rowH / 2,
+      yBot: r.y + m.rulerH + (m.rows - 3) * m.rowH + m.rowH / 2,
+      top: m.top, rows: m.rows,
+    }
+  })()`)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: kbPress.x, y: kbPress.yTop, button: 'left', buttons: 1, clickCount: 1 })
+  await sleep(180)
+  const pressTop = await cdp.eval(`window.__bpRoll.pressMidi`)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: kbPress.x, y: kbPress.yTop, button: 'left', buttons: 0, clickCount: 1 })
+  await sleep(150)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: kbPress.x, y: kbPress.yBot, button: 'left', buttons: 1, clickCount: 1 })
+  await sleep(180)
+  const pressBot = await cdp.eval(`window.__bpRoll.pressMidi`)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: kbPress.x, y: kbPress.yBot, button: 'left', buttons: 0, clickCount: 1 })
+  await sleep(150)
+  check('点键盘上方发高音、下方发低音（按下音高与显示一致）',
+    pressTop === kbPress.top - 2 && pressBot === kbPress.top - (kbPress.rows - 3),
+    JSON.stringify({ pressTop, pressBot, top: kbPress.top, rows: kbPress.rows }))
+
   /* ── 键盘区按住上下拖 = 上下换音区（用户 2026-11-23；未锁定才生效） ── */
   const dragKey = await cdp.eval(`(() => {
     const m = window.__bpRoll || {}
@@ -1647,7 +1678,7 @@ try {
     const r = cv.getBoundingClientRect()
     const ROW_H = m.rowH || 14, KEY_W = 66
     const rulerH = typeof m.rulerH === 'number' ? m.rulerH : 36
-    return { x: r.x + KEY_W * 0.35, y1: r.y + rulerH + 5 * ROW_H + ROW_H / 2, step: 3 * ROW_H, top: m.top }
+    return { x: r.x + r.width - KEY_W + KEY_W * 0.3, y1: r.y + rulerH + 5 * ROW_H + ROW_H / 2, step: 3 * ROW_H, top: m.top }
   })()`)
   await cdp.eval(`window.__bp.getState().setLockPitch(false)`)
   await sleep(150)
@@ -1679,7 +1710,10 @@ try {
       const midi = m.top - row
       if (!BLACK.has(((midi % 12) + 12) % 12)) continue
       const wy = rulerH + row * ROW_H + ROW_H / 2
-      return { x: r.x + KEY_W * 0.85, y: r.y + wy, wy, bx: KEY_W * 0.85, lx: 5 }
+      /* 镜像后黑键贴左缘；点黑键靠左、对照点取右侧白块 */
+      const bx = r.width - KEY_W + KEY_W * 0.15
+      const lx = r.width - 5
+      return { x: r.x + bx, y: r.y + wy, wy, bx, lx }
     }
     return null
   })()`)
@@ -1737,25 +1771,27 @@ try {
       const c = document.querySelector('.pane.roll canvas')
       const g = c.getContext('2d')
       const sx = ${shapePt.sx}, sy = ${shapePt.sy}
+      const cw = parseFloat(c.style.width || String(c.width))
+      /* 键盘列在右侧（2026-11-24）；镜像后白键的"脚"在左（6）、伸进黑键格的半块在右（58） */
       const pick = (wx, wy) => { const d = g.getImageData(Math.round(wx * sx), Math.round(wy * sy), 1, 1).data; return [d[0], d[1], d[2]] }
       return {
-        armLeft: pick(6, ${shapePt.rowTop} - 3.5),
-        armRight: pick(58, ${shapePt.rowTop} - 3.5),
-        midLeft: pick(6, ${shapePt.rowTop} + 7),
-        midRight: pick(58, ${shapePt.rowTop} + 7),
+        armLeft: pick(cw - 66 + 6, ${shapePt.rowTop} - 3.5),
+        armRight: pick(cw - 66 + 58, ${shapePt.rowTop} - 3.5),
+        midLeft: pick(cw - 66 + 6, ${shapePt.rowTop} + 7),
+        midRight: pick(cw - 66 + 58, ${shapePt.rowTop} + 7),
       }
     })()`)
     const yellowish = (c) => c[0] > 220 && c[1] > 150 && c[1] < 215 && c[2] < 110
-    check('白键高亮是 T 形：上半格只有左边变黄（右边是黑键）',
-      yellowish(shapePx.armLeft) && !yellowish(shapePx.armRight),
+    check('白键高亮是 T 形：上半格右边那半块变黄（左边是黑键）',
+      yellowish(shapePx.armRight) && !yellowish(shapePx.armLeft),
       `左 ${shapePx.armLeft}、右 ${shapePx.armRight}`)
-    /* 左边那格在本格中心常常压着简谱数字的字（抗锯齿会把它压暗），所以只断言右侧"脚"是黄的 */
-    check('白键高亮是 T 形：本格右侧那截也变黄',
+    /* 本格中心左边那截是"脚"、常常压着简谱数字（抗锯齿会把它压暗），所以只断言右侧半块是黄的 */
+    check('白键高亮是 T 形：本格右侧那半块也变黄',
       yellowish(shapePx.midRight),
       `左 ${shapePx.midLeft}（可能压着数字）、右 ${shapePx.midRight}`)
   } else {
-    check('白键高亮是 T 形：上半格只有左边变黄（右边是黑键）', false, '没找到 D 行')
-    check('白键高亮是 T 形：本格右侧那截也变黄', false, '没找到 D 行')
+    check('白键高亮是 T 形：上半格右边那半块变黄（左边是黑键）', false, '没找到 D 行')
+    check('白键高亮是 T 形：本格右侧那半块也变黄', false, '没找到 D 行')
   }
   /* ── 新画的音 = 最小绘制格（十六分音符 = 1/4 拍，用户 m04380） ── */
   await cdp.eval(`(() => { const s = window.__bp.getState(); s.setMode('draw'); s.setLoop(null); s.setLoopOn(false); s.setBpm(120); s.setView({ zoom: 1, panMs: 0 }) })()`)
@@ -1787,7 +1823,7 @@ try {
     const RULER_H = typeof m.rulerH === 'number' ? m.rulerH : 36
     const ROW_H = (window.__bpRoll && window.__bpRoll.rowH) || 14
     const x = r.x + r.width * 0.62
-    const want = s.view.panMs + ((x - r.x - m.left) / (m.w - m.left)) * (s.durationMs / s.view.zoom)
+    const want = s.view.panMs + ((x - r.x - m.left) / m.width) * (s.durationMs / s.view.zoom)
     return { x, y: r.y + RULER_H + Math.floor((m.rows || 20) * 0.55) * ROW_H + ROW_H / 2, want, cell: 60000 / s.bpm / 16 }
   })()`)
   const nBefore2 = await cdp.eval(`window.__bp.getState().notes.length`)
@@ -1849,7 +1885,7 @@ try {
     const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
     const n = st.notes.find((x) => x.id === ${JSON.stringify(noteId)})
     const span = st.durationMs / st.view.zoom
-    const xOf = (ms) => r.x + m.left + ((ms - st.view.panMs) / span) * (r.width - m.left)
+    const xOf = (ms) => r.x + m.left + ((ms - st.view.panMs) / span) * m.width
     const yOf = (midi) => r.y + m.rulerH + (m.top - midi) * 14 + 7
     return { x0: xOf(n.startMs), x1: xOf(n.endMs), y: yOf(n.midi), midi: n.midi }
   })()`)
@@ -2002,7 +2038,7 @@ try {
     const c = document.querySelector('.pane.roll canvas')
     const r = c.getBoundingClientRect()
     const span = s.durationMs / s.view.zoom
-    const x = KEY_W + ((1250 - s.view.panMs) / span) * (r.width - KEY_W)
+    const x = ((1250 - s.view.panMs) / span) * (r.width - KEY_W)
     const y = RULER_H + (top - 67) * ROW_H + ROW_H * ${frac}
     return { x: r.x + x, y: r.y + y }
   })()`)
@@ -2038,7 +2074,8 @@ try {
     const right = bar.querySelector('.tb-right')
     const byLabel = (root, label) => [...root.querySelectorAll('button')].find((b) => (b.getAttribute('aria-label') || '') === label)
     const groups = left ? [...left.querySelectorAll(':scope > span.tgroup')] : []
-    const fileGroup = groups[0]
+    /* 侧栏开关也放在左簇（品牌后面），所以第一个 tgroup 不是文件组：按内容找 */
+    const fileGroup = groups.find((g) => !!byLabel(g, '打开音频')) || groups[0]
     const br = bar.getBoundingClientRect()
     const play = bar.querySelector('.play-btn')
     const pr = play ? play.getBoundingClientRect() : null
@@ -2059,6 +2096,7 @@ try {
       utilBordered: utils.filter((u) => u.borderColor !== 'rgba(0, 0, 0, 0)').length,
       utilFilled: utils.filter((u) => u.bg !== 'rgba(0, 0, 0, 0)').length,
       utilOrder: [...bar.querySelectorAll('.tb-util .icon-btn')].map((b) => b.getAttribute('aria-label')),
+      leftLabels: left ? [...left.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') || '') : [],
       rateRightOfPlay: (() => {
         const el = bar.querySelector('.rate-slider')
         if (!el || !pr) return false
@@ -2171,16 +2209,18 @@ try {
     JSON.stringify(moreKeys),
   )
   check(
-    '右侧两颗图标按钮（帮助 + 侧栏）不画外框线',
+    '左侧栏开关与帮助都不画外框线（两颗图标按钮）',
     tb.utilCount === 2 && tb.utilBordered === 0 && tb.utilFilled === 0,
     JSON.stringify(tb),
   )
   check(
-    '右上角只剩帮助 + 侧栏两颗图标',
+    '左侧栏开关跟在品牌图标后面，帮助仍在右上角',
     Array.isArray(tb.utilOrder) &&
-      tb.utilOrder[0] === '按键与鼠标操作' &&
-      /右侧栏/.test(tb.utilOrder[1] || ''),
-    JSON.stringify(tb.utilOrder),
+      /左侧栏/.test(tb.utilOrder[0] || '') &&
+      tb.utilOrder[1] === '按键与鼠标操作' &&
+      Array.isArray(tb.leftLabels) &&
+      tb.leftLabels[0] === tb.utilOrder[0],
+    JSON.stringify({ utilOrder: tb.utilOrder, leftLabels: tb.leftLabels }),
   )
 
   /* ── 行高滑条 / 屏宽滑条（用户 m02483 第 1、2 条）：在「调节」页的「显示」组里 ── */
@@ -2827,7 +2867,7 @@ try {
     await cdp.eval(`document.querySelector('.record-mini [data-rec-action="side"]')?.click()`)
     await sleep(300)
     const sideAfter = await cdp.eval(`!!document.querySelector('.side') && !document.querySelector('.side.off')`)
-    check('录音小条的「右栏」能开 / 关右栏', sideBefore !== sideAfter, JSON.stringify({ sideBefore, sideAfter }))
+    check('录音小条的「左栏」能开 / 关左栏', sideBefore !== sideAfter, JSON.stringify({ sideBefore, sideAfter }))
     await cdp.eval(`document.querySelector('.record-mini [data-rec-action="side"]')?.click()`)
     await sleep(250)
 
@@ -2944,7 +2984,8 @@ try {
     )
   }
 
-  /* ── 窄屏顶栏（用户 2026-11-23）：只留 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 右栏，
+  /* ── 窄屏顶栏（用户 2026-11-23；2026-11-24 起左栏开关也在左簇）：
+        只留 左栏 / 菜单 / 录音 / 撤销·重做 / 回开头 / 播放 / 绘制·选择 / 原音·合成，
         其余按钮进左侧抽屉。用 CDP 把视口压到手机宽度（390×844），matchMedia 会跟着切。 ── */
   {
     /* 先把录音小条收起来，免得它压着顶栏量尺寸 */
@@ -2991,7 +3032,7 @@ try {
       JSON.stringify(before),
     )
     check(
-      '窄屏顶栏只留 品牌 + 菜单 / 录音 / 撤销·重做 /（播放 + 回开头）/ 绘制·选择 / 原音·合成 / 右栏',
+      '窄屏顶栏只留 品牌 + 左栏 / 菜单 / 录音 / 撤销·重做 /（播放 + 回开头）/ 绘制·选择 / 原音·合成',
       !!before &&
         before.hasMenu &&
         before.menuLabel === '菜单' &&
@@ -3012,18 +3053,19 @@ try {
       JSON.stringify(before && before.labels),
     )
 
-    /* 菜单按钮的位置（用户 2026-11-23 指定）：品牌图标在最左，菜单紧挨在它右边 */
+    /* 顶栏左簇顺序（用户 2026-11-24 指定）：品牌 → 左栏开关 → 菜单三横 */
     const brandOrder = await cdp.eval(`(() => {
       const left = document.querySelector('.toolbar.narrow .tb-left')
       if (!left) return null
       const kids = [...left.children]
       const brand = kids.findIndex((el) => el.classList.contains('brand'))
+      const side = kids.findIndex((el) => el.classList.contains('tb-util'))
       const menu = kids.findIndex((el) => el.hasAttribute('data-menu-btn'))
-      return { brand, menu, n: kids.length }
+      return { brand, side, menu, n: kids.length }
     })()`)
     check(
-      '菜单按钮在品牌图标的右侧',
-      !!brandOrder && brandOrder.brand === 0 && brandOrder.menu === 1,
+      '品牌图标在最左，紧跟左栏开关，再是菜单三横',
+      !!brandOrder && brandOrder.brand === 0 && brandOrder.side === 1 && brandOrder.menu === 2,
       JSON.stringify(brandOrder),
     )
 
@@ -3050,16 +3092,16 @@ try {
       }
     })()`)
     check(
-      '窄屏顶栏三段：左簇靠左，播放+回开头居中（回开头在播放后），绘制/原音与右栏靠右',
+      '窄屏顶栏三段：左簇靠左（品牌后是左栏开关），播放+回开头居中，绘制/原音靠右',
       !!align &&
-        align.left.length === 4 &&
-        ['菜单', '新建录音方案', '撤销', '重做'].every((l, i) => align.left[i] === l) &&
+        align.left.length === 5 &&
+        /左侧栏/.test(align.left[0] || '') &&
+        ['菜单', '新建录音方案', '撤销', '重做'].every((l, i) => align.left[i + 1] === l) &&
         align.center.length === 2 &&
         align.center[0] === '播放' &&
         align.center[1] === '回到开头' &&
-        align.right.length === 5 &&
+        align.right.length === 4 &&
         ['绘制', '选择（块选）', '原音频', '合成音'].every((l, i) => align.right[i] === l) &&
-        /右侧栏/.test(align.right[4] || '') &&
         Math.abs(align.centerCx - align.barCx) <= 2 &&
         align.barRight - align.lastRight <= 10,
       JSON.stringify(align),
@@ -3213,9 +3255,9 @@ try {
     await cdp.eval(`document.querySelector('.toolbar [data-rec-mic="1"]')?.click()`)
     await sleep(200)
 
-    /* 阈值 1240（用户 2026-11-23 实测 1100px 窗口不理想）：宽版顶栏要到 1240 才单行，
-     * 所以 ≤1240 一律走窄版三段；1241 起回宽版（且必须是一行，不能折成两行）。
-     * 1247 是用户实拍的那个宽度：宽版状态栏也不能"错行"（长快捷键提示在中等宽度隐藏）。 */
+    /* 阈值 1320（用户 2026-11-24：1100 / 1247px 窗口不理想；左栏开关又加宽了顶栏）：
+     * 宽版顶栏要到 1320 才单行，1300 仍折两行 —— 所以 ≤1320 一律走窄版三段；
+     * 1321 起回宽版（且必须是一行，不能折成两行）。 */
     const measureTop = `(() => {
       const b = document.querySelector('.toolbar')
       const s = document.querySelector('.status')
@@ -3229,17 +3271,17 @@ try {
         tipsHidden: tips ? getComputedStyle(tips).display === 'none' : null,
       }
     })()`
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1240, height: 900, deviceScaleFactor: 1, mobile: false })
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1320, height: 900, deviceScaleFactor: 1, mobile: false })
     await sleep(350)
     const atNarrowEdge = await cdp.eval(measureTop)
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1247, height: 900, deviceScaleFactor: 1, mobile: false })
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1340, height: 900, deviceScaleFactor: 1, mobile: false })
     await sleep(350)
     const atUserShot = await cdp.eval(measureTop)
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1300, height: 900, deviceScaleFactor: 1, mobile: false })
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1360, height: 900, deviceScaleFactor: 1, mobile: false })
     await sleep(350)
     const atWideEdge = await cdp.eval(measureTop)
     check(
-      '1240px 仍走窄版、1247/1300px 回宽版（宽版这时才排得成一行）',
+      '1320px 仍走窄版、1340/1360px 回宽版（宽版这时才排得成一行）',
       atNarrowEdge.narrow === true &&
         !atNarrowEdge.labels.includes('打开音频') &&
         atUserShot.narrow === false &&
@@ -3253,7 +3295,7 @@ try {
       }),
     )
     check(
-      '宽版（1247 / 1300）状态栏不错行：长的快捷键提示隐藏、整条 ≤ 两行',
+      '宽版（1340 / 1360）状态栏不错行：长的快捷键提示隐藏、整条 ≤ 两行',
       atUserShot.tipsHidden === true &&
         atUserShot.statusH <= 66 &&
         atWideEdge.tipsHidden === true &&
@@ -3261,7 +3303,7 @@ try {
       JSON.stringify({ 1247: atUserShot.statusH, 1300: atWideEdge.statusH, tips: atUserShot.tipsHidden }),
     )
 
-    /* 用户 2026-11-24：手机（窄屏）刷新后右栏仍然收起 —— 不读桌面记忆，也不覆盖它 */
+    /* 用户 2026-11-24：手机（窄屏）刷新后左栏仍然收起 —— 不读桌面记忆，也不覆盖它 */
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
     await cdp.eval('location.reload()')
     await sleep(900)
@@ -3271,7 +3313,7 @@ try {
       const el = document.querySelector('.side')
       return { off: !el || el.classList.contains('off'), stored: localStorage.getItem('bp.showSide') }
     })()`)
-    check('窄屏刷新后右栏仍默认收起（不跟桌面记忆、也不覆盖它）',
+    check('窄屏刷新后左栏仍默认收起（不跟桌面记忆、也不覆盖它）',
       !!mobileSide && mobileSide.off === true && mobileSide.stored === '1', JSON.stringify(mobileSide))
 
     /* 拉回宽屏：顶栏要恢复原样，抽屉相关的 DOM 不能残留 */

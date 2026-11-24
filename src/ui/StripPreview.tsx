@@ -33,8 +33,8 @@ interface Props {
 }
 
 const PAD_TOP = 26
-/** 左边留出与音符表键盘列等宽的空白，两个画布的时间刻度才对得上 */
-const LEFT = 66
+/** **右侧**留出与音符表键盘列等宽的空白（2026-11-24 键列挪到右边），两个画布的时间刻度才对得上 */
+const KEY_GUTTER = 66
 const RIGHT_PAD = 10
 
 export function StripPreview(props: Props) {
@@ -53,7 +53,7 @@ export function StripPreview(props: Props) {
   }, [])
 
   const xAt = useCallback(
-    (ms: number) => msToX(ms, props.view, props.durationMs, LEFT, Math.max(1, size.w - LEFT - RIGHT_PAD)),
+    (ms: number) => msToX(ms, props.view, props.durationMs, 0, Math.max(1, size.w - KEY_GUTTER - RIGHT_PAD)),
     [props.durationMs, props.view, size.w],
   )
 
@@ -65,7 +65,7 @@ export function StripPreview(props: Props) {
     }
     let alive = true
     const timer = window.setTimeout(() => {
-      const contentW = Math.max(1, size.w - LEFT - RIGHT_PAD)
+      const contentW = Math.max(1, size.w - KEY_GUTTER - RIGHT_PAD)
       const visibleMs = spanMs(props.view, props.durationMs)
       const pxPerBeat = beatMs(props.bpm) * (contentW / visibleMs)
       const img = buildStripImage({
@@ -114,9 +114,9 @@ export function StripPreview(props: Props) {
     g.setTransform(dpr, 0, 0, dpr, 0, 0)
     g.clearRect(0, 0, size.w, size.h)
 
-    /* 左侧留白（与音符表键盘列同宽），画成稍深一点，看起来是同一个坐标系 */
+    /* 右侧留白（与音符表键盘列同宽），画成稍深一点，看起来是同一个坐标系 */
     g.fillStyle = '#ece5d3'
-    g.fillRect(0, 0, LEFT, size.h)
+    g.fillRect(size.w - KEY_GUTTER, 0, KEY_GUTTER, size.h)
 
     const beat = beatMs(props.bpm)
     const barOpt = { beatsPerBar: props.beatsPerBar, pickupBeats: props.pickupBeats }
@@ -131,7 +131,7 @@ export function StripPreview(props: Props) {
     for (let b = 0; b <= bars; b++) {
       const ms = props.firstBeatMs + barStartTick(b, barOpt) * tickMs
       const x = xAt(ms)
-      if (x < LEFT - 1 || x > size.w + 1) continue
+      if (x < -1 || x > size.w - KEY_GUTTER + 1) continue
       g.fillText(String(b + 1), x + 3, PAD_TOP - 12)
     }
 
@@ -149,7 +149,7 @@ export function StripPreview(props: Props) {
     if (props.grid.length === 0) {
       g.fillStyle = 'rgba(60,60,60,0.45)'
       g.font = '12px ui-monospace, Consolas, monospace'
-      g.fillText('还没有确认的音符 —— 在上面的表格里点一下就是确认', LEFT + 4, size.h / 2 + 4)
+      g.fillText('还没有确认的音符 —— 在上面的表格里点一下就是确认', 4, size.h / 2 + 4)
     }
   }, [props, size, xAt])
 
@@ -157,7 +157,7 @@ export function StripPreview(props: Props) {
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       const rect = e.currentTarget.getBoundingClientRect()
       props.onSeek(
-        xToMs(e.clientX - rect.left, props.view, props.durationMs, LEFT, Math.max(1, size.w - LEFT - RIGHT_PAD)),
+        xToMs(e.clientX - rect.left, props.view, props.durationMs, 0, Math.max(1, size.w - KEY_GUTTER - RIGHT_PAD)),
       )
     },
     [props, size.w],

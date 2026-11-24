@@ -129,7 +129,7 @@ export const COPY = {
   recordGroup: '录音成谱',
   recordMic: '新建录音方案',
   recordMicTip:
-    '新建一个录音成谱方案：点一下在图标下出现录音小条（录音 / 暂停录音、停止、分析成谱、右栏）；当前方案有未保存修改时会先问一句',
+    '新建一个录音成谱方案：点一下在图标下出现录音小条（录音 / 暂停录音、停止、分析成谱、左栏）；当前方案有未保存修改时会先问一句',
   recordStart: '录音',
   recordStartTip: '开始录音：麦克风吹进来的声音会先缓存在内存里，停下来的空档可以按暂停',
   recordPause: '暂停录音',
@@ -140,8 +140,8 @@ export const COPY = {
   recordStopTip: '停止并把这段录音整理成可分析的音频（停止后才能分析成谱）',
   recordAnalyze: '分析成谱',
   recordAnalyzeTip: '对这段录音自动判音，把音符画到表格里并生成初稿（太吵的话先调「去谐波」再分析）',
-  recordSide: '右栏',
-  recordSideTip: '开 / 关右栏（调节 / 分析 / 设置）',
+  recordSide: '左栏',
+  recordSideTip: '开 / 关左侧栏（调节 / 分析 / 设置）',
   recordElapsedTip: '已录时长（暂停的时间不算）',
   recordSave: '保存录音音频和方案',
   recordSaveTip:

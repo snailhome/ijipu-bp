@@ -266,7 +266,8 @@ export function NoteRoll(props: Props) {
     const rows = Math.max(4, Math.min(MIDI_HIGH - MIDI_LOW + 1, Math.floor((size.h - RULER_H) / rowH)))
     /* 顶行不能低到露不出最后一行，也不能高过 C8 */
     const top = Math.max(MIDI_LOW + rows - 1, Math.min(MIDI_HIGH, Math.round(topRow)))
-    return { w: size.w, h: size.h, left: KEY_W, width: Math.max(80, size.w - KEY_W), top, rows }
+    /* 表格区从 0 开始，**右侧**留 KEY_W 给钢琴键盘（用户 2026-11-24 把键列挪到右边） */
+    return { w: size.w, h: size.h, left: 0, width: Math.max(80, size.w - KEY_W), top, rows }
   }, [size, topRow, rowH])
 
   /* 把"现在第一行是哪一音"记回 store（App 再落到 localStorage / 方案外的界面状态）：
@@ -294,8 +295,8 @@ export function NoteRoll(props: Props) {
   useEffect(() => {
     if (!import.meta.env.DEV) return
     const w = window as unknown as { __bpRoll?: Record<string, unknown> }
-    w.__bpRoll = { ...metrics, rulerH: RULER_H, rowH, midiAt: (y: number) => midiAt(y) }
-  }, [metrics, rowH, midiAt])
+    w.__bpRoll = { ...metrics, rulerH: RULER_H, rowH, midiAt: (y: number) => midiAt(y), pressMidi }
+  }, [metrics, rowH, midiAt, pressMidi])
   const xAt = useCallback(
     (ms: number) => msToX(ms, view, durationMs, metrics.left, metrics.width),
     [durationMs, metrics.left, metrics.width, view],
@@ -612,20 +613,23 @@ export function NoteRoll(props: Props) {
       }
     }
 
-    /* 8) 左侧钢琴键盘（用户 m04234 的口径）
-     *  · 从左侧看：白键一个挨一个、**高度全都一样**，横向分界线只出现在"两个白键相接"处
-     *    （E|F、B|C）—— 别的地方不该有线，否则看着像梯子
-     *  · 从右侧看：黑键和白键露出的那一格**高度也一样**，黑键右侧贴住键列右边缘、整行高
-     *  · 数字模式：在当前调式的音级上，靠左侧白格内写简谱数字（带八度点）；音名模式照旧标 C */
+    /* 8) 右侧钢琴键盘（用户 2026-11-24：从左侧挪到**右侧**并**左右镜像** ——
+     *    手机横过来看时正好符合"左边低、右边高"的钢琴习惯）：
+     *  · 镜像后黑键贴**左**（靠近表格那一侧），白键的"脚"在左、伸进黑键格的半块在右
+     *  · 白键高度一律相同，横向分界线只出现在两个白键相接处（E|F、B|C）
+     *  · 数字模式：在当前调式的音级上写简谱数字（带八度点）；音名模式照旧标 C */
+    const KEY_X = metrics.w - KEY_W
     const KEY_BLACK_W = Math.round(KEY_W * 0.62)
-    const KEY_BLACK_X = KEY_W - KEY_BLACK_W
+    /* 黑键贴左缘（靠表格）；白键"脚"占左边这截，伸进黑键格的那半块在右边 */
+    const KEY_BLACK_X = KEY_X
+    const KEY_WHITE_X = KEY_X + KEY_BLACK_W
     g.fillStyle = '#ffffff'
-    g.fillRect(0, RULER_H, KEY_W, metrics.h - RULER_H)
+    g.fillRect(KEY_X, RULER_H, KEY_W, metrics.h - RULER_H)
 
-    /* 白键不是矩形：它的左半边会伸进相邻黑键格里的一半，于是长成 L / J / T 三种形状
-     * （用户 m05078）。这里算白键左块的上/下边界：
+    /* 白键不是矩形：它的右半边会伸进相邻黑键格里的一半，于是长成 L / J / T 三种形状
+     * （镜像自原来左侧那套，用户 m05078 / 2026-11-24）。这里算白键右块的上/下边界：
      *   上方是黑键 → 到那条黑键的竖直中心为止；上方是白键（E|F、B|C）→ 到本格上边界
-     *   下方同理。黑键只占右侧 62%，所以左块不会压到黑键。 */
+     *   下方同理。黑键只占左侧 62%，所以右块不会压到黑键。 */
     const bandOf = (cls: number, top: number) => {
       const up = (cls + 1) % 12
       const down = (cls + 11) % 12
@@ -636,8 +640,8 @@ export function NoteRoll(props: Props) {
 
     const fillWhiteKey = (cls: number, y: number) => {
       const { t, b } = bandOf(cls, y)
-      g.fillRect(0, t, KEY_BLACK_X, b - t) // 左块（伸进黑键格的一半）
-      g.fillRect(KEY_BLACK_X, y, KEY_BLACK_W, rowH) // 本格右边那截（L/J/T 的"脚"）
+      g.fillRect(KEY_WHITE_X, t, KEY_W - KEY_BLACK_W, b - t) // 右块（伸进黑键格的一半）
+      g.fillRect(KEY_BLACK_X, y, KEY_BLACK_W, rowH) // 本格左边那截（L/J/T 的"脚"）
     }
 
     for (let r = 0; r < metrics.rows; r++) {
@@ -650,10 +654,10 @@ export function NoteRoll(props: Props) {
       const lit = pressMidi === midi ? 1 : hoverMidi === midi ? 0.85 : 0
       const litFill = lit >= 1 ? '#ffc83c' : '#f2b53c'
       if (BLACK.has(cls)) {
-        /* 黑键：I 形，右侧贴边、整行高（用户 m04792 第一条） */
+        /* 黑键：I 形，左侧贴边、整行高（镜像后圆角在右侧） */
         g.fillStyle = lit > 0 ? litFill : '#000000'
         g.beginPath()
-        g.roundRect(KEY_BLACK_X, y, KEY_BLACK_W, rowH, [2, 0, 0, 2])
+        g.roundRect(KEY_BLACK_X, y, KEY_BLACK_W, rowH, [0, 2, 2, 0])
         g.fill()
       } else if (lit > 0) {
         g.fillStyle = litFill
@@ -661,16 +665,16 @@ export function NoteRoll(props: Props) {
       }
     }
 
-    /* 分界线画在高亮之上：黑键行在它竖直中心画一条短线（两个白键的分界藏在黑键中间），
-     * E|F 与 B|C 之间没有黑键，整格通栏（画在 E / B 的上边界 —— 行是往下走的，用户 m04987） */
+    /* 分界线画在高亮之上：黑键行在它竖直中心画一条短线（从黑键右缘到键盘右缘），
+     * E|F 与 B|C 之间没有黑键，整格通栏（画在 E / B 的上边界 —— 行是往下走的） */
     for (let r = 0; r < metrics.rows; r++) {
       const midi = metrics.top - r
       if (midi < MIDI_LOW) break
       const y = RULER_H + r * rowH
       const cls = ((midi % 12) + 12) % 12
       g.fillStyle = 'rgba(0,0,0,0.45)'
-      if (BLACK.has(cls)) g.fillRect(0, y + rowH / 2 - 0.5, KEY_BLACK_X, 1)
-      else if (cls === 4 || cls === 11) g.fillRect(0, y - 0.5, KEY_W, 1)
+      if (BLACK.has(cls)) g.fillRect(KEY_WHITE_X, y + rowH / 2 - 0.5, KEY_W - KEY_BLACK_W, 1)
+      else if (cls === 4 || cls === 11) g.fillRect(KEY_X, y - 0.5, KEY_W, 1)
     }
 
     for (let r = 0; r < metrics.rows; r++) {
@@ -703,21 +707,20 @@ export function NoteRoll(props: Props) {
       const text =
         props.pitchMode === 'number' ? midiToNumber(midi, props.tonic).text : cls === 0 || midi === MIDI_LOW ? midiToName(midi) : ''
       if (text) {
-        g.strokeText(text, 5, cy)
-        g.fillText(text, 5, cy)
+        g.strokeText(text, KEY_WHITE_X + 5, cy)
+        g.fillText(text, KEY_WHITE_X + 5, cy)
       }
     }
     g.fillStyle = 'rgba(8,12,18,0.9)'
-    g.fillRect(KEY_W - 1, RULER_H, 1, metrics.h - RULER_H)
-    /* 8.5) 时间尺左边那格：当前调号（形如 1=bB，用户 m04234）+ 右边一把锁（用户 m05515） */
+    g.fillRect(KEY_X - 1, RULER_H, 1, metrics.h - RULER_H)
+    /* 8.5) 键盘列顶部那格：当前调号（形如 1=bB）+ 右边一把锁 */
     g.fillStyle = 'rgba(170,205,240,0.92)'
     g.font = '700 13px ui-monospace, Consolas, monospace'
     g.textBaseline = 'middle'
-    g.fillText(`1=${keyLabel(props.tonic)}`, 5, RULER_H / 2)
+    g.fillText(`1=${keyLabel(props.tonic)}`, KEY_X + 5, RULER_H / 2)
 
-    /* 锁图标：锁上时实心、开锁时淡一点；点它切"锁住竖着换音区"。
-     * 位置固定在调号右边（键列右上角），命中区在下面 pointerdown 里按 LOCK_BOX 判。 */
-    const lx = KEY_W - 14
+    /* 锁图标：镜像后仍在键盘列**右上角**；命中区在 pointerdown 里按"右缘 -22..-2"判。 */
+    const lx = metrics.w - 14
     const ly = RULER_H / 2
     g.strokeStyle = props.lockPitch ? 'rgba(255,206,64,0.95)' : 'rgba(150,180,215,0.75)'
     g.fillStyle = props.lockPitch ? 'rgba(255,206,64,0.95)' : 'rgba(150,180,215,0.55)'
@@ -726,9 +729,9 @@ export function NoteRoll(props: Props) {
     g.beginPath()
     g.roundRect(lx - 5, ly - 1, 10, 7, 1.5)
     g.fill()
-    /* 锁梁（锁上时闭合、开锁时偏到一侧） */
+    /* 锁梁（锁上时闭合、开锁时偏到一侧 —— 镜像后偏右） */
     g.beginPath()
-    g.arc(lx - (props.lockPitch ? 0 : 3), ly - 2.5, 3, Math.PI, 0)
+    g.arc(lx + (props.lockPitch ? 0 : 3), ly - 2.5, 3, Math.PI, 0)
     g.stroke()
     /* 9) 播放头 */
     const px = xAt(playMs)
@@ -873,8 +876,8 @@ export function NoteRoll(props: Props) {
       const draw = mode === 'draw' || altHeld || e.altKey
 
       if (y < RULER_H) {
-        /* 键列右上角那把锁：只切"锁住竖着换音区"，不挪播放头（用户 m05515） */
-        if (x >= KEY_W - 22 && x <= KEY_W - 2) {
+        /* 键盘列右上角那把锁（键列在右侧，用户 2026-11-24）：只切"锁住竖着换音区"，不挪播放头 */
+        if (x >= metrics.w - 22 && x <= metrics.w - 2) {
           props.onToggleLock()
           return
         }
@@ -885,7 +888,7 @@ export function NoteRoll(props: Props) {
         return
       }
 
-      if (x < KEY_W) {
+      if (x >= metrics.w - KEY_W) {
         const midi = midiAt(y)
         if (midi >= MIDI_LOW && midi <= MIDI_HIGH) {
           props.onAudition(midi)
@@ -967,7 +970,7 @@ export function NoteRoll(props: Props) {
       })
       drag.current = { kind: 'create', id, startMs, moved: false }
     },
-    [msAt, midiAt, mode, altHeld, noteAt, props, xAt, metrics.top, metrics.rows],
+    [msAt, midiAt, mode, altHeld, noteAt, props, xAt, metrics.top, metrics.rows, metrics.w],
   )
 
   const onPointerMove = useCallback(
@@ -1143,7 +1146,7 @@ export function NoteRoll(props: Props) {
    * 就在 pointermove 里按命中区域算一句"这里能干什么"，跟鼠标一起走。 */
   const hoverTip = useMemo(() => {
     if (hoverX === null || hoverY === null || hoverY >= RULER_H) return null
-    if (hoverX >= KEY_W - 22 && hoverX <= KEY_W - 2) {
+    if (hoverX >= metrics.w - 22 && hoverX <= metrics.w - 2) {
       return {
         name: props.lockPitch ? '键区锁（已锁住）' : '键区锁（未锁）',
         key: 'Ctrl+L',
@@ -1155,12 +1158,12 @@ export function NoteRoll(props: Props) {
       key: '',
       desc: '按住往右拖：圈出播放区间（自动循环）；点一下：挪播放头并取消区间',
     }
-  }, [hoverX, hoverY, props.lockPitch])
+  }, [hoverX, hoverY, props.lockPitch, metrics.w])
 
   /** 选择框的像素矩形（用户 2026-11-22）：列选铺满高度、行选铺满宽度；坐标夹在内容区里 */
   const selRect = (() => {
     if (!selBox) return null
-    const cx = (v: number) => Math.max(KEY_W, Math.min(metrics.w, v))
+    const cx = (v: number) => Math.max(metrics.left, Math.min(metrics.w, v))
     const cy = (v: number) => Math.max(RULER_H, Math.min(metrics.h, v))
     const x0 = Math.min(cx(selBox.x0), cx(selBox.x1))
     const x1 = Math.max(cx(selBox.x0), cx(selBox.x1))
@@ -1170,7 +1173,7 @@ export function NoteRoll(props: Props) {
       return { left: x0, top: RULER_H, width: Math.max(1, x1 - x0), height: Math.max(0, metrics.h - RULER_H) }
     }
     if (selBox.mode === 'row') {
-      return { left: KEY_W, top: y0, width: Math.max(0, metrics.w - KEY_W), height: Math.max(1, y1 - y0) }
+      return { left: metrics.left, top: y0, width: Math.max(0, metrics.width), height: Math.max(1, y1 - y0) }
     }
     return { left: x0, top: y0, width: Math.max(1, x1 - x0), height: Math.max(1, y1 - y0) }
   })()
@@ -1239,7 +1242,7 @@ export function NoteRoll(props: Props) {
       </div>
       {notes.length === 0 && (
         /* 空表格提示只占**键盘右边**的谱面区（用户 2026-11-23：以前整块居中，文字压到键盘列上） */
-        <div className="pane-empty" style={{ left: KEY_W }}>
+        <div className="pane-empty" style={{ left: 0, right: KEY_W }}>
           {props.midiMode
             ? '还没有音符：导入一个 MIDI，或切到「绘制」（反引号键）在格子里点几下'
             : spectrum

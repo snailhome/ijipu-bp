@@ -659,7 +659,7 @@ const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
       ['录音 / 暂停录音', '开始采集；暂停的空档不会进音频，再点继续'],
       ['停止录音', '把这段录音整理成可分析的音频'],
       ['分析成谱', '对录音自动判音，画到表格里并生成初稿'],
-      ['右栏', '开 / 关右侧栏（调节 / 分析 / 设置）'],
+      ['左栏', '开 / 关左侧栏（调节 / 分析 / 设置）'],
       ['保存方案', '先选一个 .wav 存音频，再把方案写到它旁边；录音只在内存里，记得存'],
     ],
   },
@@ -702,7 +702,7 @@ const HELP_SECTIONS: Array<{ title: string; rows: Array<[string, string]> }> = [
       ['拖时间尺', '框播放区间；点一下 = 取消区间并挪播放头'],
       ['拖区间两端握柄', '改区间起止'],
       ['右栏滑条上滚轮', '微调这条滑条（按住 Shift 五倍步长）'],
-      ['Ctrl + ]', '收起 / 展开右侧栏'],
+      ['Ctrl + ]', '收起 / 展开左侧栏'],
       ['Ctrl + L', '锁定 / 解锁钢琴键盘的上下换音区'],
       ['Alt + S', '把焦点移到播放速度滑条（再用 ← → 调）'],
       ['F1', '打开 / 关闭这个帮助面板'],
@@ -771,12 +771,12 @@ function SideGroup({
  * 否则两套 DOM 会抢 `querySelector`（探针按 aria-label 点按钮会点到抽屉里那份，
  * 而抽屉平时是关着的）。宽度一变就重渲染，顶栏与抽屉切换是原子的。
  *
- * 1240px 的来历（用户 2026-11-23 实测：1100px 的窗口"顶栏和状态栏都不太理想"）：
- * 宽版顶栏要到 **1240** 才排得成单行（1200 仍折成两行、85px 高 —— 左簇的撤销/重做
- * 被挤到第二行），状态栏在 1100 也被迫换行。所以 ≤1240 一律走窄版三段 + 抽屉；
- * 手机横屏（844/896/926）自然也在这一档里。
+ * 1320px 的来历（用户 2026-11-24 实测：1100px、1247px 的窗口"顶栏和状态栏都不太理想"）：
+ * 宽版顶栏要到 **1320** 才排得成单行（1300 仍折成两行、85px 高 —— 左簇的撤销/重做
+ * 被挤到第二行；2026-11-24 又把左栏开关加到品牌后面，整体更宽了一点），状态栏也会被迫换行。
+ * 所以 ≤1320 一律走窄版三段 + 抽屉；手机横屏（844/896/926）自然也在这一档里。
  */
-const NARROW_TOPBAR_PX = 1240
+const NARROW_TOPBAR_PX = 1320
 
 function useNarrowTopbar(): boolean {
   const query = `(max-width: ${NARROW_TOPBAR_PX}px)`
@@ -1075,6 +1075,19 @@ export default function App() {
       /* 隐私模式：记不住不影响用 */
     }
   }, [showSide, narrow])
+
+  /* 左栏开关（用户 2026-11-24：侧栏从右挪到左、图标左右镜像、按钮跟在品牌图标后面） */
+  const sideToggleBtn = (
+    <button
+      className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}
+      onClick={() => setShowSide((v) => !v)}
+      title={showSide ? '把左侧栏收起来，给看谱多留点地方' : '把左侧栏展开（调节 / 分析 / 设置）'}
+      aria-label={showSide ? '收起左侧栏' : '展开左侧栏'}
+      data-key="Ctrl+]"
+    >
+      <span className="side-toggle-icon" />
+    </button>
+  )
 
   /* 音频上下文提前预热（用户 2026-11-23：手机上点键盘"声音总慢半拍"）。
    * ① 应用挂载就建好 AudioContext（此时 suspended，不发声）；
@@ -3034,6 +3047,10 @@ export default function App() {
                 <small>{APP_VERSION}</small>
               </span>
             </span>
+            {/* 左栏开关紧跟品牌图标（用户 2026-11-24 指定），再是菜单 */}
+            <span className="tgroup tb-util" title="左侧栏">
+              {sideToggleBtn}
+            </span>
             <button
               className={menuOpen ? 'icon-btn menu-btn on' : 'icon-btn menu-btn'}
               onClick={() => setMenuOpen((v) => !v)}
@@ -3100,21 +3117,10 @@ export default function App() {
               </button>
             </span>
           </div>
-          {/* 右簇：绘制/选择、原音/合成、右栏，一起靠右 */}
+          {/* 右簇：绘制/选择、原音/合成，一起靠右（左栏开关已挪到品牌后面） */}
           <div className="tb-side tb-right">
             {modeSeg}
             {sourceSeg}
-            <span className="tgroup tb-util" title="侧栏">
-              <button
-                className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}
-                onClick={() => setShowSide((v) => !v)}
-                title={showSide ? '把右侧栏收起来，给看谱多留点地方' : '把右侧栏展开（调节 / 分析 / 设置）'}
-                aria-label={showSide ? '收起右侧栏' : '展开右侧栏'}
-                data-key="Ctrl+]"
-              >
-                <span className="side-toggle-icon" />
-              </button>
-            </span>
           </div>
         </div>
       )}
@@ -3143,6 +3149,11 @@ export default function App() {
                 {COPY.appNameEn} {APP_VERSION}
               </small>
             </span>
+          </span>
+
+          {/* 左栏开关跟在品牌图标后面（用户 2026-11-24 指定） */}
+          <span className="tgroup tb-util" title="左侧栏">
+            {sideToggleBtn}
           </span>
 
           {/* 文件操作（用户 m02483 第 5 条，习惯上放最前面）：
@@ -3407,9 +3418,9 @@ export default function App() {
 
           {/* 撤销 / 重做 已挪到全选 / 全不选后面（用户 m02483） */}
 
-          {/* 帮助 + 右栏开关（用户 m02483）：右栏只留一颗图标，三个页签在栏内切换 */}
-          <span className="tgroup tb-util" title="帮助 / 侧栏">
-            {/* 帮助：按键 / 快捷键 / 鼠标操作（用户 m05893） */}
+          {/* 帮助（用户 m05893）；左栏开关已挪到品牌图标后面（用户 2026-11-24） */}
+          <span className="tgroup tb-util" title="帮助">
+            {/* 帮助：按键 / 快捷键 / 鼠标操作 */}
             <button
               className={helpOpen ? 'icon-btn on' : 'icon-btn'}
               onClick={() => setHelpOpen(true)}
@@ -3425,17 +3436,6 @@ export default function App() {
                 <rect x="11.2" y="6" width="1.6" height="1.6" fill="currentColor" />
                 <rect x="4.6" y="9" width="6.8" height="1.5" rx="0.5" fill="currentColor" />
               </svg>
-            </button>
-            {/* 右侧栏开关：图标与 iJipu BP 的兄弟项目「爱出片」用同一个
-                （public/icons/右侧边栏.svg，靠 CSS mask 上色，打开=亮、收起=灰） */}
-            <button
-              className={showSide ? 'icon-btn side-toggle' : 'icon-btn side-toggle off'}
-              onClick={() => setShowSide((v) => !v)}
-              title={showSide ? '把右侧栏收起来，给看谱多留点地方' : '把右侧栏展开（调节 / 分析 / 设置）'}
-              aria-label={showSide ? '收起右侧栏' : '展开右侧栏'}
-              data-key="Ctrl+]"
-            >
-              <span className="side-toggle-icon" />
             </button>
           </span>
         </div>
@@ -3457,12 +3457,12 @@ export default function App() {
         />
       )}
 
-      <div className={showSide ? "body" : "body noside"} style={showSide ? ({ gridTemplateColumns: `minmax(0,1fr) ${sideW}px`, "--side-w": `${sideW}px` } as React.CSSProperties) : undefined}>
-        {/* 右栏宽度拖拽条（用户 m07044）：只在右栏打开时出现 */}
+      <div className={showSide ? "body" : "body noside"} style={showSide ? ({ gridTemplateColumns: `${sideW}px minmax(0,1fr)`, "--side-w": `${sideW}px` } as React.CSSProperties) : undefined}>
+        {/* 左栏宽度拖拽条（用户 m07044；2026-11-24 挪到左边）：只在左栏打开时出现 */}
         {showSide && (
           <div
             className="side-resize"
-            title="拖动调整右栏宽度（双击恢复 300）"
+            title="拖动调整左栏宽度（双击恢复 300）"
             onDoubleClick={() => {
               setSideW(300)
               if (typeof localStorage !== 'undefined') localStorage.setItem('bp.sideW', '300')
@@ -3472,7 +3472,8 @@ export default function App() {
               const startX = e.clientX
               const startW = sideW
               const move = (ev: PointerEvent) => {
-                const w = Math.min(760, Math.max(240, startW - (ev.clientX - startX)))
+                /* 左栏在左边：往右拖 = 加宽 */
+                const w = Math.min(760, Math.max(240, startW + (ev.clientX - startX)))
                 setSideW(w)
               }
               const up = () => {
@@ -3557,7 +3558,7 @@ export default function App() {
           style={{ width: sideW }}
         >
           {/* 右栏内的三个页签（用户 m02483）：调节 / 分析 / 设置，各带图标；顶栏只留一颗开关图标 */}
-          <div className="side-tabs" role="tablist" aria-label="右侧栏">
+          <div className="side-tabs" role="tablist" aria-label="左侧栏">
             {(
               [
                 ['edit', '调节', 'tune', '吸附、调号、生成参数、jps 源码'],
