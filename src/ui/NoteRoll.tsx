@@ -211,8 +211,10 @@ export function NoteRoll(props: Props) {
       ? Math.max(6, (size.h - RULER_H) / (BAND_HIGH - BAND_LOW + 1))
       : props.rowH
   /* 第一行的音高（不是"中心音高"）：用户 m02483 要求记住"锁定/上下滑动后第一行是哪一音"，
-   * 所以这里直接以顶行为状态，滚动 / 改行高 / 重开都按它恢复。 */
-  const [topRow, setTopRow] = useState(props.topMidi)
+   * 所以这里直接以顶行为状态，滚动 / 改行高 / 重开都按它恢复。
+   * 2026-11-24：勾了「只看人声区」且是首开时，默认顶行 = 人声区最高音（C6）——
+   * 只是**默认位置**，之后滚轮/键盘上下拖照样能换（不锁死）。 */
+  const [topRow, setTopRow] = useState(() => (props.bandOnly ? BAND_HIGH : props.topMidi))
   const [hoverMidi, setHoverMidi] = useState<number | null>(null)
   /* 按下未松的琴键：整格高亮成黄色（用户 m04380） */
   const [pressMidi, setPressMidi] = useState<number | null>(null)
@@ -225,6 +227,14 @@ export function NoteRoll(props: Props) {
   /* 选择框（用户 2026-11-22）：像素坐标 + 当前模式，画成绝对定位的半透明层 */
   const [selBox, setSelBox] = useState<{ x0: number; y0: number; x1: number; y1: number; mode: SelMode } | null>(null)
   const drag = useRef<Drag | null>(null)
+  /* 手机：手指刚按下（touchstart）就先响，不等 pointerdown/click（用户 2026-11-24：
+   * "点击还有延迟"）。只做"试听"这一件事，不改选择/绘制状态；pointerdown 里用
+   * `seenOnTouch` 去重，避免同一次触摸响两次。 */
+  const lastTouchAudition = useRef<{ midi: number; at: number } | null>(null)
+  const seenOnTouch = useCallback((midi: number): boolean => {
+    const l = lastTouchAudition.current
+    return !!l && l.midi === midi && performance.now() - l.at < 300
+  }, [])
   /* 同一行里重叠的音要上下错开（用户 m00741）：车道算法在 noteLanes.ts，画和点共用同一份 */
   const lanes = useMemo(() => assignLanes(notes), [notes])
 
@@ -273,15 +283,14 @@ export function NoteRoll(props: Props) {
     return { lo, span: hi - lo > 1e-6 ? hi - lo : 1 }
   }, [spectrum])
   const metrics = useMemo<Metrics>(() => {
-    /* 只看人声区（用户 2026-11-24）：行数固定成人声区的 30 个半音，顶行固定 C6，
-     * 行高由上面自适应算出来 —— 键盘区正好铺满，显示范围就是 G3–C6。 */
+    /* 只看人声区（用户 2026-11-24）：**行数固定成人声区的 30 个半音、行高自适应**铺满，
+     * 但顶行不锁死 —— 默认从 C6 开始，滚轮 / 键盘上下拖照样能换显示位置（用户反馈：
+     * "调整后键盘解锁了也没办法滚动调整显示位置"）。 */
     const rows = props.bandOnly
       ? BAND_HIGH - BAND_LOW + 1
       : Math.max(4, Math.min(MIDI_HIGH - MIDI_LOW + 1, Math.floor((size.h - RULER_H) / rowH)))
     /* 顶行不能低到露不出最后一行，也不能高过 C8 */
-    const top = props.bandOnly
-      ? BAND_HIGH
-      : Math.max(MIDI_LOW + rows - 1, Math.min(MIDI_HIGH, Math.round(topRow)))
+    const top = Math.max(MIDI_LOW + rows - 1, Math.min(MIDI_HIGH, Math.round(topRow)))
     /* 表格区从 0 开始，**右侧**留 KEY_W 给钢琴键盘（用户 2026-11-24 把键列挪到右边） */
     return { w: size.w, h: size.h, left: 0, width: Math.max(80, size.w - KEY_W), top, rows }
   }, [size, topRow, rowH, props.bandOnly])
@@ -291,10 +300,8 @@ export function NoteRoll(props: Props) {
   const onTopRef = useRef(props.onTopMidi)
   onTopRef.current = props.onTopMidi
   useEffect(() => {
-    /* 只看人声区时顶行固定 C6，别把它写回 store 覆盖用户上次的音区 */
-    if (props.bandOnly) return
     if (metrics.w > 0) onTopRef.current(metrics.top)
-  }, [metrics.top, metrics.w, props.bandOnly])
+  }, [metrics.top, metrics.w])
 
   const rowTop = useCallback(
     (midi: number) => RULER_H + (metrics.top - midi) * rowH,
@@ -880,6 +887,32 @@ export function NoteRoll(props: Props) {
     [lanes, midiAt, notes, rowTop, xAt],
   )
 
+  /* 手机触摸：touchstart 一按下就往音频线程排一声（比 pointerdown/click 早），
+   * 覆盖"点键盘"和"点已有音符"两种试听；空白处/绘制/选择仍交给 pointerdown 处理。 */
+  useEffect(() => {
+    const cv = canvasRef.current
+    if (!cv) return
+    const onTouch = (e: TouchEvent) => {
+      const t = e.touches[0]
+      if (!t) return
+      const rect = cv.getBoundingClientRect()
+      const x = t.clientX - rect.left
+      const y = t.clientY - rect.top
+      if (y < RULER_H) return
+      let midi: number | null = null
+      if (x >= metrics.w - KEY_W) midi = midiAt(y)
+      else {
+        const hit = noteAt(x, y)
+        if (hit) midi = hit.midi
+      }
+      if (midi == null || midi < MIDI_LOW || midi > MIDI_HIGH) return
+      lastTouchAudition.current = { midi, at: performance.now() }
+      props.onAudition(midi)
+    }
+    cv.addEventListener('touchstart', onTouch, { passive: true })
+    return () => cv.removeEventListener('touchstart', onTouch)
+  }, [metrics.w, midiAt, noteAt, props])
+
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
       /* 用户 2026-11-23：手指一按下就把音频上下文叫醒（点钢琴键"发音延迟"——
@@ -894,8 +927,9 @@ export function NoteRoll(props: Props) {
       const draw = mode === 'draw' || altHeld || e.altKey
 
       if (y < RULER_H) {
-        /* 键盘列右上角那把锁（键列在右侧，用户 2026-11-24）：只切"锁住竖着换音区"，不挪播放头 */
-        if (x >= metrics.w - 22 && x <= metrics.w - 2) {
+        /* 键盘列右上角那把锁（键列在右侧，用户 2026-11-24）：命中区放宽到 34px ——
+         * 手机上手指粗，20px 太难点（用户反馈"键盘锁定无法使用"） */
+        if (x >= metrics.w - 34 && x <= metrics.w - 2) {
           props.onToggleLock()
           return
         }
@@ -909,7 +943,7 @@ export function NoteRoll(props: Props) {
       if (x >= metrics.w - KEY_W) {
         const midi = midiAt(y)
         if (midi >= MIDI_LOW && midi <= MIDI_HIGH) {
-          props.onAudition(midi)
+          if (!seenOnTouch(midi)) props.onAudition(midi)
           /* 按下时这一格高亮成黄色，松手/移出就灭（用户 m04380） */
           setPressMidi(midi)
           /* 未锁定（`lockPitch` 关）时，按住上下拖 = 上下换音区（用户 2026-11-23，
@@ -937,7 +971,7 @@ export function NoteRoll(props: Props) {
          * 点一个没选中的音才按当前模式重选。 */
         const inGroup = props.selectedIds.length > 1 && props.selectedIds.includes(hit.id)
         if (!inGroup) props.onSelect(hit.id)
-        props.onAudition(hit.midi)
+        if (!seenOnTouch(hit.midi)) props.onAudition(hit.midi)
         props.onSeek(hit.startMs)
         const group = inGroup
           ? props.notes
@@ -1164,7 +1198,7 @@ export function NoteRoll(props: Props) {
    * 就在 pointermove 里按命中区域算一句"这里能干什么"，跟鼠标一起走。 */
   const hoverTip = useMemo(() => {
     if (hoverX === null || hoverY === null || hoverY >= RULER_H) return null
-    if (hoverX >= metrics.w - 22 && hoverX <= metrics.w - 2) {
+    if (hoverX >= metrics.w - 34 && hoverX <= metrics.w - 2) {
       return {
         name: props.lockPitch ? '键区锁（已锁住）' : '键区锁（未锁）',
         key: 'Ctrl+L',

@@ -255,6 +255,38 @@ try {
       bandBoot.rows === 30 &&
       Math.abs(bandBoot.rowH - expectBandRowH) <= 0.6,
     JSON.stringify({ ...bandBoot, expectRowH: Math.round(expectBandRowH * 10) / 10 }))
+  /* 用户 2026-11-24：勾着「只看人声区」也不能**锁死显示位置** —— 滚轮 / 键盘上下拖都能换，
+     锁定时才不动（之前顶行固定 C6，用户反馈"解锁了也滚不动"）。 */
+  const bandCanvas = await cdp.eval(`(() => {
+    const cv = document.querySelector('.pane.roll canvas')
+    const r = cv.getBoundingClientRect()
+    const m = window.__bpRoll
+    return {
+      cx: r.x + r.width * 0.5, cy: r.y + r.height * 0.5,
+      kx: r.x + r.width - 40, ky: r.y + m.rulerH + 4 * m.rowH + m.rowH / 2,
+      top: m.top, rowH: m.rowH,
+    }
+  })()`)
+  await cdp.wheelAt(bandCanvas.cx, bandCanvas.cy, 120)
+  await sleep(250)
+  const bandAfterWheel = await cdp.eval(`window.__bpRoll.top`)
+  check('只看人声区时滚轮仍能换显示位置（不锁死在 C6）',
+    bandAfterWheel === bandCanvas.top - 2, `top ${bandCanvas.top} → ${bandAfterWheel}`)
+  await cdp.dragAt(bandCanvas.kx, bandCanvas.ky, bandCanvas.kx, bandCanvas.ky + bandCanvas.rowH * 2, 5)
+  await sleep(300)
+  const bandAfterDrag = await cdp.eval(`window.__bpRoll.top`)
+  check('只看人声区时在键盘上按住上下拖也能换显示位置',
+    bandAfterDrag === bandAfterWheel - 2, `top ${bandAfterWheel} → ${bandAfterDrag}`)
+  await cdp.eval(`window.__bp.getState().setLockPitch(true)`)
+  await sleep(200)
+  await cdp.wheelAt(bandCanvas.cx, bandCanvas.cy, 120)
+  await sleep(250)
+  const bandLockedTop = await cdp.eval(`window.__bpRoll.top`)
+  check('锁定时滚轮不换显示位置（锁的语义不变）',
+    bandLockedTop === bandAfterDrag, `top ${bandAfterDrag} → ${bandLockedTop}`)
+  await cdp.eval(`window.__bp.getState().setLockPitch(false)`)
+  await sleep(200)
+
   /* 后面的用例大量按"普通音区 + 可调行高(rowH=14)"算坐标，先取消勾选回到旧行为 */
   await cdp.eval(`window.__bp.getState().setBandOnly(false)`)
   await sleep(300)

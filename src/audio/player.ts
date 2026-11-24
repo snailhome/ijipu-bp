@@ -51,8 +51,11 @@ let beatBuffer: AudioBuffer | null = null
  */
 let runId = 0
 
+/** 全局只有一条 AudioContext：播放、试听、节拍器共用（创建一次，别每次点击都 new） */
 function audioCtx(): AudioContext {
-  if (!ctx) ctx = new AudioContext()
+  /* latencyHint: 'interactive'（用户 2026-11-24）：显式要最低延迟的输出缓冲，
+   * 手机上点格子试听更跟手（默认也是 interactive，这里写明，免得以后改默认值） */
+  if (!ctx) ctx = new AudioContext({ latencyHint: 'interactive' })
   return ctx
 }
 
