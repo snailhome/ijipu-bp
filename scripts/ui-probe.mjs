@@ -238,6 +238,27 @@ try {
   check('点开后记住选择（bp.showSide = 1，下次打开按上次的来）',
     !!sideWoke && sideWoke.off === false && sideWoke.stored === '1', JSON.stringify(sideWoke))
 
+  /* 用户 2026-11-24：只看人声区**默认勾选**；键盘只显示 G3–C6（55–84）并自适应铺满高度 */
+  await sleep(400)
+  const bandBoot = await cdp.eval(`(() => {
+    const s = window.__bp.getState()
+    const m = window.__bpRoll || {}
+    const cv = document.querySelector('.pane.roll canvas')
+    const h = cv ? cv.getBoundingClientRect().height : 0
+    return { bandOnly: s.bandOnly, top: m.top, rows: m.rows, rowH: m.rowH, height: Math.round(h), rulerH: m.rulerH }
+  })()`)
+  const expectBandRowH = bandBoot && bandBoot.height > 0 ? (bandBoot.height - bandBoot.rulerH) / 30 : 0
+  check('默认勾选「只看人声区」：键盘只显示 G3–C6，行高自适应铺满',
+    !!bandBoot &&
+      bandBoot.bandOnly === true &&
+      bandBoot.top === 84 &&
+      bandBoot.rows === 30 &&
+      Math.abs(bandBoot.rowH - expectBandRowH) <= 0.6,
+    JSON.stringify({ ...bandBoot, expectRowH: Math.round(expectBandRowH * 10) / 10 }))
+  /* 后面的用例大量按"普通音区 + 可调行高(rowH=14)"算坐标，先取消勾选回到旧行为 */
+  await cdp.eval(`window.__bp.getState().setBandOnly(false)`)
+  await sleep(300)
+
   /* 右栏内三个页签（调节 / 分析 / 设置，用户 m02483）：读高亮页签判断当前在哪一页 */
   const sideViewNow = () =>
     cdp.eval(`(() => {
@@ -2558,6 +2579,8 @@ try {
     s.setPageSec(12)
     s.setTopMidi(72)
     s.setPlayRate(1.25)
+    /* 「只看人声区」会把键盘顶行固定在 C6（用户 2026-11-24），测"顶行恢复"前先关掉 */
+    s.setBandOnly(false)
   })()`)
   await sleep(400)
   await cdp.send('Page.reload', { ignoreCache: false })
@@ -2575,6 +2598,9 @@ try {
     }
     if (restored) break
   }
+  /* 刷新后等页面把 __bp / __bpRoll 都挂好，别在旧上下文上读 */
+  await sleep(300)
+  for (let i = 0; i < 20 && !(await cdp.eval(`!!(window.__bp && window.__bpRoll)`)); i++) await sleep(250)
   check(
     '刷新后行高 / 屏宽 / 第一行音高 / 播放速度都恢复',
     !!restored && restored.rowH === 18 && restored.pageSec === 12 && restored.stored === 72 &&
@@ -2588,6 +2614,7 @@ try {
     s.setPageSec(20)
     s.setTopMidi(96)
     s.setPlayRate(1)
+    s.setBandOnly(false)
   })()`)
   await sleep(250)
 

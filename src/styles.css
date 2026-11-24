@@ -430,10 +430,18 @@ button.primary {
   background: rgba(79, 209, 197, 0.1);
 }
 
-/* 简谱流线谱条：纸色，高度固定；横轴与上面的表格同一套映射 */
+/* 简谱流线谱条：纸色，横轴与上面的表格同一套映射。
+ * 高度按用户 2026-11-24 压低：窄屏（手机，≤1320px）为原来的 1/2（66px），其余端为 2/3（88px）。
+ * 1320 与 `NARROW_TOPBAR_PX` 保持一致（改那个常量时这里一起改）。 */
 .pane.strip {
-  flex: 0 0 132px;
+  flex: 0 0 88px;
   background: #f7f3e7;
+}
+
+@media (max-width: 1320px) {
+  .pane.strip {
+    flex: 0 0 66px;
+  }
 }
 
 .pane.strip canvas {

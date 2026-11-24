@@ -97,6 +97,9 @@ const KEY_W = 66
 const RULER_H = 36
 const EDGE_PX = 8
 const FONT = '10px ui-monospace, Consolas, monospace'
+/** 人声区（G3–C6，与「只看人声区」压暗的范围同一份）：勾选时键盘显示这一段并自适应铺满 */
+const BAND_LOW = 55
+const BAND_HIGH = 84
 
 /** 黑键音级（C# D# F# G# A#） */
 const BLACK = new Set([1, 3, 6, 8, 10])
@@ -192,14 +195,21 @@ type Drag =
 
 export function NoteRoll(props: Props) {
   const { notes, spectrum, durationMs, view, playMs, mode, bandOnly } = props
-  /* 行高是设置里的滑条（用户 m02483）：键盘格、音符块、点击命中共用这一个值 */
-  const rowH = props.rowH
+  /* 行高是设置里的滑条（用户 m02483）：键盘格、音符块、点击命中共用这一个值。
+   * 勾了「只看人声区」时改成**自适应**：键盘只显示 G3–C6 那 30 个半音，行高按可用高度算
+   * （用户 2026-11-24：钢琴键盘区默认显示人声区范围、自适应缩放）。
+   * `size` 在下面几行才有，所以这行放到 `size` 之后算。 */
   const wrapRef = useRef<HTMLDivElement | null>(null)
   /* 画布自己的容器：尺寸必须按它量，不能按整块面板量（面板里还有标题条和滚动条，
    * 按面板量会让画布被 flex 压扁，点击 y 坐标跟着错行 —— 用户 m04792 第二条） */
   const hostRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const [size, setSize] = useState({ w: 0, h: 0 })
+  /* 勾「只看人声区」时行高自适应（见上方注释）；否则用设置里的 rowH */
+  const rowH =
+    props.bandOnly && size.h > 0
+      ? Math.max(6, (size.h - RULER_H) / (BAND_HIGH - BAND_LOW + 1))
+      : props.rowH
   /* 第一行的音高（不是"中心音高"）：用户 m02483 要求记住"锁定/上下滑动后第一行是哪一音"，
    * 所以这里直接以顶行为状态，滚动 / 改行高 / 重开都按它恢复。 */
   const [topRow, setTopRow] = useState(props.topMidi)
@@ -263,20 +273,28 @@ export function NoteRoll(props: Props) {
     return { lo, span: hi - lo > 1e-6 ? hi - lo : 1 }
   }, [spectrum])
   const metrics = useMemo<Metrics>(() => {
-    const rows = Math.max(4, Math.min(MIDI_HIGH - MIDI_LOW + 1, Math.floor((size.h - RULER_H) / rowH)))
+    /* 只看人声区（用户 2026-11-24）：行数固定成人声区的 30 个半音，顶行固定 C6，
+     * 行高由上面自适应算出来 —— 键盘区正好铺满，显示范围就是 G3–C6。 */
+    const rows = props.bandOnly
+      ? BAND_HIGH - BAND_LOW + 1
+      : Math.max(4, Math.min(MIDI_HIGH - MIDI_LOW + 1, Math.floor((size.h - RULER_H) / rowH)))
     /* 顶行不能低到露不出最后一行，也不能高过 C8 */
-    const top = Math.max(MIDI_LOW + rows - 1, Math.min(MIDI_HIGH, Math.round(topRow)))
+    const top = props.bandOnly
+      ? BAND_HIGH
+      : Math.max(MIDI_LOW + rows - 1, Math.min(MIDI_HIGH, Math.round(topRow)))
     /* 表格区从 0 开始，**右侧**留 KEY_W 给钢琴键盘（用户 2026-11-24 把键列挪到右边） */
     return { w: size.w, h: size.h, left: 0, width: Math.max(80, size.w - KEY_W), top, rows }
-  }, [size, topRow, rowH])
+  }, [size, topRow, rowH, props.bandOnly])
 
   /* 把"现在第一行是哪一音"记回 store（App 再落到 localStorage / 方案外的界面状态）：
    * 下次打开时从这里恢复（用户 m02483 第 4 条）。 */
   const onTopRef = useRef(props.onTopMidi)
   onTopRef.current = props.onTopMidi
   useEffect(() => {
+    /* 只看人声区时顶行固定 C6，别把它写回 store 覆盖用户上次的音区 */
+    if (props.bandOnly) return
     if (metrics.w > 0) onTopRef.current(metrics.top)
-  }, [metrics.top, metrics.w])
+  }, [metrics.top, metrics.w, props.bandOnly])
 
   const rowTop = useCallback(
     (midi: number) => RULER_H + (metrics.top - midi) * rowH,

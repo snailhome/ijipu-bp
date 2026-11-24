@@ -169,6 +169,11 @@ npm run smoke
     `window` 捕获阶段的 `pointerdown`（`once`）在**页面任意处第一次按下**时 resume。
     只在 canvas 的 pointerdown 里预热的话，第一次点琴键仍要现场建上下文 + resume，
     声音会晚一截（用户 2026-11-23 实报）。
+  - **再压延迟（用户 2026-11-24）**：`primeAudio()` 现在还会**预建 `auditionSynth`**
+    并跑一次 0 增益、0.02s 的 `warmUp`（全局一次）——振荡器/增益节点图的首次创建开销
+    在手机上也能感觉到；App 另外挂 `touchstart`（capture、once）比 pointerdown 更早叫醒上下文。
+    注意：合成音是振荡器合成（TinySynth 配方），**没有音源文件可"预加载"**，
+    延迟来自 AudioContext 解锁与节点创建，不是加载采样。
 - **空表格提示只占表格区**（用户 2026-11-23；2026-11-24 键盘改到右边后：
   `.pane-empty` 由 `NoteRoll` 内联 `left: 0; right: KEY_W`，右侧键盘列不压字）。
 - **键盘区按住上下拖 = 上下换音区**（用户 2026-11-23）：**未锁定**时（`lockPitch` 关）在右侧
@@ -201,8 +206,12 @@ npm run smoke
   `view.zoom` 为准）、`store.topMidi`（表格第一行的音高）。三者都落 localStorage
   （`bp.rowH` / `bp.pageSec` / `bp.topMidi`），**不进方案文件**；只在 store 里改，别在组件里另存一份。
   行高、屏宽滑条**只放调节页「显示」组**（用户 m02483 拍板：设置页不放重复的）。
-  **所有滑条都要支持"悬浮滚轮"调节**：App.tsx 里挂 document 级 wheel 监听（命中区放宽到整行
+  - **所有滑条都要支持"悬浮滚轮"调节**：App.tsx 里挂 document 级 wheel 监听（命中区放宽到整行
   `label.field`），新加滑条不用另写；改这段要跑 `probe` 的"滑条全都能滚轮调"用例。
+  - **「只看人声区」默认勾选**（用户 2026-11-24）：`bandOnly` 默认 `true`（`bp.bandOnly` 记住用户的改动）；
+    勾选时 `NoteRoll` 的键盘**只显示 G3–C6（55–84，`BAND_LOW`/`BAND_HIGH`）**，行高自适应
+    `(画布高 - RULER_H) / 30` 铺满，顶行固定 C6，且**不把顶行写回 store**（否则会覆盖用户上次的音区）；
+    取消勾选回到设置里的 `rowH` 与用户音区。`probe` 有"默认勾选 + 键盘自适应"一条。
 - **播放速度**（用户 m02483）：`store.playRate`（0.5×–2×，默认 1×，只改快慢不改音高），
   滑条**只放在顶栏播放键右边**（`.play-wrap .rate-slider`，不写文字标签，名称/说明靠悬浮提示，
   提示里带"当前 1.05×"；滑条右边有 `.rate-val` 一直显示当前倍率）；值落 localStorage `bp.playRate`，
@@ -231,7 +240,9 @@ npm run smoke
 - **流线谱（`src/ui/StripPreview.tsx`）的曲谱字形必须交给引擎**（用户 m02192）：`preview/stripSvg.ts`
   取视窗附近几小节 `toJps` → `parseJps` → `layoutScore`（`noteSpaceLayout:'duration'`）→
   `buildLinearStrip`（`timedStretch:true`）→ `renderScoreToSvg`，宿主只按 `ui/timeAxis.ts`
-  的映射把整条谱摆到时间轴上；**右侧**留 66px（与音符表右侧键盘列同宽，用户 2026-11-24 键列改到右边）。**不要再在 canvas 里手画
+  的映射把整条谱摆到时间轴上；**右侧**留 66px（与音符表右侧键盘列同宽，用户 2026-11-24 键列改到右边）。
+  `.pane.strip` 的高度按用户 2026-11-24 压低：**窄屏（≤1320px）66px（原来的 1/2）、其余端 88px（2/3）**；
+  1320 与 `NARROW_TOPBAR_PX` 保持一致（改那个常量时这里一起改）。**不要再在 canvas 里手画
   数字/减时线/八度点/附点/连音弧** —— 那等于把引擎规范抄一遍，两边必然对不上。canvas 只画
   小节号、播放头、空谱提示。要改宽度映射就**两处一起改**。
 
@@ -366,10 +377,10 @@ npm run inspect -- 某曲.wav    # 同上，换成真曲子（只认 16-bit PCM 
   （当前 **114/114**）；`ui-probe` 用 `--use-fake-device-for-media-stream` +
   `--use-fake-ui-for-media-stream` 真录一段，验
   "麦克风按钮 → 小条 → 录音/暂停/停止 → 分析成谱 → 左栏 → 未保存提示 → 不保存直接新建
-  → 录音中刷新恢复 → 停止后刷新恢复"，并真拖块选/整列/整行/整组移动（当前 **222/222**，
+  → 录音中刷新恢复 → 停止后刷新恢复"，并真拖块选/整列/整行/整组移动（当前 **223/223**，
   其中 14 条是 2026-11-23 的窄屏顶栏 / 左侧抽屉 / 状态栏用例；另有首开左栏收起、点开后记住、
   窄屏左栏仍收起、画布点按高亮、空提示避键盘、宽版状态栏不错行、键盘区上下拖、
-  键盘上高下低、点键盘上/下发对音、录音恢复不弹小条但能召回 11 条）。
+  键盘上高下低、点键盘上/下发对音、人声区默认勾选+键盘自适应、录音恢复不弹小条但能召回 12 条）。
   改这段交互后**要跑 `npm run probe`**；动 Rust 命令跑 `cargo check --manifest-path src-tauri/Cargo.toml --lib`。
 
 ## 十二、访问统计（用户 2026-11-22）

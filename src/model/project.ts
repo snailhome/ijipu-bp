@@ -200,7 +200,8 @@ export function parseProject(text: string): { project: ProjectFile } | { error: 
         title: typeof st.title === 'string' ? st.title : '爱扒谱导出',
         gain: num(st.gain, 1, 0.1, 6),
         contrast: num(st.contrast, 1.4, 0.2, 4),
-        bandOnly: bool(st.bandOnly, false),
+        /* 用户 2026-11-24：新方案默认勾选「只看人声区」（旧方案里没这个字段的也按勾选） */
+        bandOnly: bool(st.bandOnly, true),
         suppress: num(st.suppress, 0, 0, 1),
         autoNotes: bool(st.autoNotes, false),
         pitchMode: oneOf<'name' | 'number'>(st.pitchMode, ['name', 'number'], 'number'),

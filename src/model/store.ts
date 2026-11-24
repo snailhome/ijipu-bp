@@ -306,7 +306,16 @@ export const useBp = create<State>((set, get) => ({
   lockPitch: false,
   gain: 1,
   contrast: 1.4,
-  bandOnly: false,
+  /* 只看人声区（G3–C6）：**默认勾选**（用户 2026-11-24："只看人声区默认勾选"）；
+   * 用户改过就记在 localStorage `bp.bandOnly`（'0'/'1'），刷新后按上次的来。 */
+  bandOnly: (() => {
+    try {
+      const v = typeof localStorage === 'undefined' ? null : localStorage.getItem('bp.bandOnly')
+      return v === null ? true : v === '1'
+    } catch {
+      return true
+    }
+  })(),
   suppress: 0,
   autoNotes: false,
   rhythm: null,

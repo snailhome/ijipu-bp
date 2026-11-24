@@ -1076,6 +1076,15 @@ export default function App() {
     }
   }, [showSide, narrow])
 
+  /* 「只看人声区」也记住（用户 2026-11-24：默认勾选，改过就按上次的来） */
+  useEffect(() => {
+    try {
+      localStorage.setItem('bp.bandOnly', bandOnly ? '1' : '0')
+    } catch {
+      /* 隐私模式：记不住不影响用 */
+    }
+  }, [bandOnly])
+
   /* 左栏开关（用户 2026-11-24：侧栏从右挪到左、图标左右镜像、按钮跟在品牌图标后面） */
   const sideToggleBtn = (
     <button
@@ -1098,7 +1107,12 @@ export default function App() {
     primeAudio()
     const wake = () => primeAudio()
     window.addEventListener('pointerdown', wake, { once: true, capture: true })
-    return () => window.removeEventListener('pointerdown', wake, true)
+    /* 手机上 touchstart 比 pointerdown 早一拍（用户 2026-11-24：点格子发声还有延迟） */
+    window.addEventListener('touchstart', wake, { once: true, capture: true, passive: true })
+    return () => {
+      window.removeEventListener('pointerdown', wake, true)
+      window.removeEventListener('touchstart', wake, true)
+    }
   }, [])
   /* 调性分析那一组能不能折起来（调号选择挪进组里了） */
   const [keyOpen, setKeyOpen] = useState(true)

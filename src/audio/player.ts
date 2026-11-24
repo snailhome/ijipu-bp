@@ -96,15 +96,37 @@ function activeBuffer(): AudioBuffer | null {
 let auditionSynth: PianoSynth | null = null
 
 /**
- * 把音频上下文叫醒（用户 2026-11-23：手机上点钢琴键"发音延迟"）。
+ * 把音频上下文叫醒（用户 2026-11-23；2026-11-24 再加"预热"）。
  *
  * 为什么要单独一个函数：AudioContext 在手机上首次创建是 `suspended`，
  * `resume()` 必须在**用户手势**里调用才会被放行。在 `pointerdown` 里先叫醒，
  * 等用户真的点到琴键时上下文已经 running，声音就跟手了。
+ *
+ * 2026-11-24（"手机端点格子发声还有延迟"）：除了建上下文，这里还
+ * ① 预建 `auditionSynth`（第一次试听时不用现场 new 一套节点图）；
+ * ② 用 0 增益的极短音把音频图**跑一遍**（振荡器/增益节点首次创建有开销，
+ *    手机第一次点格子时会卡在节点创建上）——`warmUp` 全局只做一次。
  */
+let warmed = false
+
+function warmUp(c: AudioContext): void {
+  if (warmed) return
+  warmed = true
+  const osc = c.createOscillator()
+  const g = c.createGain()
+  g.gain.value = 0
+  osc.connect(g)
+  g.connect(c.destination)
+  const t = c.currentTime
+  osc.start(t)
+  osc.stop(t + 0.02)
+}
+
 export function primeAudio(): void {
   const c = audioCtx()
+  if (!auditionSynth) auditionSynth = new PianoSynth(c)
   if (c.state !== 'running') void c.resume()
+  warmUp(c)
 }
 
 export function audition(midi: number, durMs = 320): void {
