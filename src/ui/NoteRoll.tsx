@@ -743,7 +743,12 @@ export function NoteRoll(props: Props) {
     }
     g.fillStyle = 'rgba(8,12,18,0.9)'
     g.fillRect(KEY_X - 1, RULER_H, 1, metrics.h - RULER_H)
-    /* 8.5) 键盘列顶部那格：当前调号（形如 1=bB）+ 右边一把锁 */
+    /* 8.5) 键盘列顶部那格 = **锁定按钮**（整块可点，用户 2026-11-24）：先铺一层很淡的底，
+     * 再写当前调号（形如 1=bB）+ 右边一把锁，让人看得出这块是能点的 */
+    g.fillStyle = 'rgba(255,255,255,0.06)'
+    g.beginPath()
+    g.roundRect(KEY_X + 1.5, 1.5, KEY_W - 3, RULER_H - 3, 6)
+    g.fill()
     g.fillStyle = 'rgba(170,205,240,0.92)'
     g.font = '700 13px ui-monospace, Consolas, monospace'
     g.textBaseline = 'middle'
@@ -932,9 +937,9 @@ export function NoteRoll(props: Props) {
       const draw = mode === 'draw' || altHeld || e.altKey
 
       if (y < RULER_H) {
-        /* 键盘列右上角那把锁（键列在右侧，用户 2026-11-24）：命中区放宽到 34px ——
-         * 手机上手指粗，20px 太难点（用户反馈"键盘锁定无法使用"） */
-        if (x >= metrics.w - 34 && x <= metrics.w - 2) {
+        /* 键盘列顶部**整块**（调号 + 锁）都当锁定按钮（用户 2026-11-24：手机上点那颗小锁
+         * 老是点不中，这块区域本来只放调号和锁，整块响应最省事） */
+        if (x >= metrics.w - KEY_W) {
           props.onToggleLock()
           return
         }
@@ -1213,7 +1218,7 @@ export function NoteRoll(props: Props) {
    * 就在 pointermove 里按命中区域算一句"这里能干什么"，跟鼠标一起走。 */
   const hoverTip = useMemo(() => {
     if (hoverX === null || hoverY === null || hoverY >= RULER_H) return null
-    if (hoverX >= metrics.w - 34 && hoverX <= metrics.w - 2) {
+    if (hoverX >= metrics.w - KEY_W) {
       return {
         name: props.lockPitch ? '键区锁（已锁住）' : '键区锁（未锁）',
         key: 'Ctrl+L',

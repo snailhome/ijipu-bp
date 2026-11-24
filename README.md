@@ -249,7 +249,7 @@ npm run tauri:build     # 桌面安装包（本机用 --no-bundle 只出 exe，�
 
 ```powershell
 npm run dev          # 另开一个终端，先把 5175 起起来
-npm run probe        # 227 条断言
+npm run probe        # 228 条断言
 npm run probe -- http://127.0.0.1:5175/ --shot .tmp-ui.png   # 顺便截一张图
 ```
 

@@ -1112,6 +1112,23 @@ try {
     `顶行 ${topBefore} → 锁住 ${topLocked}（pan ${Math.round(panBefore)}→${Math.round(panLocked)}）→ 开锁 ${topFree}`,
   )
 
+  /* 用户 2026-11-24：手机上那颗小锁点不中 —— 键盘列顶部"调号 + 锁"整块都能点 */
+  const keyTopPt = await cdp.eval(`(() => {
+    const r = document.querySelector('.pane.roll canvas').getBoundingClientRect()
+    return { x: r.x + r.width - 60, y: r.y + 18 } /* 调号那一侧，离锁图标很远 */
+  })()`)
+  await cdp.eval(`window.__bp.getState().setLockPitch(false)`)
+  await sleep(150)
+  await cdp.clickAt(keyTopPt.x, keyTopPt.y)
+  await sleep(220)
+  const lockByTitle = await cdp.eval(`window.__bp.getState().lockPitch`)
+  await cdp.clickAt(keyTopPt.x, keyTopPt.y)
+  await sleep(220)
+  const lockByTitleOff = await cdp.eval(`window.__bp.getState().lockPitch`)
+  check('键盘列顶部整块（调号 + 锁）都能点锁定 / 解锁',
+    lockByTitle === true && lockByTitleOff === false,
+    JSON.stringify({ lockByTitle, lockByTitleOff }))
+
 
   // ── 时间尺：按住拖 = 圈播放区间（不必按 Shift）；点一下 = 只挪播放头 ──
   const ruler = await cdp.eval(`(() => {
