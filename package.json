@@ -1,7 +1,7 @@
 {
   "name": "ijipu-bp",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "爱扒谱（iJipu BP）—— 音频扒谱，产出 iJipu 的 .jps 脚本乐谱。",
   "license": "AGPL-3.0-only",
   "type": "module",
