@@ -1,8 +1,8 @@
 {
   "note": "本目录由 scripts/sync-engine.mjs 从 ijipu/packages/ijipu-engine/src/engine 逐字节同步，勿手改。",
   "source": "ijipu/packages/ijipu-engine/src/engine",
-  "commit": "81f9b54f4b929ed0acf5cb0a8d467e000a420085",
+  "commit": "00b239d76635cdebcedb9c449cbb08aabc3a0033",
   "files": 81,
-  "hash": "819785f5a99a15ec76f01762dbd276e63cb00089c14556c5e6680c8451def56f",
-  "syncedAt": "2026-11-24T11:58:39.635Z"
+  "hash": "96048c3ae6f5ceef1749bd202e0332488049c98348cd22f0b1a4349fe5b22eb8",
+  "syncedAt": "2026-11-24T12:13:14.875Z"
 }
