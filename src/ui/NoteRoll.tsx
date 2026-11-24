@@ -606,11 +606,17 @@ export function NoteRoll(props: Props) {
       g.strokeRect(metrics.left + 0.5, y + 0.5, metrics.width - 1, rowH - 1)
     }
 
-    /* 7) 时间尺 */
+    /* 7) 时间尺（**只画表格区**：右侧键盘列顶部那一格留给调号 + 锁定按钮，
+     *    用户 2026-11-24 报"时间轴侵入锁定区域，秒数和调号/锁重叠"） */
     g.fillStyle = '#141a23'
-    g.fillRect(0, 0, metrics.w, RULER_H)
+    g.fillRect(0, 0, metrics.width, RULER_H)
     g.fillStyle = 'rgba(255,255,255,0.10)'
-    g.fillRect(0, RULER_H - 1, metrics.w, 1)
+    g.fillRect(0, RULER_H - 1, metrics.width, 1)
+    /* 再用 clip 兜一层：刻度文字（`5.5s` 这种）以 x+3 起画，接近右缘时会被裁到表格区里 */
+    g.save()
+    g.beginPath()
+    g.rect(0, 0, metrics.width, RULER_H)
+    g.clip()
     const tickS = pickTickSeconds(view, durationMs, metrics.width)
     g.font = FONT
     g.textBaseline = 'middle'
@@ -642,6 +648,7 @@ export function NoteRoll(props: Props) {
         g.fillText(String(bar + 1), x + 3, RULER_H - 5)
       }
     }
+    g.restore()
 
     /* 8) 右侧钢琴键盘（用户 2026-11-24：从左侧挪到**右侧**并**左右镜像** ——
      *    手机横过来看时正好符合"左边低、右边高"的钢琴习惯）：
@@ -743,8 +750,10 @@ export function NoteRoll(props: Props) {
     }
     g.fillStyle = 'rgba(8,12,18,0.9)'
     g.fillRect(KEY_X - 1, RULER_H, 1, metrics.h - RULER_H)
-    /* 8.5) 键盘列顶部那格 = **锁定按钮**（整块可点，用户 2026-11-24）：先铺一层很淡的底，
-     * 再写当前调号（形如 1=bB）+ 右边一把锁，让人看得出这块是能点的 */
+    /* 8.5) 键盘列顶部那格 = **锁定按钮**（整块可点，用户 2026-11-24）：先自己铺一条底色
+     * （时间尺只画到表格区，这里不再被覆盖），再铺很淡的圆角底、写当前调号 + 右边一把锁 */
+    g.fillStyle = '#141a23'
+    g.fillRect(KEY_X, 0, KEY_W, RULER_H)
     g.fillStyle = 'rgba(255,255,255,0.06)'
     g.beginPath()
     g.roundRect(KEY_X + 1.5, 1.5, KEY_W - 3, RULER_H - 3, 6)
