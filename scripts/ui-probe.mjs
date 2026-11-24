@@ -1628,6 +1628,18 @@ try {
     !yellowish(beforeKey) && yellowish(duringKey) && !yellowish(afterKey),
     `${beforeKey} → ${duringKey} → ${afterKey}`)
 
+  /* 键盘行序（用户 2026-11-24："手机端钢琴键盘音高好像上低下高"）：用 dev 后门复算，
+     顶部行必须比底部行高。绘制用同一个 `metrics.top`、点击/试听走 `midiAt`，三者同源。 */
+  const keyOrder = await cdp.eval(`(() => {
+    const m = window.__bpRoll
+    if (!m || typeof m.midiAt !== 'function' || !m.rows) return null
+    const top = m.midiAt(m.rulerH + m.rowH / 2)
+    const bottom = m.midiAt(m.rulerH + (m.rows - 1) * m.rowH + m.rowH / 2)
+    return { top, bottom, rows: m.rows }
+  })()`)
+  check('键盘从上到下音高递减（上高下低，绘制与点击同一套换算）',
+    !!keyOrder && keyOrder.top > keyOrder.bottom, JSON.stringify(keyOrder))
+
   /* ── 键盘区按住上下拖 = 上下换音区（用户 2026-11-23；未锁定才生效） ── */
   const dragKey = await cdp.eval(`(() => {
     const m = window.__bpRoll || {}

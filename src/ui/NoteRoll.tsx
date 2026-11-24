@@ -277,13 +277,6 @@ export function NoteRoll(props: Props) {
     if (metrics.w > 0) onTopRef.current(metrics.top)
   }, [metrics.top, metrics.w])
 
-  /* dev-only：把行高/顶行暴露出去，`npm run probe` 才能算出某个音的像素位置 */
-  useEffect(() => {
-    if (import.meta.env.DEV) {
-      ;(window as unknown as { __bpRoll?: unknown }).__bpRoll = { ...metrics, rulerH: RULER_H, rowH }
-    }
-  }, [metrics])
-
   const rowTop = useCallback(
     (midi: number) => RULER_H + (metrics.top - midi) * rowH,
     [metrics.top, rowH],
@@ -295,6 +288,14 @@ export function NoteRoll(props: Props) {
     },
     [metrics.top, rowH],
   )
+  /* dev-only：把行高/顶行/`midiAt` 一起暴露出去。`probe` 要靠它算像素位置、
+   * 也要靠 `midiAt` 断言"键盘从上到下音高递减"（用户 2026-11-24 报过"上低下高"）。
+   * 必须**同一个 effect 整体赋值** —— 分两个 effect 时，metrics 一变就把 `midiAt` 覆盖没了。 */
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const w = window as unknown as { __bpRoll?: Record<string, unknown> }
+    w.__bpRoll = { ...metrics, rulerH: RULER_H, rowH, midiAt: (y: number) => midiAt(y) }
+  }, [metrics, rowH, midiAt])
   const xAt = useCallback(
     (ms: number) => msToX(ms, view, durationMs, metrics.left, metrics.width),
     [durationMs, metrics.left, metrics.width, view],
