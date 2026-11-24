@@ -110,7 +110,9 @@ export const COPY = {
   siteHome: '爱记谱首页',
   siteHomeTip: '回到爱记谱官网（网页版本窗口返回；桌面版用系统浏览器打开）',
   appOpen: '在爱记谱打开',
-  appOpenTip: '用 iJipu 的 /app/?jps=… 链接打开当前生成的 .jps（新标签 / 系统浏览器）',
+  appOpenTip:
+    '桌面版装了爱记谱就直接用桌面应用打开当前 .jps（写临时文件，不受 8000 字链接限制）；没装桌面版再用 /app/?jps=… 网页打开',
+  appDesktopOpened: '已用桌面版爱记谱打开当前 jps',
   appCopyLink: '复制打开链接',
   appLinkCopied: '已复制「在爱记谱打开」的链接',
   appLinkCopyFail: '复制失败：',

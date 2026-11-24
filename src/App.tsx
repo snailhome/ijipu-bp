@@ -1058,20 +1058,23 @@ export default function App() {
     },
     [],
   )
-  /* 右侧栏（调性/参数/显示/源码）能不能收起来——宽屏看谱时把它关掉能多出一大块 */
-  /* 右栏（用户 2026-11-23）：**首开默认收起** —— 手机上默认展开会把它那 300px 挤在画布旁边，
-   * 画布只剩键盘列。用户点开/收起后落 localStorage `bp.showSide`，下次按上次的选择。 */
+  /* 右栏（用户 2026-11-23 首开收起；2026-11-24 补：**手机端每次打开都收起**）：
+   * 桌面（宽版）记住上次的选择（localStorage `bp.showSide`）；
+   * **窄屏（手机）一律默认收起，也不写记忆** —— 手机上默认展开会把它那 300px 挤在画布旁边，
+   * 画布只剩键盘列；不写记忆是为了不把桌面那边"上次开着"覆盖掉。 */
   const [showSide, setShowSide] = useState<boolean>(() => {
     if (typeof localStorage === 'undefined') return false
+    if (narrow) return false
     return localStorage.getItem('bp.showSide') === '1'
   })
   useEffect(() => {
+    if (narrow) return /* 手机不写记忆（见上） */
     try {
       localStorage.setItem('bp.showSide', showSide ? '1' : '0')
     } catch {
       /* 隐私模式：记不住不影响用 */
     }
-  }, [showSide])
+  }, [showSide, narrow])
 
   /* 音频上下文提前预热（用户 2026-11-23：手机上点键盘"声音总慢半拍"）。
    * ① 应用挂载就建好 AudioContext（此时 suspended，不发声）；
@@ -1769,7 +1772,8 @@ export default function App() {
           const loaded = await decodeBytes(bytes, p.audio.name, p.audio.path)
           recordingAudioCachedRef.current = true
           setRecState('ready')
-          setRecBarOpen(true)
+          /* 用户 2026-11-24：默认**不**自动弹录音小条（顶栏麦克风不高亮）；
+           * 想接着录时点麦克风，`toggleRecordBar` 的 isRecordingPath 分支会把小条召回。 */
           await applyLoaded(loaded, p)
           setRecElapsed(loaded.durationMs)
           return
@@ -2609,18 +2613,34 @@ export default function App() {
     window.location.assign(IJIPU_SITE)
   }, [])
 
-  /** 用 iJipu 的 `/app/?jps=<encoded>` 方式打开**当前生成的** .jps。 */
-  const openInIpu = useCallback(() => {
+  /** 用 iJipu 打开**当前生成的** .jps。
+   *  桌面壳（用户 2026-11-24）：先找桌面版爱记谱，找到就把 jps 写成临时文件让它打开
+   *  （不受 8000 字链接限制）；没装桌面版 / 启动失败 → 回退网站 `/app/?jps=`（超长照旧报错）。 */
+  const openInIpu = useCallback(async () => {
     const st = set.getState()
     if (!st.jps) {
       st.setError(COPY.appLinkNoNotes)
       return
     }
+    st.setError(null)
+    if (isTauriShell()) {
+      const pending = invoke<string | null>('bp_open_jps_in_desktop', { jps: st.jps })
+      if (pending) {
+        try {
+          const path = await pending
+          if (path) {
+            setNotice(`${COPY.appDesktopOpened}：${path}`)
+            return
+          }
+        } catch {
+          /* 桌面版没起来：按网页回退，别把人卡住 */
+        }
+      }
+    }
     if (st.jps.length > JPS_LINK_MAX_LEN) {
       st.setError(COPY.appLinkTooLong)
       return
     }
-    st.setError(null)
     void openUrl(jpsAppUrl(st.jps))
   }, [set])
 
@@ -3972,8 +3992,8 @@ export default function App() {
             <div className="jps-actions">
               <button
                 className="link-btn"
-                onClick={openInIpu}
-                disabled={!jps || jps.length > JPS_LINK_MAX_LEN}
+                onClick={() => void openInIpu()}
+                disabled={!jps || (!isTauriShell() && jps.length > JPS_LINK_MAX_LEN)}
                 title={COPY.appOpenTip}
               >
                 {COPY.appOpen} ↗
@@ -3987,7 +4007,7 @@ export default function App() {
                 {COPY.appCopyLink}
               </button>
             </div>
-            {jps && jps.length > JPS_LINK_MAX_LEN && <div className="hint">{COPY.appLinkTooLong}</div>}
+            {jps && jps.length > JPS_LINK_MAX_LEN && !isTauriShell() && <div className="hint">{COPY.appLinkTooLong}</div>}
           </SideGroup>
           )}
 

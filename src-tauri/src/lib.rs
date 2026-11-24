@@ -84,6 +84,95 @@ async fn bp_save_jps(
     Ok(Some(path.to_string_lossy().into_owned()))
 }
 
+/// 找 iJipu 桌面版的 exe（用户 2026-11-24：桌面端优先用桌面应用打开 .jps）。
+///
+/// 顺序：环境变量覆盖 → 常见安装位置 → PATH → Windows 的 App Paths 注册表。
+/// **只认真的存在的文件**；一个都找不到就返回 None，前端回退到网站 `/app/?jps=`。
+fn find_desktop_ijipu() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("IJIPU_DESKTOP_EXE") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let mut cands: Vec<PathBuf> = Vec::new();
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let base = PathBuf::from(local);
+        /* NSIS 默认装到 per-user 的 Programs 下；老版本/手工安装可能在 LOCALAPPDATA 根下 */
+        cands.push(base.join("Programs").join("iJipu").join("ijipu.exe"));
+        cands.push(base.join("iJipu").join("ijipu.exe"));
+        cands.push(base.join("Programs").join("ijipu").join("ijipu.exe"));
+    }
+    for key in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Ok(dir) = std::env::var(key) {
+            cands.push(PathBuf::from(dir).join("iJipu").join("ijipu.exe"));
+        }
+    }
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            cands.push(dir.join("ijipu.exe"));
+        }
+    }
+    if let Some(p) = cands.into_iter().find(|p| p.is_file()) {
+        return Some(p);
+    }
+    #[cfg(windows)]
+    {
+        if let Some(p) = reg_app_path() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Windows：读 `App Paths\ijipu.exe`（安装包注册过就能查到，不依赖固定安装目录）。
+#[cfg(windows)]
+fn reg_app_path() -> Option<PathBuf> {
+    use std::process::Command;
+    for root in ["HKCU", "HKLM"] {
+        let key = format!(r"{root}\Software\Microsoft\Windows\CurrentVersion\App Paths\ijipu.exe");
+        let Ok(out) = Command::new("reg").args(["query", &key, "/ve"]).output() else {
+            continue;
+        };
+        if !out.status.success() {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            if let Some(pos) = line.find("REG_SZ") {
+                let raw = line[pos + "REG_SZ".len()..].trim().trim_matches('"');
+                let p = PathBuf::from(raw);
+                if !raw.is_empty() && p.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 用桌面版 iJipu 打开当前 `.jps`（用户 2026-11-24）。
+///
+/// 找到桌面版 → 把 jps 写进 `%TEMP%\ijipu-bp\bp-<时间戳>.jps` 再启动它，
+/// 返回临时文件路径（前端拿它显示"已用桌面版打开"）。
+/// 找不到桌面版、或启动失败 → `None`，前端回退网站方式。
+/// **不走 URL**，所以不受 `/app/?jps=` 那条 8000 字链接上限的限制。
+#[tauri::command]
+fn bp_open_jps_in_desktop(jps: String) -> Option<String> {
+    use std::process::Command;
+    let exe = find_desktop_ijipu()?;
+    let dir = std::env::temp_dir().join("ijipu-bp");
+    std::fs::create_dir_all(&dir).ok()?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = dir.join(format!("bp-{stamp}.jps"));
+    std::fs::write(&path, jps.as_bytes()).ok()?;
+    Command::new(&exe).arg(&path).spawn().ok()?;
+    Some(path.to_string_lossy().into_owned())
+}
+
 /// 保存录音音频（WAV）：弹原生另存为，写盘后**回读字节比对**。
 ///
 /// 用户 2026-11-22：录音方案的「保存方案」先落到一个真实音频文件，再把 `.bp.json`
@@ -176,6 +265,7 @@ pub fn run() {
             bp_read_text,
             bp_write_text,
             bp_pick_project,
+            bp_open_jps_in_desktop,
             sep::bp_sep_model,
             sep::bp_sep_model_target,
             sep::bp_sep_ready,

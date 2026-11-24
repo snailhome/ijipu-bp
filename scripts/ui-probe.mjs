@@ -2902,14 +2902,25 @@ try {
     )
     const live1 = await reloadAndWait()
     check(
-      '录音中直接关掉 / 重开：从 IndexedDB 恢复这段录音（小条回来、表格有频谱）',
+      '录音中直接关掉 / 重开：从 IndexedDB 恢复这段录音（默认不弹小条、表格有频谱）',
       !!live1 &&
         String(live1.path).startsWith('recording:') &&
         live1.duration > 500 &&
-        live1.bar &&
-        live1.analysis &&
-        live1.analyzeEnabled === true,
+        !live1.bar &&
+        live1.analysis,
       JSON.stringify(live1),
+    )
+    /* 用户 2026-11-24：默认不弹录音小条；点麦克风才召回（且不应新建方案） */
+    await cdp.eval(`document.querySelector('[data-rec-mic="1"]')?.click()`)
+    await sleep(350)
+    const recalled = await cdp.eval(`(() => {
+      const s = window.__bp.getState()
+      return { bar: !!document.querySelector('.record-mini'), path: s.filePath, notes: s.notes.length }
+    })()`)
+    check(
+      '恢复录音方案默认不弹小条；点麦克风能召回（还是同一个录音方案）',
+      !!recalled && recalled.bar && String(recalled.path).startsWith('recording:'),
+      JSON.stringify(recalled),
     )
 
     /* 重新录一段、点停止、再"关掉"：最终字节也应该在 IndexedDB 里 */
@@ -2922,12 +2933,12 @@ try {
     })()`, 20_000)
     const live2 = await reloadAndWait()
     check(
-      '刚录完就关掉 / 重开：录音和方案都还在（停止时写的最终字节也能恢复）',
+      '刚录完就关掉 / 重开：录音和方案都还在（停止时写的最终字节也能恢复；默认不弹小条）',
       stoppedOk &&
         !!live2 &&
         String(live2.path).startsWith('recording:') &&
         live2.duration > 500 &&
-        live2.bar &&
+        !live2.bar &&
         live2.analysis,
       JSON.stringify({ stoppedOk, live2 }),
     )
@@ -3249,6 +3260,19 @@ try {
         atWideEdge.statusH <= 66,
       JSON.stringify({ 1247: atUserShot.statusH, 1300: atWideEdge.statusH, tips: atUserShot.tipsHidden }),
     )
+
+    /* 用户 2026-11-24：手机（窄屏）刷新后右栏仍然收起 —— 不读桌面记忆，也不覆盖它 */
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true })
+    await cdp.eval('location.reload()')
+    await sleep(900)
+    for (let i = 0; i < 40 && !(await cdp.eval(`!!document.querySelector('.toolbar')`)); i++) await sleep(300)
+    await sleep(400)
+    const mobileSide = await cdp.eval(`(() => {
+      const el = document.querySelector('.side')
+      return { off: !el || el.classList.contains('off'), stored: localStorage.getItem('bp.showSide') }
+    })()`)
+    check('窄屏刷新后右栏仍默认收起（不跟桌面记忆、也不覆盖它）',
+      !!mobileSide && mobileSide.off === true && mobileSide.stored === '1', JSON.stringify(mobileSide))
 
     /* 拉回宽屏：顶栏要恢复原样，抽屉相关的 DOM 不能残留 */
     await cdp.send('Emulation.clearDeviceMetricsOverride')
