@@ -231,6 +231,8 @@ export function NoteRoll(props: Props) {
    * "点击还有延迟"）。只做"试听"这一件事，不改选择/绘制状态；pointerdown 里用
    * `seenOnTouch` 去重，避免同一次触摸响两次。 */
   const lastTouchAudition = useRef<{ midi: number; at: number } | null>(null)
+  /* 拖到音域边界时"响一声"的节流时间戳（用户 2026-11-24：拖到边缘要有声音反馈） */
+  const edgeBeepRef = useRef(0)
   const seenOnTouch = useCallback((midi: number): boolean => {
     const l = lastTouchAudition.current
     return !!l && l.midi === midi && performance.now() - l.at < 300
@@ -591,12 +593,15 @@ export function NoteRoll(props: Props) {
       g.fillRect(metrics.left, y0 - 1, metrics.width, 1)
     }
 
-    /* 6) 悬停行高亮 + 右上角信息（用户 m04792 第三条：原来 0.05 太淡，看不见） */
-    if (hoverMidi !== null) {
-      const y = rowTop(hoverMidi)
-      g.fillStyle = 'rgba(120,190,255,0.20)'
+    /* 6) 悬停 / 按下的行高亮（用户 2026-11-24：点表格、点键盘时都要看见那一行，
+     *    按下未松开时更亮 —— 之前只有 pointermove 的 hover，手机上按下不动时没有行高亮） */
+    const litRow = pressMidi ?? hoverMidi
+    if (litRow !== null) {
+      const y = rowTop(litRow)
+      const pressed = pressMidi !== null && pressMidi === litRow
+      g.fillStyle = pressed ? 'rgba(120,190,255,0.30)' : 'rgba(120,190,255,0.20)'
       g.fillRect(metrics.left, y, metrics.width, rowH)
-      g.strokeStyle = 'rgba(150,210,255,0.45)'
+      g.strokeStyle = pressed ? 'rgba(180,225,255,0.75)' : 'rgba(150,210,255,0.45)'
       g.lineWidth = 1
       g.strokeRect(metrics.left + 0.5, y + 0.5, metrics.width - 1, rowH - 1)
     }
@@ -957,6 +962,9 @@ export function NoteRoll(props: Props) {
 
       const hit = noteAt(x, y)
       const rawMs = msAt(x)
+      /* 点表格（空白 / 音符）也把那一行标成"按下"（用户 2026-11-24），松手在 onPointerUp 清掉 */
+      const downMidi = midiAt(y)
+      if (downMidi >= MIDI_LOW && downMidi <= MIDI_HIGH) setPressMidi(downMidi)
       /* 先看是不是在重复区间上：握柄改长短、中间拖整段（任何模式下都能拖） */
       const lh = loopHit(x)
       if (lh === 'l' || lh === 'r') {
@@ -1049,14 +1057,21 @@ export function NoteRoll(props: Props) {
         return
       }
       if (d.kind === 'keyScroll') {
-        /* 未锁定时的键盘区上下拖（用户 2026-11-23）：挪过几行就换几行音区。
-         * 上拖 = 看更高音（跟滚轮向上同向）；3px 死区，免得"点一下试听"被当成拖动。 */
+        /* **内容跟手**（用户 2026-11-24）：手指往下拖 = 键盘内容往下走 = 看到更高的音。
+         * 之前按"滚轮"语义做的（下拖看更低音），触摸时方向跟手指相反，用户报了"上低下高"。
+         * 3px 死区，免得"点一下试听"被当成拖动。 */
         const dy = y - d.startY
         if (!d.moved && Math.abs(dy) < 3) return
         d.moved = true
-        const rowsMoved = Math.round(-dy / rowH)
-        const next = Math.max(MIDI_LOW + metrics.rows - 1, Math.min(MIDI_HIGH, d.startTop + rowsMoved))
+        const rowsMoved = Math.round(dy / rowH)
+        const raw = d.startTop + rowsMoved
+        const next = Math.max(MIDI_LOW + metrics.rows - 1, Math.min(MIDI_HIGH, raw))
         setTopRow(next)
+        /* 拖到音域边界（A0 / C8）响一声提示（用户 2026-11-24：拖到边缘要有声音反馈） */
+        if (raw !== next && performance.now() - edgeBeepRef.current > 220) {
+          edgeBeepRef.current = performance.now()
+          props.onAudition(next)
+        }
         return
       }
       if (d.kind === 'selectBox') {

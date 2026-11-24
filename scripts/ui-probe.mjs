@@ -275,8 +275,9 @@ try {
   await cdp.dragAt(bandCanvas.kx, bandCanvas.ky, bandCanvas.kx, bandCanvas.ky + bandCanvas.rowH * 2, 5)
   await sleep(300)
   const bandAfterDrag = await cdp.eval(`window.__bpRoll.top`)
-  check('只看人声区时在键盘上按住上下拖也能换显示位置',
-    bandAfterDrag === bandAfterWheel - 2, `top ${bandAfterWheel} → ${bandAfterDrag}`)
+  /* 内容跟手（用户 2026-11-24）：往下拖 = 内容往下走 = 看到更高的音（top 变大） */
+  check('只看人声区时在键盘上按住上下拖也能换显示位置（内容跟手）',
+    bandAfterDrag === bandAfterWheel + 2, `top ${bandAfterWheel} → ${bandAfterDrag}`)
   await cdp.eval(`window.__bp.getState().setLockPitch(true)`)
   await sleep(200)
   await cdp.wheelAt(bandCanvas.cx, bandCanvas.cy, 120)
@@ -1685,6 +1686,36 @@ try {
     !yellowish(beforeKey) && yellowish(duringKey) && !yellowish(afterKey),
     `${beforeKey} → ${duringKey} → ${afterKey}`)
 
+  /* 用户 2026-11-24：点表格时那一行也要压蓝（按下未松开时也在），松手恢复 */
+  const rowLit = await cdp.eval(`(() => {
+    const m = window.__bpRoll
+    const cv = document.querySelector('.pane.roll canvas')
+    const r = cv.getBoundingClientRect()
+    const row = Math.floor((m.rows || 20) / 2)
+    const wx = (r.width - 66) * 0.7
+    const wy = m.rulerH + row * m.rowH + m.rowH / 2
+    return { x: r.x + wx, y: r.y + wy, wx, wy }
+  })()`)
+  const rowPixel = `(() => {
+    const cv = document.querySelector('.pane.roll canvas')
+    const g = cv.getContext('2d')
+    const sx = cv.width / parseFloat(cv.style.width || String(cv.width))
+    const sy = cv.height / parseFloat(cv.style.height || String(cv.height))
+    const d = g.getImageData(Math.round(${rowLit.wx} * sx), Math.round(${rowLit.wy} * sy), 1, 1).data
+    return [d[0], d[1], d[2]]
+  })()`
+  const rowBefore = await cdp.eval(rowPixel)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: rowLit.x, y: rowLit.y, button: 'left', buttons: 1, clickCount: 1 })
+  await sleep(220)
+  const rowDuring = await cdp.eval(rowPixel)
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: rowLit.x, y: rowLit.y, button: 'left', buttons: 0, clickCount: 1 })
+  await sleep(220)
+  const rowAfter = await cdp.eval(rowPixel)
+  const bluish = (c) => c[2] > c[0] + 18 && c[2] > 40
+  check('点表格时那一行压蓝（按下未松开也在），松手恢复',
+    !bluish(rowBefore) && bluish(rowDuring) && !bluish(rowAfter),
+    `${rowBefore} → ${rowDuring} → ${rowAfter}`)
+
   /* 键盘行序（用户 2026-11-24："手机端钢琴键盘音高好像上低下高"）：用 dev 后门复算，
      顶部行必须比底部行高。绘制用同一个 `metrics.top`、点击/试听走 `midiAt`，三者同源。 */
   const keyOrder = await cdp.eval(`(() => {
@@ -1738,8 +1769,8 @@ try {
   await cdp.dragAt(dragKey.x, dragKey.y1, dragKey.x, dragKey.y1 + dragKey.step, 6)
   await sleep(250)
   const afterScroll = await cdp.eval(`window.__bpRoll.top`)
-  check('未锁定：键盘区按住向下拖 3 行 ⇒ 音区跟着下移 3 行（等价滚轮）',
-    afterScroll === dragKey.top - 3, `top ${dragKey.top} → ${afterScroll}`)
+  check('未锁定：键盘区按住向下拖 3 行 ⇒ 内容跟着往下走、看到更高 3 行（跟手）',
+    afterScroll === dragKey.top + 3, `top ${dragKey.top} → ${afterScroll}`)
   await cdp.eval(`window.__bp.getState().setLockPitch(true)`)
   await sleep(150)
   const lockedTop = await cdp.eval(`window.__bpRoll.top`)
