@@ -26,6 +26,14 @@
 !define IJIPUBP_ICON "jps.ico"
 
 !macro NSIS_HOOK_POSTINSTALL
+  ; 用户 2026-11-25 统一口径：桌面/开始菜单快捷方式 =「爱扒谱・iJipu BP」
+  Delete "$DESKTOP\爱扒谱・iJipu BP.lnk"
+  CreateShortcut "$DESKTOP\爱扒谱・iJipu BP.lnk" "$INSTDIR\ijipu-bp.exe" "" "$INSTDIR\ijipu-bp.exe" 0 SW_SHOWNORMAL "" "爱扒谱・iJipu BP"
+  IfFileExists "$SMPROGRAMS\iJipuBP.lnk" 0 +2
+    Rename "$SMPROGRAMS\iJipuBP.lnk" "$SMPROGRAMS\爱扒谱・iJipu BP.lnk"
+  IfFileExists "$SMPROGRAMS\iJipuBP\iJipuBP.lnk" 0 +2
+    Rename "$SMPROGRAMS\iJipuBP\iJipuBP.lnk" "$SMPROGRAMS\iJipuBP\爱扒谱・iJipu BP.lnk"
+
   ; 安装模式是 currentUser（未设 installMode ⇒ 默认），关联写在 HKCU；
   ; 这里显式写 HKCU 而不是 SHCTX，避免与卸载器的 SetShellVarContext 时序耦合。
   IfFileExists "$INSTDIR\${IJIPUBP_ICON}" 0 ijipu_bp_jps_icon_done
@@ -33,4 +41,10 @@
   ijipu_bp_jps_icon_done:
   ; 资源管理器会缓存文件类型图标，不通知就要重启或重新登录才看到新图。
   System::Call "shell32::SHChangeNotify(i, i, i, i) (0x08000000, 0x1000, 0, 0)"
+!macroend
+
+!macro NSIS_HOOK_PREUNINSTALL
+  Delete "$DESKTOP\爱扒谱・iJipu BP.lnk"
+  Delete "$SMPROGRAMS\爱扒谱・iJipu BP.lnk"
+  Delete "$SMPROGRAMS\iJipuBP\爱扒谱・iJipu BP.lnk"
 !macroend
